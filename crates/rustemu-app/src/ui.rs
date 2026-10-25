@@ -27,6 +27,7 @@ pub fn main_ui(app: &mut App, ui: &mut Ui) {
     crate::find::goto_dialog(app, &ctx);
     crate::console::console_window(app, &ctx);
     crate::library_ui::library_window(app, &ctx);
+    crate::reference_ui::reference_window(&mut app.reference, &ctx);
     crate::calc::calculator_window(&mut app.calculator, &ctx);
     new_dialog(app, &ctx);
     options_window(app, &ctx);
@@ -280,8 +281,16 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             app.windows.ascii = !app.windows.ascii;
         }
         ui.menu_button("Help", |ui| {
-            if ui.button("Quick reference").clicked() {
-                app.windows.help = true;
+            use crate::reference_ui::Tab;
+            for (tab, label) in [
+                (Tab::Instructions, "Instruction set (F1)"),
+                (Tab::Interrupts, "BIOS and DOS interrupts"),
+                (Tab::Directives, "Assembler directives"),
+                (Tab::Quick, "Quick reference"),
+            ] {
+                if ui.button(label).clicked() {
+                    app.reference.show_tab(tab);
+                }
             }
             if ui.button("emu8086.inc library").clicked() {
                 app.library.open = true;
@@ -424,8 +433,8 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         if ui.button("🔧 options").clicked() {
             app.options_open = !app.options_open;
         }
-        if ui.button("❓ help").clicked() {
-            app.windows.help = !app.windows.help;
+        if ui.button("❓ help").on_hover_text("Instructions, interrupts, directives (F1)").clicked() {
+            app.reference.open = !app.reference.open;
         }
         if ui.button("ℹ about").clicked() {
             app.windows.about = !app.windows.about;
@@ -604,14 +613,6 @@ fn tools(app: &mut App, ctx: &egui::Context) {
         }
     });
     app.windows.converter = open;
-
-    let mut open = app.windows.help;
-    egui::Window::new("quick reference").open(&mut open).default_size([520.0, 480.0]).show(ctx, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(RichText::new(crate::help::HELP).monospace().size(12.5));
-        });
-    });
-    app.windows.help = open;
 
     let mut open = app.windows.about;
     egui::Window::new("About").open(&mut open).collapsible(false).show(ctx, |ui| {

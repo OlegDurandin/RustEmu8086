@@ -143,6 +143,21 @@ fn word_at(text: &str, ci: usize) -> Option<(String, usize)> {
     Some((chars[a..b].iter().collect(), line))
 }
 
+/// Tooltip with a summary of an instruction, directive or interrupt; Cmd-click opens the reference.
+fn reference_hover(app: &mut App, ci: usize, out: &egui::text_edit::TextEditOutput, cmd_click: bool) {
+    let Some(topic) = crate::reference::topic_at(&app.text, ci) else { return };
+    let (title, details) = topic.tooltip();
+    out.response.response.clone().on_hover_ui_at_pointer(|ui| {
+        ui.set_max_width(460.0);
+        ui.label(RichText::new(title).strong().monospace());
+        ui.label(details);
+        ui.weak("F1 or ⌘-click: open the reference");
+    });
+    if cmd_click {
+        app.reference.show(topic);
+    }
+}
+
 /// Tooltip with the documentation of macros/procedures; Cmd-click opens the library viewer.
 fn hover_help(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput) {
     let Some(pos) = out.response.hover_pos() else { return };
@@ -164,13 +179,14 @@ fn hover_help(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput) {
     // Macros defined in this file take precedence over the library.
     let own = rustemu_asm::library::index(&app.text).into_iter().find(|e| e.name == upper);
     let uses_lib = app.text.to_ascii_lowercase().contains("emu8086.inc");
-    let (entry, from_lib) = match own {
-        Some(e) => (e, false),
-        None if uses_lib => match app.library.find(&upper) {
-            Some(e) => (e, true),
-            None => return,
-        },
-        None => return,
+    let found = match own {
+        Some(e) => Some((e, false)),
+        None if uses_lib => app.library.find(&upper).map(|e| (e, true)),
+        None => None,
+    };
+    let Some((entry, from_lib)) = found else {
+        reference_hover(app, ci, out, cmd_click);
+        return;
     };
     // Do not show help for the definition line itself.
     if !from_lib && entry.line as usize == line {

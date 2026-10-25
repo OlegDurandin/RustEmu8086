@@ -168,3 +168,24 @@ fn new_dialog_menus_and_tools() {
     h.run_steps(5);
     save(&mut h, "12_calculator_options");
 }
+
+#[test]
+fn reference_window_and_editor_lookup() {
+    use crate::reference::Topic;
+    let mut h = harness(app_with_example(0));
+    h.run();
+    // F1 with the text cursor on `int 21h` opens the DOS function chosen by the preceding MOV AH.
+    let st = h.state_mut();
+    st.text = "org 100h\nmov ah, 9\nlea dx, msg\nint 21h\nret\nmsg db 'hi$'".into();
+    let ci = st.text.find("21h").unwrap();
+    st.selection = (ci, ci);
+    st.help_at_cursor();
+    h.run_steps(5);
+    let int21 = crate::reference::find_interrupt(0x21).unwrap();
+    assert_eq!(h.state().reference.topic, Some(Topic::Int(int21, Some(9))));
+    save(&mut h, "13_reference_interrupt");
+    let mov = crate::reference::find_instruction("adc").unwrap();
+    h.state_mut().reference.show(Topic::Instr(mov));
+    h.run_steps(5);
+    save(&mut h, "14_reference_instruction");
+}
