@@ -15,6 +15,8 @@ mod fonts;
 mod help;
 mod highlight;
 mod library_ui;
+mod reference;
+mod reference_ui;
 mod screen;
 mod ui;
 #[cfg(test)]

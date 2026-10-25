@@ -56,7 +56,6 @@ pub struct Windows {
     pub listing: bool,
     pub log: bool,
     pub devices: bool,
-    pub help: bool,
     pub about: bool,
     pub ascii: bool,
     pub converter: bool,
@@ -131,6 +130,7 @@ pub struct App {
     pub show_macro_code: bool,
     pub source_scroll_to: Option<u32>,
     pub library: crate::library_ui::LibraryState,
+    pub reference: crate::reference_ui::RefState,
     /// Command line parameters dialog: (open, edited text).
     pub cmdline_dialog: Option<String>,
     /// "choose code template" dialog: selected option while open.
@@ -203,6 +203,7 @@ impl App {
             show_macro_code: true,
             source_scroll_to: None,
             library: Default::default(),
+            reference: Default::default(),
             cmdline_dialog: None,
             new_dialog: None,
             options_open: false,
@@ -737,6 +738,14 @@ impl App {
 
     // ---- shortcuts ------------------------------------------------------------------------------
 
+    /// F1: opens the reference at the instruction / directive / interrupt under the text cursor.
+    pub fn help_at_cursor(&mut self) {
+        match crate::reference::topic_at_cursor(&self.text, self.selection.0) {
+            Some(t) => self.reference.show(t),
+            None => self.reference.open = true,
+        }
+    }
+
     pub fn shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
         let sc = |m: Modifiers, k: Key| KeyboardShortcut::new(m, k);
@@ -789,6 +798,10 @@ impl App {
         }
         if fire(sc(cmd, Key::L)) || fire(sc(ctrl, Key::G)) {
             self.find.goto_open = true;
+        }
+        // F1: reference article for the word at the text cursor.
+        if fire(sc(Modifiers::NONE, Key::F1)) {
+            self.help_at_cursor();
         }
         if fire(sc(cmd, Key::Slash)) {
             crate::find::toggle_comment(self);
