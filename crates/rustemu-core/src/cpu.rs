@@ -80,8 +80,19 @@ struct ModRm {
     ea: u16,
 }
 
+/// Instruction set to emulate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CpuModel {
+    /// Strict 8086: 60-6F are aliases of the conditional jumps, C0/C1/C8/C9 of RET/RETF.
+    #[default]
+    I8086,
+    /// 8086 plus the 80186 additions used by Emu8086 programs (PUSHA, POPA, PUSH imm, ...).
+    I80186,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cpu {
+    pub model: CpuModel,
     pub regs: [u16; 8],
     pub sregs: [u16; 4],
     pub ip: u16,
@@ -111,6 +122,7 @@ fn parity(b: u8) -> bool {
 impl Cpu {
     pub fn new() -> Self {
         let mut c = Cpu {
+            model: CpuModel::I8086,
             regs: [0; 8],
             sregs: [0; 4],
             ip: 0,
@@ -513,6 +525,12 @@ impl Cpu {
             }
         }
 
+        if self.model == CpuModel::I80186
+            && let Some(r) = self.exec186(bus, op)
+        {
+            return r;
+        }
+
         match op {
             // ALU ops: ADD OR ADC SBB AND SUB XOR CMP
             0x00..=0x3F if op & 7 < 6 => {
@@ -892,6 +910,130 @@ impl Cpu {
             _ => unreachable!("opcode {op:02X}"),
         }
         StepResult::Ok
+    }
+
+    /// 80186 instructions. Returns `None` for opcodes that behave like on the 8086.
+    fn exec186<B: Bus>(&mut self, bus: &mut B, op: u8) -> Option<StepResult> {
+        match op {
+            0x60 => {
+                // PUSHA
+                let sp = self.regs[SP];
+                for r in [AX, CX, DX, BX] {
+                    let v = self.regs[r];
+                    self.push(bus, v);
+                }
+                self.push(bus, sp);
+                for r in [BP, SI, DI] {
+                    let v = self.regs[r];
+                    self.push(bus, v);
+                }
+            }
+            0x61 => {
+                // POPA (the saved SP is discarded)
+                for r in [DI, SI, BP] {
+                    self.regs[r] = self.pop(bus);
+                }
+                self.pop(bus);
+                for r in [BX, DX, CX, AX] {
+                    self.regs[r] = self.pop(bus);
+                }
+            }
+            0x62 => {
+                // BOUND r16, m16&16
+                let m = self.modrm(bus);
+                let (lo, hi) = self.read_far(bus, m.rm);
+                let v = self.regs[m.reg as usize] as i16;
+                if v < lo as i16 || v > hi as i16 {
+                    self.interrupt(bus, 5);
+                }
+            }
+            0x68 => {
+                let v = self.fetch16(bus);
+                self.push(bus, v);
+            }
+            0x6A => {
+                let v = self.fetch8(bus) as i8 as u16;
+                self.push(bus, v);
+            }
+            0x69 | 0x6B => {
+                // IMUL r16, r/m16, imm
+                let m = self.modrm(bus);
+                let a = self.read_op(bus, m.rm, true) as i16 as i32;
+                let b = if op == 0x69 { self.fetch16(bus) as i16 as i32 } else { self.fetch8(bus) as i8 as i32 };
+                let r = a * b;
+                self.regs[m.reg as usize] = r as u16;
+                let ovf = r != (r as i16) as i32;
+                self.set_flag(CF, ovf);
+                self.set_flag(OF, ovf);
+            }
+            0x6C..=0x6F => self.string_io(bus, op),
+            0xC0 | 0xC1 => {
+                let w = op & 1 != 0;
+                let m = self.modrm(bus);
+                let count = self.fetch8(bus) & 0x1F;
+                let v = self.read_op(bus, m.rm, w);
+                let r = self.shift(m.reg, v, count, w);
+                self.write_op(bus, m.rm, w, r);
+            }
+            0xC8 => {
+                // ENTER size, level
+                let size = self.fetch16(bus);
+                let level = self.fetch8(bus) & 0x1F;
+                let bp = self.regs[BP];
+                self.push(bus, bp);
+                let frame = self.regs[SP];
+                for _ in 1..level {
+                    self.regs[BP] = self.regs[BP].wrapping_sub(2);
+                    let v = self.rd16(bus, self.sregs[SS], self.regs[BP]);
+                    self.push(bus, v);
+                }
+                if level > 0 {
+                    self.push(bus, frame);
+                }
+                self.regs[BP] = frame;
+                self.regs[SP] = self.regs[SP].wrapping_sub(size);
+            }
+            0xC9 => {
+                // LEAVE
+                self.regs[SP] = self.regs[BP];
+                self.regs[BP] = self.pop(bus);
+            }
+            _ => return None,
+        }
+        Some(StepResult::Ok)
+    }
+
+    /// INSB/INSW/OUTSB/OUTSW with optional REP.
+    fn string_io<B: Bus>(&mut self, bus: &mut B, op: u8) {
+        let w = op & 1 != 0;
+        let step: u16 = if w { 2 } else { 1 };
+        let delta = if self.flag(DF) { step.wrapping_neg() } else { step };
+        let src_seg = self.seg_or(DS);
+        let rep = self.rep != Rep::None;
+        loop {
+            if rep && self.regs[CX] == 0 {
+                break;
+            }
+            let port = self.regs[DX];
+            if op < 0x6E {
+                let v = if w { bus.port_in16(port) } else { bus.port_in8(port) as u16 };
+                let es = self.sregs[ES];
+                self.write_op(bus, Operand::Mem { seg: es, off: self.regs[DI] }, w, v);
+                self.regs[DI] = self.regs[DI].wrapping_add(delta);
+            } else {
+                let v = self.read_op(bus, Operand::Mem { seg: src_seg, off: self.regs[SI] }, w);
+                if w {
+                    bus.port_out16(port, v);
+                } else {
+                    bus.port_out8(port, v as u8);
+                }
+                self.regs[SI] = self.regs[SI].wrapping_add(delta);
+            }
+            if !rep {
+                break;
+            }
+            self.regs[CX] = self.regs[CX].wrapping_sub(1);
+        }
     }
 
     fn group3<B: Bus>(&mut self, bus: &mut B, w: bool, _start_ip: u16) {

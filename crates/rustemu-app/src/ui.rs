@@ -34,6 +34,13 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             if ui.button("New            ⌘N").clicked() {
                 app.guarded(PendingAction::New);
             }
+            ui.menu_button("New from template", |ui| {
+                for (i, (name, _)) in crate::examples::TEMPLATES.iter().enumerate() {
+                    if ui.button(*name).clicked() {
+                        app.guarded(PendingAction::NewTemplate(i));
+                    }
+                }
+            });
             if ui.button("Open…          ⌘O").clicked() {
                 app.guarded(PendingAction::Open(None));
             }
@@ -112,6 +119,39 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             if ui.button("Load executable…").clicked() {
                 app.open_dialog();
             }
+            if ui.button("Set command line parameters…").clicked() {
+                app.cmdline_dialog = Some(app.session.command_line.clone());
+            }
+            ui.menu_button("Virtual drive", |ui| {
+                if ui.button("Load floppy image…").clicked()
+                    && let Some(p) = rfd::FileDialog::new().pick_file()
+                {
+                    match std::fs::read(&p) {
+                        Ok(mut b) => {
+                            b.resize(b.len().max(1_474_560), 0);
+                            app.session.machine.floppy = b;
+                            app.status = format!("Floppy image loaded: {}", p.display());
+                        }
+                        Err(e) => app.notice("Virtual drive", &e.to_string()),
+                    }
+                }
+                if ui.button("Save floppy image…").clicked()
+                    && let Some(p) = rfd::FileDialog::new().set_file_name("FLOPPY_0").save_file()
+                    && let Err(e) = std::fs::write(&p, &app.session.machine.floppy)
+                {
+                    app.notice("Virtual drive", &e.to_string());
+                }
+                if ui.button("Write 512 bytes at 0000:7C00 to the boot sector").clicked() {
+                    app.session.write_boot_sector();
+                    app.status = "Boot sector written to the virtual floppy".into();
+                }
+                if ui.button("Boot from floppy").clicked() {
+                    match app.session.boot_from_floppy() {
+                        Ok(()) => app.after_binary_load(),
+                        Err(e) => app.notice("Virtual drive", &e),
+                    }
+                }
+            });
             if ui.button("Clear all breakpoints").clicked() {
                 app.bp_lines.clear();
                 app.session.machine.breakpoints.clear();
@@ -252,6 +292,32 @@ fn messages(app: &mut App, ui: &mut Ui) {
 }
 
 fn dialogs(app: &mut App, ctx: &egui::Context) {
+    if let Some(mut text) = app.cmdline_dialog.take() {
+        let mut keep = true;
+        egui::Window::new("Command line parameters")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Parameters passed to the program (PSP:80h), e.g.  p1 p2 p3");
+                let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text("parameters").desired_width(320.0));
+                r.request_focus();
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        app.session.command_line = text.trim().to_string();
+                        let t = app.session.command_line.clone();
+                        app.session.machine.set_command_line(&t);
+                        keep = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep = false;
+                    }
+                });
+            });
+        if keep {
+            app.cmdline_dialog = Some(text);
+        }
+    }
     if let Some(action) = app.confirm_discard.clone() {
         egui::Window::new("Unsaved changes")
             .collapsible(false)

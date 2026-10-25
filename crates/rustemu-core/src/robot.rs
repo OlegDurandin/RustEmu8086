@@ -1,10 +1,13 @@
-//! Emu8086-compatible robot device.
+//! Robot device, behaving like Emu8086's `robot.exe`.
 //!
 //! Port 9 (out) - command: 0 nothing, 1 move forward, 2 turn left, 3 turn right,
 //!                4 examine, 5 switch lamp on, 6 switch lamp off.
 //! Port 10 (in)  - data: result of "examine": 0 empty, 255 wall, 7 lamp on, 8 lamp off.
 //! Port 11 (in)  - status: bit 0 new data available (cleared by reading port 10),
 //!                 bit 1 busy, bit 2 last command failed.
+//!
+//! The room is 9 x 6 cells. Moving and turning take time (`MOVE_MS`); examining and switching
+//! lamps complete immediately. A command sent while the robot is busy is rejected (error bit).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cell {
@@ -25,11 +28,11 @@ pub struct Robot {
     data: u8,
     status: u8,
     pending: Option<u8>,
-    busy_left: u64,
+    busy_ms: f64,
 }
 
-/// Instructions a command takes to complete.
-const COMMAND_TIME: u64 = 2_000;
+/// Duration of a move or a turn, in milliseconds.
+pub const MOVE_MS: f64 = 250.0;
 
 pub const STATUS_DATA: u8 = 1;
 pub const STATUS_BUSY: u8 = 2;
@@ -44,33 +47,33 @@ impl Default for Robot {
 impl Robot {
     pub fn new() -> Self {
         let mut r = Robot {
-            width: 14,
-            height: 9,
+            width: 9,
+            height: 6,
             cells: Vec::new(),
             x: 0,
             y: 0,
-            dir: 1,
+            dir: 0,
             data: 0,
             status: 0,
             pending: None,
-            busy_left: 0,
+            busy_ms: 0.0,
         };
         r.default_map();
         r
     }
 
-    /// A small room with a few walls and lamps.
+    /// The default room of Emu8086's robot device.
     pub fn default_map(&mut self) {
         self.cells = vec![Cell::Empty; self.width * self.height];
-        for (x, y) in [(5, 0), (5, 1), (5, 2), (9, 6), (9, 7), (9, 8), (2, 5), (3, 5), (12, 3), (11, 3)] {
+        for (x, y) in [(4, 1), (8, 1), (2, 4)] {
             self.set(x, y, Cell::Wall);
         }
-        for (x, y) in [(8, 1), (1, 7), (13, 6), (4, 3), (11, 8)] {
+        for (x, y) in [(7, 0), (1, 1), (0, 2), (7, 4)] {
             self.set(x, y, Cell::Lamp { on: false });
         }
-        self.x = 0;
-        self.y = 0;
-        self.dir = 1;
+        self.x = 3;
+        self.y = 3;
+        self.dir = 0;
         self.reset_state();
     }
 
@@ -79,11 +82,12 @@ impl Robot {
         self.reset_state();
     }
 
-    fn reset_state(&mut self) {
+    /// Clears the registers and any command in progress (the room is kept).
+    pub fn reset_state(&mut self) {
         self.data = 0;
         self.status = 0;
         self.pending = None;
-        self.busy_left = 0;
+        self.busy_ms = 0.0;
     }
 
     pub fn get(&self, x: usize, y: usize) -> Cell {
@@ -96,17 +100,31 @@ impl Robot {
         }
     }
 
-    /// Cycles a cell through empty -> wall -> lamp -> empty (map editing).
+    /// Map editing: empty -> wall -> lamp (on) -> lamp (off) -> empty.
+    /// Clicking the robot's own cell turns it counter-clockwise.
     pub fn cycle_cell(&mut self, x: usize, y: usize) {
+        if x >= self.width || y >= self.height {
+            return;
+        }
         if (x, y) == (self.x, self.y) {
+            self.dir = (self.dir + 3) & 3;
             return;
         }
         let next = match self.get(x, y) {
             Cell::Empty => Cell::Wall,
-            Cell::Wall => Cell::Lamp { on: false },
-            Cell::Lamp { .. } => Cell::Empty,
+            Cell::Wall => Cell::Lamp { on: true },
+            Cell::Lamp { on: true } => Cell::Lamp { on: false },
+            Cell::Lamp { on: false } => Cell::Empty,
         };
         self.set(x, y, next);
+    }
+
+    /// Moves the robot to an empty cell (map editing).
+    pub fn place(&mut self, x: usize, y: usize) {
+        if x < self.width && y < self.height && self.get(x, y) == Cell::Empty {
+            self.x = x;
+            self.y = y;
+        }
     }
 
     fn front(&self) -> Option<(usize, usize)> {
@@ -126,6 +144,10 @@ impl Robot {
         self.status
     }
 
+    pub fn busy(&self) -> bool {
+        self.status & STATUS_BUSY != 0
+    }
+
     pub fn read_data(&mut self) -> u8 {
         self.status &= !STATUS_DATA;
         self.data
@@ -135,64 +157,57 @@ impl Robot {
         if cmd == 0 {
             return;
         }
-        if self.status & STATUS_BUSY != 0 {
+        if self.busy() {
             self.status |= STATUS_ERROR;
             return;
         }
-        self.status = (self.status | STATUS_BUSY) & !STATUS_ERROR;
-        self.pending = Some(cmd);
-        self.busy_left = COMMAND_TIME;
-    }
-
-    pub fn tick(&mut self, instructions: u64) {
-        if self.pending.is_none() {
-            return;
-        }
-        if self.busy_left > instructions {
-            self.busy_left -= instructions;
-            return;
-        }
-        let cmd = self.pending.take().unwrap();
-        self.status &= !STATUS_BUSY;
-        let front = self.front();
-        let ok = match cmd {
-            1 => match front {
-                Some((x, y)) if self.get(x, y) == Cell::Empty => {
-                    self.x = x;
-                    self.y = y;
-                    true
-                }
-                _ => false,
-            },
-            2 => {
-                self.dir = (self.dir + 3) & 3;
-                true
-            }
-            3 => {
-                self.dir = (self.dir + 1) & 3;
-                true
+        self.status &= !STATUS_ERROR;
+        match cmd {
+            1..=3 => {
+                self.status |= STATUS_BUSY;
+                self.pending = Some(cmd);
+                self.busy_ms = MOVE_MS;
             }
             4 => {
-                self.data = match front.map(|(x, y)| self.get(x, y)) {
+                self.data = match self.front().map(|(x, y)| self.get(x, y)) {
                     None | Some(Cell::Wall) => 255,
                     Some(Cell::Empty) => 0,
                     Some(Cell::Lamp { on: true }) => 7,
                     Some(Cell::Lamp { on: false }) => 8,
                 };
                 self.status |= STATUS_DATA;
-                true
             }
-            5 | 6 => match front {
-                Some((x, y)) if matches!(self.get(x, y), Cell::Lamp { .. }) => {
-                    self.set(x, y, Cell::Lamp { on: cmd == 5 });
-                    true
+            5 | 6 => {
+                let on = cmd == 5;
+                match self.front() {
+                    Some((x, y)) if self.get(x, y) == Cell::Lamp { on: !on } => self.set(x, y, Cell::Lamp { on }),
+                    // Already in that state, or not a lamp.
+                    _ => self.status |= STATUS_ERROR,
                 }
-                _ => false,
+            }
+            _ => self.status |= STATUS_ERROR,
+        }
+    }
+
+    /// Advances the robot by `ms` milliseconds.
+    pub fn tick(&mut self, ms: f64) {
+        let Some(cmd) = self.pending else { return };
+        self.busy_ms -= ms;
+        if self.busy_ms > 0.0 {
+            return;
+        }
+        self.pending = None;
+        self.status &= !STATUS_BUSY;
+        match cmd {
+            1 => match self.front() {
+                Some((x, y)) if self.get(x, y) == Cell::Empty => {
+                    self.x = x;
+                    self.y = y;
+                }
+                _ => self.status |= STATUS_ERROR,
             },
-            _ => false,
-        };
-        if !ok {
-            self.status |= STATUS_ERROR;
+            2 => self.dir = (self.dir + 3) & 3,
+            _ => self.dir = (self.dir + 1) & 3,
         }
     }
 }
@@ -205,26 +220,39 @@ mod tests {
     fn moves_examines_and_switches_lamps() {
         let mut r = Robot::new();
         r.clear_map();
+        r.x = 0;
+        r.y = 0;
+        r.dir = 1; // east
         r.set(2, 0, Cell::Lamp { on: false });
         r.command(1);
-        assert_eq!(r.status() & STATUS_BUSY, STATUS_BUSY);
-        r.tick(COMMAND_TIME);
+        assert!(r.busy());
+        r.command(3); // rejected while busy
+        assert_eq!(r.status() & STATUS_ERROR, STATUS_ERROR);
+        r.tick(MOVE_MS);
         assert_eq!((r.x, r.y), (1, 0));
         r.command(4);
-        r.tick(COMMAND_TIME);
         assert_eq!(r.status() & STATUS_DATA, STATUS_DATA);
         assert_eq!(r.read_data(), 8);
         assert_eq!(r.status() & STATUS_DATA, 0);
         r.command(5);
-        r.tick(COMMAND_TIME);
         assert_eq!(r.get(2, 0), Cell::Lamp { on: true });
+        assert_eq!(r.status() & STATUS_ERROR, 0);
+        r.command(5); // already on
+        assert_eq!(r.status() & STATUS_ERROR, STATUS_ERROR);
         r.command(1); // blocked by the lamp
-        r.tick(COMMAND_TIME);
+        r.tick(MOVE_MS);
         assert_eq!(r.status() & STATUS_ERROR, STATUS_ERROR);
         r.command(2); // turn left -> north; examine sees the edge as a wall
-        r.tick(COMMAND_TIME);
+        r.tick(MOVE_MS);
         r.command(4);
-        r.tick(COMMAND_TIME);
         assert_eq!(r.read_data(), 255);
+    }
+
+    #[test]
+    fn default_room_matches_emu8086() {
+        let r = Robot::new();
+        assert_eq!((r.width, r.height, r.x, r.y, r.dir), (9, 6, 3, 3, 0));
+        assert_eq!(r.cells.iter().filter(|c| **c == Cell::Wall).count(), 3);
+        assert_eq!(r.cells.iter().filter(|c| matches!(c, Cell::Lamp { .. })).count(), 4);
     }
 }

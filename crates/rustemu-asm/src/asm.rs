@@ -42,6 +42,8 @@ struct Assembler {
     /// Segment names -> physical segment id.
     seg_ids: HashMap<String, SegId>,
     layout: Vec<i64>,
+    flat_bases: Vec<i64>,
+    fasm: bool,
     forward: HashMap<String, ForwardKind>,
     syms: HashMap<String, SymVal>,
     prev: HashMap<String, SymVal>,
@@ -105,6 +107,8 @@ pub fn assemble(
         segs: Vec::new(),
         seg_ids: HashMap::new(),
         layout: Vec::new(),
+        flat_bases: Vec::new(),
+        fasm: false,
         forward: HashMap::new(),
         syms: HashMap::new(),
         prev: HashMap::new(),
@@ -128,8 +132,9 @@ pub fn assemble(
     for pass in 1..=MAX_PASSES {
         a.pass = pass;
         a.run_pass();
-        let changed = a.syms != a.prev || a.new_layout() != a.layout;
+        let changed = a.syms != a.prev || a.new_layout() != a.layout || a.new_flat_bases() != a.flat_bases;
         a.layout = a.new_layout();
+        a.flat_bases = a.new_flat_bases();
         a.prev = std::mem::take(&mut a.syms);
         if !changed && pass >= 2 {
             a.syms = a.prev.clone();
@@ -139,6 +144,14 @@ pub fn assemble(
             a.syms = a.prev.clone();
             a.errors.push(AsmError { file: 0, line: 0, col: None, msg: "assembly did not converge".into() });
         }
+    }
+    if a.fasm {
+        errors.push(AsmError {
+            file: 0,
+            line: 0,
+            col: None,
+            msg: "FASM syntax (#fasm#) is not supported; remove the directive to use the Emu8086/MASM syntax".into(),
+        });
     }
     errors.append(&mut a.errors);
     if !errors.is_empty() {
@@ -162,6 +175,27 @@ impl Assembler {
         if self.flat {
             return 0;
         }
+        self.named_seg(name, stack)
+    }
+
+    /// Section for `.code` / `.data` / `.stack`. In flat formats `.data` gets its own section
+    /// that is placed after the code (code always starts at the origin); `.stack` is ignored.
+    fn dot_seg_id(&mut self, d: &DotSeg) -> SegId {
+        let (n, stack) = match d {
+            DotSeg::Code => ("CODE", false),
+            DotSeg::Data => ("DATA", false),
+            DotSeg::Stack(_) => ("STACK", true),
+        };
+        if self.flat {
+            return match d {
+                DotSeg::Data => self.named_seg(n, false),
+                _ => 0,
+            };
+        }
+        self.named_seg(n, stack)
+    }
+
+    fn named_seg(&mut self, name: &str, stack: bool) -> SegId {
         if let Some(&id) = self.seg_ids.get(name) {
             if stack {
                 self.segs[id].stack = true;
@@ -177,10 +211,13 @@ impl Assembler {
     /// Determines the output format, segments and forward symbol kinds.
     fn prescan(&mut self) {
         let mut has_segments = false;
+        let mut org_100h = false;
+        let mut fasm = false;
         let mut explicit = None;
         for s in &self.stmts {
             match &s.stmt.kind {
                 StmtKind::Segment { .. } | StmtKind::DotSeg(_) | StmtKind::Model => has_segments = true,
+                StmtKind::Org(Expr::Num(0x100)) => org_100h = true,
                 StmtKind::Emu(d) => {
                     let u = d.to_ascii_uppercase();
                     explicit = match u.as_str() {
@@ -190,11 +227,16 @@ impl Assembler {
                         "MAKE_BOOT" => Some(Format::Boot),
                         _ => explicit,
                     };
+                    if u == "FASM" {
+                        fasm = true;
+                    }
                 }
                 _ => {}
             }
         }
-        self.format = explicit.unwrap_or(if has_segments { Format::Exe } else { Format::Com });
+        self.fasm = fasm;
+        // Emu8086: COM when ORG 100h is found, EXE when segments are used, COM otherwise.
+        self.format = explicit.unwrap_or(if org_100h || !has_segments { Format::Com } else { Format::Exe });
         self.flat = self.format != Format::Exe;
         self.segs.clear();
         if self.flat {
@@ -205,7 +247,7 @@ impl Assembler {
             let st = self.stmts[i].stmt.clone();
             if let Some(l) = &st.label {
                 let size = match &st.kind {
-                    StmtKind::Data { size, .. } => Some(*size),
+                    StmtKind::Data { size, .. } if !st.colon => Some(*size),
                     _ => None,
                 };
                 self.forward.insert(l.clone(), ForwardKind::Label { size, far: false });
@@ -221,12 +263,7 @@ impl Assembler {
                     self.sym_kinds.insert(name.clone(), SymbolKind::Segment);
                 }
                 StmtKind::DotSeg(d) => {
-                    let (n, stack) = match d {
-                        DotSeg::Code => ("CODE", false),
-                        DotSeg::Data => ("DATA", false),
-                        DotSeg::Stack(_) => ("STACK", true),
-                    };
-                    let id = self.seg_id(n, stack);
+                    let id = self.dot_seg_id(d);
                     match d {
                         DotSeg::Code => self.code_seg = Some(id),
                         DotSeg::Data => self.data_seg = Some(id),
@@ -281,12 +318,24 @@ impl Assembler {
         }
     }
 
+    /// Start offsets of the sections of a flat program: each one follows the previous.
+    fn new_flat_bases(&self) -> Vec<i64> {
+        let mut out = Vec::with_capacity(self.segs.len());
+        let mut at = self.initial_loc();
+        for s in &self.segs {
+            out.push(at);
+            at = s.max.max(at);
+        }
+        out
+    }
+
     fn run_pass(&mut self) {
         let start = self.initial_loc();
-        for s in &mut self.segs {
+        for (i, s) in self.segs.iter_mut().enumerate() {
+            let base = self.flat_bases.get(i).copied().unwrap_or(start);
             s.data.clear();
-            s.loc = start;
-            s.max = start;
+            s.loc = base;
+            s.max = base;
             s.min = i64::MAX;
             s.written = false;
         }
@@ -394,7 +443,7 @@ impl Assembler {
 
         if let Some(name) = &st.label {
             let (size, count) = match &st.kind {
-                StmtKind::Data { size, items } => (Some(*size), self.count_items(items)),
+                StmtKind::Data { size, items } if !st.colon => (Some(*size), self.count_items(items)),
                 _ => (None, 1),
             };
             let v = SymVal::Label { seg: self.cur_seg, off: self.loc(), size, far: false, count };
@@ -490,13 +539,12 @@ impl Assembler {
                 }
             }
             StmtKind::DotSeg(d) => {
-                if !self.flat {
-                    let name = match d {
-                        DotSeg::Code => "CODE",
-                        DotSeg::Data => "DATA",
-                        DotSeg::Stack(_) => "STACK",
-                    };
-                    let id = self.seg_id(name, matches!(d, DotSeg::Stack(_)));
+                let id = self.dot_seg_id(d);
+                if self.flat {
+                    if !matches!(d, DotSeg::Stack(_)) {
+                        self.cur_seg = id;
+                    }
+                } else {
                     if let DotSeg::Stack(sz) = d {
                         let n = match sz {
                             Some(e) => self.eval_plain(idx, e).unwrap_or(0x400),
@@ -643,10 +691,34 @@ impl Assembler {
             (r, Some(n))
                 if matches!(
                     r,
-                    "AX" | "BX" | "CX" | "DX" | "SI" | "DI" | "BP" | "SP" | "CS" | "DS" | "ES" | "SS" | "IP"
+                    "AX" | "BX"
+                        | "CX"
+                        | "DX"
+                        | "SI"
+                        | "DI"
+                        | "BP"
+                        | "SP"
+                        | "CS"
+                        | "DS"
+                        | "ES"
+                        | "SS"
+                        | "IP"
+                        | "AL"
+                        | "AH"
+                        | "BL"
+                        | "BH"
+                        | "CL"
+                        | "CH"
+                        | "DL"
+                        | "DH"
                 ) =>
             {
                 self.emu.regs.push((r.to_string(), n));
+            }
+            ("MEM", _) => {
+                if let Some(v) = val {
+                    self.emu.mem.extend(parse_mem_directive(&v));
+                }
             }
             _ => {}
         }
@@ -654,16 +726,14 @@ impl Assembler {
 
     fn build(mut self, files: Vec<String>) -> Result<Program, Vec<AsmError>> {
         let mut errors = Vec::new();
-        let layout = if self.flat { vec![0] } else { self.layout.clone() };
+        let layout = if self.flat { vec![0; self.segs.len()] } else { self.layout.clone() };
+        let flat_min = self.segs.iter().filter(|s| s.written).map(|s| s.min).min();
         let origin: i64 = match self.format {
             Format::Com => 0x100,
-            _ if self.flat => {
-                let s = &self.segs[0];
-                if s.written { s.min } else { self.initial_loc() }
-            }
+            _ if self.flat => flat_min.unwrap_or(self.initial_loc()),
             _ => 0,
         };
-        if self.format == Format::Com && self.segs[0].written && self.segs[0].min < 0x100 {
+        if self.format == Format::Com && flat_min.is_some_and(|m| m < 0x100) {
             errors.push(AsmError {
                 file: 0,
                 line: 0,
@@ -675,11 +745,15 @@ impl Assembler {
         let image_off = |seg: SegId, off: i64| -> i64 { if self.flat { off - origin } else { layout[seg] * 16 + off } };
         let mut image = Vec::new();
         if self.flat {
-            let s = &self.segs[0];
-            let end = s.max.max(origin) as usize;
-            let mut d = s.data.clone();
-            d.resize(end, 0);
-            image.extend_from_slice(&d[origin as usize..end]);
+            let end = self.segs.iter().map(|s| s.max).max().unwrap_or(origin).max(origin);
+            image.resize((end - origin) as usize, 0);
+            for s in &self.segs {
+                for (o, &b) in s.data.iter().enumerate().skip(origin as usize) {
+                    if (o as i64) < s.max && b != 0 {
+                        image[o - origin as usize] = b;
+                    }
+                }
+            }
         } else {
             for (i, s) in self.segs.iter().enumerate() {
                 let base = (layout[i] * 16) as usize;
@@ -689,23 +763,8 @@ impl Assembler {
                 image.extend_from_slice(&d);
             }
         }
-        if self.flat && !self.relocs.is_empty() {
-            let (seg, off) = self.relocs[0];
-            let at = image_off(seg, off);
-            let li =
-                self.emitted.iter().find(|(_, s, o, l)| *s == seg && *o <= off && off < *o + *l as i64).map(|e| e.0);
-            let (file, line) = li.map(|i| (self.line_of(i).file, self.line_of(i).line)).unwrap_or((0, 0));
-            let _ = at;
-            errors.push(AsmError {
-                file,
-                line,
-                col: None,
-                msg: format!(
-                    "segment references need the EXE format ({} output has no relocations)",
-                    self.format.name()
-                ),
-            });
-        }
+        // Flat formats keep their segment fixups too: the emulator adds the load segment
+        // (segment references in a .com/.bin file on disk assume a load segment of 0).
         if self.format == Format::Boot && image.len() > 512 {
             errors.push(AsmError { file: 0, line: 0, col: None, msg: "boot sector exceeds 512 bytes".into() });
         }
@@ -828,4 +887,28 @@ fn equ_value(v: &Val) -> SymVal {
         (_, Some(s)) if s != usize::MAX => SymVal::Segment(s),
         _ => SymVal::Const(v.num),
     }
+}
+
+/// `#MEM=nnnnn,bytes-ssss:oooo,bytes#` (all hex; spaces inside byte strings are ignored).
+fn parse_mem_directive(v: &str) -> Vec<(u32, Vec<u8>)> {
+    let mut out = Vec::new();
+    for entry in v.split('-') {
+        let Some((addr, bytes)) = entry.split_once(',') else { continue };
+        let hex = |t: &str| u32::from_str_radix(t.trim().trim_end_matches(['h', 'H']), 16).ok();
+        let addr = match addr.split_once(':') {
+            Some((s, o)) => match (hex(s), hex(o)) {
+                (Some(s), Some(o)) => ((s << 4) + o) & 0xFFFFF,
+                _ => continue,
+            },
+            None => match hex(addr) {
+                Some(a) => a & 0xFFFFF,
+                None => continue,
+            },
+        };
+        let digits: String = bytes.chars().filter(|c| !c.is_whitespace()).collect();
+        let data: Vec<u8> =
+            (0..digits.len() / 2).filter_map(|i| u8::from_str_radix(&digits[i * 2..i * 2 + 2], 16).ok()).collect();
+        out.push((addr, data));
+    }
+    out
 }

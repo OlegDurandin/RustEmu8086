@@ -263,6 +263,7 @@ fn robot_example_lights_lamps() {
     use rustemu_core::robot::Cell;
     let mut s = Session::new();
     s.load_path(&examples().join("robot.asm")).unwrap();
+    s.machine.sys.dev.clock = rustemu_core::devices::DeviceClock::Instructions(10);
     s.machine.history_enabled = false;
     assert_eq!(s.machine.run(20_000_000), Event::Budget);
     let r = &s.machine.sys.dev.robot;
@@ -397,7 +398,7 @@ end
         assert_eq!(step(&mut s, StepKind::Over, "42\r"), Event::Continue);
         assert_eq!((view(&s).level, view(&s).line), (0, 5));
         assert_eq!(s.machine.cpu.regs[1], 42);
-        assert_eq!(String::from_utf8_lossy(&s.machine.output), "Number: 42");
+        assert_eq!(String::from_utf8_lossy(&s.machine.output), "Number: 42\r");
         // PUSH inside the line being stepped does not confuse step over.
         assert_eq!(step(&mut s, StepKind::Over, ""), Event::Continue);
         assert_eq!(step(&mut s, StepKind::Over, ""), Event::Continue);
@@ -464,4 +465,22 @@ end
             text.lines().nth(v.line as usize - 1).unwrap().trim().to_string()
         }
     }
+}
+
+#[test]
+fn command_line_parameters_in_psp() {
+    let src = "org 100h\nmov cl, [80h]\nmov al, [81h]\nmov ah, [83h]\nmov bl, [84h]\nret\n";
+    let prog = asm_ok(src);
+    let mut s = Session::new();
+    s.command_line = "ab".into();
+    s.load_program(prog).unwrap();
+    assert_eq!(s.machine.run(100), Event::Terminated(0));
+    let c = &s.machine.cpu;
+    assert_eq!(c.regs[1] & 0xFF, 3); // " ab"
+    assert_eq!(c.regs[0], ((0x62u16) << 8) | 0x20); // ' ' at 81h, 'b' at 83h
+    assert_eq!(c.regs[3] & 0xFF, 0x0D);
+}
+
+fn asm_ok(src: &str) -> rustemu_asm::Program {
+    rustemu_asm::assemble_str(src).unwrap()
 }

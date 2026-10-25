@@ -63,13 +63,46 @@ fn variables_are_memory() {
 }
 
 #[test]
-fn size_mismatch_detected() {
-    assert!(err("org 100h\nmov ax, v\nv db 1\n").contains("size mismatch"));
-    assert!(err("org 100h\nmov [bx], 1\n").contains("operand size"));
+fn operand_sizes_follow_emu8086() {
+    // Untyped memory with an immediate: byte when the value fits in 8 bits, word otherwise.
+    assert_eq!(
+        bytes("org 100h\nmov [bx], 1\nmov [bx], 1234h\ncmp [si], 0\n"),
+        [0xC6, 0x07, 1, 0xC7, 0x07, 0x34, 0x12, 0x80, 0x3C, 0]
+    );
+    // The register decides over a variable's type or PTR.
+    let b = bytes("org 100h\nmov ax, v\nmov w. v, al\nret\nv db 1, 2\n");
+    assert_eq!(&b[..3], &[0xA1, 0x07, 0x01]);
+    assert_eq!(&b[3..6], &[0xA2, 0x07, 0x01]);
+    // Still errors:
+    assert!(err("org 100h\nmov ax, bl\n").contains("size mismatch"));
     assert!(err("org 100h\nmov al, 300\n").contains("out of byte range"));
     assert!(err("org 100h\nmov ax, nothing\n").contains("undefined symbol"));
+    assert!(err("org 100h\ninc [bx]\n").contains("operand size"));
     // b./w. shorthand
     assert_eq!(bytes("org 100h\nmov b.[bx], 1\nmov w.[bx], 1\n"), [0xC6, 0x07, 1, 0xC7, 0x07, 1, 0]);
+}
+
+#[test]
+fn emu8086_syntax_quirks() {
+    // `msg:` with a colon is an address label: MOV DX, msg loads the offset.
+    assert_eq!(&bytes("org 100h\nmov dx, msg\nret\nmsg: db 'x$'\n")[..3], &[0xBA, 0x04, 0x01]);
+    // SIZE/LOW/HIGH can be names; << >> shifts; trailing comma; label colon in a jump.
+    let b = bytes("org 100h\nsize = 3 << 2\nmov cx, size\njl low\nlow: nop\ndb 1, 2,\njmp low:\n");
+    assert_eq!(&b[..3], &[0xB9, 12, 0]);
+    // Text after END is ignored.
+    assert_eq!(bytes("org 100h\nnop\nend\nthis is not code, at all\n"), [0x90]);
+    // Text equates.
+    assert_eq!(bytes("org 100h\nnl equ 0Dh, 0Ah, '$'\ndb 'a', nl\n"), [b'a', 13, 10, b'$']);
+    // A far JCXZ becomes OR CX,CX + JZ.
+    let b = bytes("org 100h\njcxz far_away\ndb 300 dup(0)\nfar_away: ret\n");
+    assert_eq!(&b[..5], &[0x0B, 0xC9, 0x75, 0x03, 0xE9]);
+    // 80186: PUSHA / POPA / PUSH imm.
+    assert_eq!(bytes("org 100h\npusha\npopa\npush 5\npush 1234h\n"), [0x60, 0x61, 0x6A, 5, 0x68, 0x34, 0x12]);
+    // ORG 100h with .data/.code is a COM file with the code first.
+    let p = assemble_str("org 100h\n.data\nm db 'hi$'\n.code\nmov ax, @data\nmov dx, offset m\nret\n").unwrap();
+    assert_eq!(p.format, Format::Com);
+    assert_eq!(p.image, [0xB8, 0, 0, 0xBA, 0x07, 0x01, 0xC3, b'h', b'i', b'$']);
+    assert_eq!(p.relocs, vec![1]);
 }
 
 #[test]

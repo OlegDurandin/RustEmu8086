@@ -13,6 +13,8 @@ pub struct Session {
     pub program: Option<Program>,
     /// Raw executable bytes that were loaded (for Reload).
     loaded: Option<(Loadable, Vec<u8>)>,
+    /// DOS command line parameters given to the program (PSP:80h) on every load.
+    pub command_line: String,
     /// Physical address -> label/procedure name of the loaded program.
     symbols_by_addr: HashMap<u32, String>,
     /// Indices into `program.lines` sorted by image offset (for binary search).
@@ -65,6 +67,7 @@ impl Session {
             machine: Machine::new(),
             program: None,
             loaded: None,
+            command_line: String::new(),
             symbols_by_addr: HashMap::new(),
             lines_sorted: Vec::new(),
             expansion_starts: HashMap::new(),
@@ -78,10 +81,15 @@ impl Session {
             Format::Com => Loadable::Com,
             Format::Exe => Loadable::Exe,
             Format::Boot => Loadable::Boot,
-            Format::Bin => Loadable::Bin {
-                seg: prog.emu.load_segment.unwrap_or(0x0100),
-                off: prog.emu.load_offset.unwrap_or(prog.origin),
-            },
+            Format::Bin => {
+                // Emu8086: without LOAD_SEGMENT/LOAD_OFFSET the program is loaded at CS:IP,
+                // without anything at 0100:0000.
+                let reg = |n: &str| prog.emu.regs.iter().find(|(r, _)| r == n).map(|(_, v)| *v);
+                Loadable::Bin {
+                    seg: prog.emu.load_segment.or(reg("CS")).unwrap_or(0x0100),
+                    off: prog.emu.load_offset.or(reg("IP")).unwrap_or(prog.origin),
+                }
+            }
         };
         let bytes = if prog.format == Format::Boot { prog.image.clone() } else { bytes };
         self.program = Some(prog);
@@ -98,10 +106,33 @@ impl Session {
             Loadable::Boot => self.machine.load_boot(&bytes)?,
         }
         if let Some(p) = &self.program {
+            let info = self.machine.loaded.clone().unwrap();
+            // Segment fixups of flat programs (COM/BIN/BOOT) refer to the load segment.
+            if p.format != Format::Exe {
+                let seg = match kind {
+                    Loadable::Bin { seg, .. } => seg,
+                    _ => info.load_segment,
+                };
+                for &r in &p.relocs {
+                    let a = info.image_base + r;
+                    let v = self.machine.sys.mem.read16(a).wrapping_add(seg);
+                    self.machine.sys.mem.write16(a, v);
+                }
+            }
             for (r, v) in &p.emu.regs {
                 self.machine.set_register(r, *v);
             }
+            let mut mem = p.emu.mem.clone();
+            if p.format == Format::Bin && p.emu.regs.is_empty() && p.emu.load_segment.is_none() && mem.is_empty() {
+                // Like Emu8086's default.binf: RET from the program lands on a HLT.
+                mem = vec![(0x10FFE, vec![0x00, 0xFF]), (0x10F00, vec![0xF4])];
+            }
+            for (a, bytes) in mem {
+                self.machine.sys.mem.load(a, &bytes);
+            }
         }
+        let args = self.command_line.clone();
+        self.machine.set_command_line(&args);
         self.loaded = Some((kind, bytes));
         self.index_symbols();
         self.index_lines();
@@ -144,6 +175,26 @@ impl Session {
                 self.load_program(prog)
             }
         }
+    }
+
+    /// Boots from the virtual floppy: sector 1 is loaded at 0000:7C00 (like the BIOS does).
+    pub fn boot_from_floppy(&mut self) -> Result<(), String> {
+        if self.machine.floppy.len() < 512 {
+            return Err("the virtual floppy is empty".into());
+        }
+        let sector = self.machine.floppy[..512].to_vec();
+        self.program = None;
+        self.load_bytes(Loadable::Boot, sector)
+    }
+
+    /// Copies the 512 bytes at 0000:7C00 to the boot sector of the virtual floppy.
+    pub fn write_boot_sector(&mut self) {
+        let fl = &mut self.machine.floppy;
+        if fl.len() < 1_474_560 {
+            fl.resize(1_474_560, 0);
+        }
+        let data = self.machine.sys.mem.slice(0x7C00, 512).to_vec();
+        self.machine.floppy[..512].copy_from_slice(&data);
     }
 
     /// Reloads the last program (fresh machine state, same breakpoints).

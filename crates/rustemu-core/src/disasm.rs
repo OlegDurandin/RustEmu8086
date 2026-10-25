@@ -156,7 +156,28 @@ pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
         0x48..=0x4F => format!("DEC {}", REG16_NAMES[(op & 7) as usize]),
         0x50..=0x57 => format!("PUSH {}", REG16_NAMES[(op & 7) as usize]),
         0x58..=0x5F => format!("POP {}", REG16_NAMES[(op & 7) as usize]),
-        0x60..=0x7F => format!("{} {}", JCC[(op & 0xF) as usize], rel8(&mut r)),
+        // 80186 forms (the emulated machine is an 8086 with 80186 extensions).
+        0x60 => "PUSHA".into(),
+        0x61 => "POPA".into(),
+        0x62 => {
+            let m = read_modrm(&mut r, seg);
+            format!("BOUND {}, {}", reg(m.reg, true), m.operand(true))
+        }
+        0x68 => format!("PUSH {}", hex16(r.u16())),
+        0x6A => {
+            let v = r.u8() as i8;
+            if v < 0 { format!("PUSH -{}", hex8(v.unsigned_abs())) } else { format!("PUSH {}", hex8(v as u8)) }
+        }
+        0x69 | 0x6B => {
+            let m = read_modrm(&mut r, seg);
+            let imm = if op == 0x69 { hex16(r.u16()) } else { hex8(r.u8()) };
+            format!("IMUL {}, {}, {imm}", reg(m.reg, true), m.operand(true))
+        }
+        0x6C => "INSB".into(),
+        0x6D => "INSW".into(),
+        0x6E => format!("OUTSB{}", seg_suffix(seg)),
+        0x6F => format!("OUTSW{}", seg_suffix(seg)),
+        0x63..=0x67 | 0x70..=0x7F => format!("{} {}", JCC[(op & 0xF) as usize], rel8(&mut r)),
         0x80..=0x83 => {
             let w = op & 1 != 0;
             let m = read_modrm(&mut r, seg);
@@ -237,8 +258,13 @@ pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
         0xAF => "SCASW".into(),
         0xB0..=0xB7 => format!("MOV {}, {}", REG8_NAMES[(op & 7) as usize], hex8(r.u8())),
         0xB8..=0xBF => format!("MOV {}, {}", REG16_NAMES[(op & 7) as usize], hex16(r.u16())),
-        0xC0 | 0xC2 => format!("RET {}", hex16(r.u16())),
-        0xC1 | 0xC3 => "RET".into(),
+        0xC0 | 0xC1 => {
+            let w = op & 1 != 0;
+            let m = read_modrm(&mut r, seg);
+            format!("{} {}, {}", SHIFTS[m.reg as usize], m.sized(w), hex8(r.u8()))
+        }
+        0xC2 => format!("RET {}", hex16(r.u16())),
+        0xC3 => "RET".into(),
         0xC4 | 0xC5 => {
             let m = read_modrm(&mut r, seg);
             let n = if op == 0xC4 { "LES" } else { "LDS" };
@@ -250,8 +276,13 @@ pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
             let imm = if w { hex16(r.u16()) } else { hex8(r.u8()) };
             format!("MOV {}, {imm}", m.sized(w))
         }
-        0xC8 | 0xCA => format!("RETF {}", hex16(r.u16())),
-        0xC9 | 0xCB => "RETF".into(),
+        0xC8 => {
+            let size = r.u16();
+            format!("ENTER {}, {}", hex16(size), r.u8())
+        }
+        0xC9 => "LEAVE".into(),
+        0xCA => format!("RETF {}", hex16(r.u16())),
+        0xCB => "RETF".into(),
         0xCC => "INT 3".into(),
         0xCD => format!("INT {}", hex8(r.u8())),
         0xCE => "INTO".into(),

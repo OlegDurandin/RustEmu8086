@@ -51,6 +51,8 @@ pub struct Preprocessor<'a> {
     pub files: Vec<String>,
     macros: HashMap<String, Macro>,
     consts: HashMap<String, i64>,
+    /// Text equates (`name EQU a, b, c`), substituted in the lines that follow.
+    text_equs: HashMap<String, String>,
     defined: std::collections::HashSet<String>,
     local_counter: u32,
     pub errors: Vec<AsmError>,
@@ -225,6 +227,7 @@ impl<'a> Preprocessor<'a> {
             files: Vec::new(),
             macros: HashMap::new(),
             consts: HashMap::new(),
+            text_equs: HashMap::new(),
             defined: Default::default(),
             local_counter: 0,
             errors: Vec::new(),
@@ -274,6 +277,10 @@ impl<'a> Preprocessor<'a> {
         while i < lines.len() {
             let l = lines[i].clone();
             i += 1;
+            let mut l = l;
+            if !self.text_equs.is_empty() && first_words(&l.text).1 != "EQU" {
+                l.text = substitute(&l.text, &self.text_equs);
+            }
             let code = strip_comment(&l.text).trim().to_string();
             let (w1, w2) = first_words(&code);
             let active = cond.iter().all(|c| c.0);
@@ -432,6 +439,25 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 _ => {}
+            }
+
+            // Everything after END is ignored (Emu8086 allows free text there).
+            if w1 == "END" && depth == 0 {
+                self.out.push(l);
+                return;
+            }
+
+            // Text equate: `name EQU 0Dh, 0Ah, '$'` or `name EQU <text>` is substituted textually.
+            if w2 == "EQU" {
+                let rest = code.split_whitespace().skip(2).collect::<Vec<_>>().join(" ");
+                let angle = rest.starts_with('<') && rest.ends_with('>');
+                if angle || split_args(&rest).len() > 1 {
+                    let name = code.split_whitespace().next().unwrap().to_ascii_uppercase();
+                    let text = if angle { rest[1..rest.len() - 1].to_string() } else { rest };
+                    self.text_equs.insert(name.clone(), text);
+                    self.defined.insert(name);
+                    continue;
+                }
             }
 
             // Track constants/labels for IF/IFDEF.

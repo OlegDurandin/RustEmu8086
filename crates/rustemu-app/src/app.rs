@@ -131,11 +131,14 @@ pub struct App {
     pub show_macro_code: bool,
     pub source_scroll_to: Option<u32>,
     pub library: crate::library_ui::LibraryState,
+    /// Command line parameters dialog: (open, edited text).
+    pub cmdline_dialog: Option<String>,
 }
 
 #[derive(Clone)]
 pub enum PendingAction {
     New,
+    NewTemplate(usize),
     Open(Option<PathBuf>),
     Example(usize),
     Quit,
@@ -193,6 +196,7 @@ impl App {
             show_macro_code: true,
             source_scroll_to: None,
             library: Default::default(),
+            cmdline_dialog: None,
         };
         let last = app.settings.last_file.clone();
         match last {
@@ -225,8 +229,12 @@ impl App {
     // ---- files ------------------------------------------------------------------
 
     pub fn new_file(&mut self) {
+        self.new_from_template(0);
+    }
+
+    pub fn new_from_template(&mut self, i: usize) {
         self.path = None;
-        self.text = crate::examples::NEW_TEMPLATE.to_string();
+        self.text = crate::examples::TEMPLATES[i].1.to_string();
         self.saved_text = self.text.clone();
         self.messages.clear();
         self.error_lines.clear();
@@ -328,6 +336,7 @@ impl App {
     pub fn perform(&mut self, action: PendingAction) {
         match action {
             PendingAction::New => self.new_file(),
+            PendingAction::NewTemplate(i) => self.new_from_template(i),
             PendingAction::Open(None) => self.open_dialog(),
             PendingAction::Open(Some(p)) => self.open_path(&p),
             PendingAction::Example(i) => self.load_example(i),
@@ -460,11 +469,17 @@ impl App {
 
     /// Loads a binary executable without source.
     pub fn load_binary(&mut self, p: &Path) {
-        self.source_files.clear();
         match self.session.load_path(p) {
-            Ok(()) => self.after_load(),
+            Ok(()) => self.after_binary_load(),
             Err(e) => self.notice("Load", &e),
         }
+    }
+
+    /// After loading code without debug information (binary file, boot from floppy).
+    pub fn after_binary_load(&mut self) {
+        self.source_files.clear();
+        self.source_index.clear();
+        self.after_load();
     }
 
     fn after_load(&mut self) {
@@ -584,6 +599,9 @@ impl App {
                     self.status = format!("CS:IP = {at}");
                 }
             }
+            Event::Sleeping => {
+                self.status = "Waiting (INT 15h/86h)...".into();
+            }
             Event::WaitingInput => {
                 self.status = "Waiting for keyboard input - type in the emulator screen".into();
                 self.screen.focus_request = true;
@@ -679,9 +697,9 @@ impl App {
                         let c = &self.session.machine.cpu;
                         self.status = format!("CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
                     }
-                    Some(Event::WaitingInput) => {
+                    Some(ev @ (Event::WaitingInput | Event::Sleeping)) => {
                         self.run = RunMode::Source(goal);
-                        self.handle_event(Event::WaitingInput);
+                        self.handle_event(ev);
                     }
                     Some(ev) => self.handle_event(ev),
                 }

@@ -68,6 +68,15 @@ open target/release/bundle/RustEmu8086.app
 По умолчанию светлая. Переключатель ☀/🌙 — справа в панели инструментов,
 выбор Light/Dark/System — в меню **View**.
 
+### Ещё как в Emu8086
+
+- **File → New from template** — шаблоны COM / EXE / BIN / boot sector.
+- **Emulator → Set command line parameters…** — параметры программы (PSP:80h).
+- **Emulator → Virtual drive** — образ дискеты для INT 13h: загрузить/сохранить (можно взять `FLOPPY_0`
+  из Emu8086), записать 512 байт с 0000:7C00 в загрузочный сектор, загрузиться с дискеты.
+- Директива `#start=robot.exe#` (и другие устройства) открывает нужную вкладку окна устройств.
+- Синтаксис FASM (`#fasm#`) не поддерживается.
+
 **⌘B** (compile) записывает рядом с исходником исполняемый файл (`.com`/`.exe`/`.bin`),
 листинг `.lst` и таблицу символов `.symbol`.
 
@@ -81,6 +90,7 @@ cargo build --release -p rustemu-cli        # бинарь: target/release/ruste
 
 target/release/rustemu run examples/hello.asm                     # собрать и выполнить
 target/release/rustemu run examples/calc.asm --input '12\n30\n'   # с вводом с клавиатуры
+target/release/rustemu run prog.asm --args "p1 p2"              # параметры командной строки (PSP:80h)
 target/release/rustemu run examples/colors.asm --input 'x' --screen   # показать итоговый экран
 target/release/rustemu asm examples/hello_exe.asm -l -s           # собрать .exe + листинг + символы
 target/release/rustemu asm examples/hello.asm                     # → examples/hello.com
@@ -98,6 +108,9 @@ cargo test --workspace
 Дополнительно:
 
 - сверка кодировок с NASM выполняется автоматически, если установлен `nasm` (`brew install nasm`);
+- совместимость с примерами Emu8086: если Emu8086 установлен (переменная `EMU8086_DIR` или стандартный путь
+  CrossOver), `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` собирает и запускает все
+  его примеры;
 - проверка процессора на тестах с реального 8088 (SingleStepTests): скачать `v2/*.json.gz`
   и `v2/metadata.json` из https://github.com/SingleStepTests/8088 в `testdata/8088/`, затем
   `cargo test -p rustemu-core --release --test singlestep -- --ignored`.

@@ -13,6 +13,7 @@ usage:
   rustemu asm <file.asm> [-o <out>] [-l] [-s]   assemble (-l listing, -s symbols)
   rustemu run <file> [options]                  run .asm/.com/.exe/.bin/.boot headless
       --input <text>     keyboard input (\\n = Enter); otherwise stdin is used
+      --args <text>      DOS command line parameters (PSP:80h)
       --max <n>          instruction limit (default 100000000)
       --screen           print the final text screen instead of the output stream
       --trace            print every executed instruction
@@ -80,6 +81,7 @@ fn cmd_asm(args: &[String]) -> Result<u8, String> {
 fn cmd_run(args: &[String]) -> Result<u8, String> {
     let path = file_arg(args)?;
     let mut s = Session::new();
+    s.command_line = opt(args, "--args").unwrap_or("").to_string();
     s.load_path(&path)?;
     s.machine.timer_irq = flag(args, "--timer-irq");
     let max: u64 = opt(args, "--max").and_then(|v| v.parse().ok()).unwrap_or(100_000_000);
@@ -122,6 +124,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
         }
         match ev {
             Event::Continue => {}
+            Event::Sleeping => std::thread::sleep(std::time::Duration::from_millis(2)),
             Event::WaitingInput => {
                 let next = match &mut input {
                     Some(buf) if !buf.is_empty() => Some(buf.remove(0)),

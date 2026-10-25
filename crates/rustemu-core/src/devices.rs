@@ -21,18 +21,39 @@ pub mod ports {
     pub const LED_DISPLAY: u16 = 199;
 }
 
+/// Time base of the virtual devices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceClock {
+    /// Host time, like the original Emu8086 devices.
+    RealTime,
+    /// Deterministic: one millisecond per this many instructions (tests).
+    Instructions(u64),
+}
+
 #[derive(Debug, Clone)]
 pub struct Devices {
     /// Last value written to every port (generic "simple I/O" behaviour).
     pub latch: HashMap<u16, u16>,
     pub traffic_lights: u16,
+    /// Last byte written to the stepper motor port.
     pub stepper_pattern: u8,
-    pub stepper_angle: i32,
+    /// Rotor position 0..3 (Emu8086's stepper state machine).
+    pub stepper_rotor: u8,
+    /// Position of the marker on the rim, 0..31 (one half-step = 1, full step = 2).
+    pub stepper_dot: u8,
+    /// Direction of the last move: +1 clockwise, -1 counter-clockwise, 0 none.
+    pub stepper_last_move: i8,
     pub led: u16,
     pub printer: Vec<u8>,
     pub heater_on: bool,
-    /// Temperature in 1/100 degrees Celsius.
+    /// Thermometer reading in degrees Celsius (-65..120).
     pub temperature: i32,
+    /// Air temperature the room cools down (or warms up) to without the heater.
+    pub air_temperature: i32,
+    /// Time base of device simulations.
+    pub clock: DeviceClock,
+    last_tick: Option<std::time::Instant>,
+    thermo_ms: f64,
     /// VGA DAC palette (6-bit components).
     pub palette: [[u8; 3]; 256],
     dac_write_index: u8,
@@ -45,7 +66,6 @@ pub struct Devices {
     /// Ports written (port, value) since the last [`Devices::take_events`].
     events: Vec<(u16, u16)>,
     pub robot: crate::robot::Robot,
-    thermo_acc: u64,
 }
 
 impl Default for Devices {
@@ -60,11 +80,17 @@ impl Devices {
             latch: HashMap::new(),
             traffic_lights: 0,
             stepper_pattern: 0,
-            stepper_angle: 0,
+            stepper_rotor: 0,
+            stepper_dot: 0,
+            stepper_last_move: 0,
             led: 0,
             printer: Vec::new(),
             heater_on: false,
-            temperature: 2000,
+            temperature: 0,
+            air_temperature: 0,
+            clock: DeviceClock::RealTime,
+            last_tick: None,
+            thermo_ms: 0.0,
             palette: crate::video::default_palette(),
             dac_write_index: 0,
             dac_read_index: 0,
@@ -73,22 +99,42 @@ impl Devices {
             last_scan: 0,
             events: Vec::new(),
             robot: crate::robot::Robot::new(),
-            thermo_acc: 0,
         }
     }
 
-    /// Advances time-based device simulations by `instructions` executed instructions.
+    /// Advances time-based device simulations after `instructions` executed instructions.
     pub fn tick(&mut self, instructions: u64) {
-        self.robot.tick(instructions);
-        // Thermometer: 0.01 degree per 1000 instructions toward heating/cooling.
-        self.thermo_acc += instructions;
-        let delta = (self.thermo_acc / 1000) as i32;
-        self.thermo_acc %= 1000;
-        if delta > 0 {
-            if self.heater_on {
-                self.temperature = (self.temperature + delta).min(10000);
+        let ms = match self.clock {
+            DeviceClock::RealTime => {
+                let now = std::time::Instant::now();
+                let last = *self.last_tick.get_or_insert(now);
+                self.last_tick = Some(now);
+                // A paused debugger does not make time jump forward.
+                (now - last).as_secs_f64().min(0.25) * 1000.0
+            }
+            DeviceClock::Instructions(per_ms) => instructions as f64 / per_ms.max(1) as f64,
+        };
+        if ms <= 0.0 {
+            return;
+        }
+        self.robot.tick(ms);
+        self.thermometer(ms);
+    }
+
+    /// Like Emu8086's thermometer: +1 degree every 200 ms with the heater on, otherwise
+    /// one degree per second towards the air temperature; range -65..120.
+    fn thermometer(&mut self, ms: f64) {
+        self.thermo_ms += ms;
+        let period = if self.heater_on { 200.0 } else { 1000.0 };
+        while self.thermo_ms >= period {
+            self.thermo_ms -= period;
+            let t = if self.heater_on {
+                self.temperature + 1
             } else {
-                self.temperature = (self.temperature - delta).max(-2000);
+                self.temperature + (self.air_temperature - self.temperature).signum()
+            };
+            if (-65..=120).contains(&t) {
+                self.temperature = t;
             }
         }
     }
@@ -110,8 +156,9 @@ impl Devices {
                 self.advance_dac(false);
                 c
             }
+            // Bit 7 = ready (the motor completes a step immediately).
             ports::STEPPER_MOTOR => 0x80 | self.stepper_pattern,
-            ports::THERMOMETER => (self.temperature / 100).clamp(-128, 127) as i8 as u8,
+            ports::THERMOMETER => self.temperature as i8 as u8,
             ports::ROBOT_DATA => self.robot.read_data(),
             ports::ROBOT_STATUS => self.robot.status(),
             ports::LED_DISPLAY => self.led as u8,
@@ -160,7 +207,7 @@ impl Devices {
                 self.advance_dac(true);
             }
             ports::TRAFFIC_LIGHTS => self.traffic_lights = (self.traffic_lights & 0xFF00) | v as u16,
-            ports::STEPPER_MOTOR => self.step_motor(v & 7),
+            ports::STEPPER_MOTOR => self.step_motor(v),
             ports::HEATER => self.heater_on = v & 1 != 0,
             ports::PRINTER => self.printer.push(v),
             ports::ROBOT_COMMAND => self.robot.command(v),
@@ -188,20 +235,33 @@ impl Devices {
         }
     }
 
-    /// Half-step sequence of a 3-coil stepper motor; moving to the neighbouring pattern
-    /// rotates by one step in that direction.
-    fn step_motor(&mut self, pattern: u8) {
-        const SEQ: [u8; 6] = [0b001, 0b011, 0b010, 0b110, 0b100, 0b101];
-        let old = SEQ.iter().position(|&p| p == self.stepper_pattern);
-        let new = SEQ.iter().position(|&p| p == pattern);
-        if let (Some(o), Some(n)) = (old, new) {
-            let d = (n as i32 - o as i32).rem_euclid(6);
-            match d {
-                1 => self.stepper_angle += 1,
-                5 => self.stepper_angle -= 1,
-                _ => {}
-            }
+    /// Emu8086's 3-phase stepper motor: the rotor has 4 positions; the new coil pattern decides
+    /// where it moves and by how much (+1/-1 half step, +2/-2 full step). The device reacts only
+    /// when the value written changes.
+    fn step_motor(&mut self, value: u8) {
+        if value == self.stepper_pattern {
+            return;
         }
-        self.stepper_pattern = pattern;
+        self.stepper_pattern = value;
+        // (new rotor position, move) for rotor positions 0..3; None = stays.
+        type T = [Option<(u8, i8)>; 4];
+        const TABLE: [T; 8] = [
+            [None, None, None, None],
+            [Some((1, 2)), None, Some((1, 1)), Some((1, -1))],
+            [None, None, Some((0, -1)), Some((0, 1))],
+            [Some((3, -1)), Some((3, 1)), Some((3, -2)), None],
+            [Some((1, -2)), None, Some((1, 1)), Some((1, -1))],
+            [None, None, Some((1, 1)), Some((1, -1))],
+            [Some((2, 1)), Some((2, -1)), None, Some((2, 2))],
+            [None, None, Some((0, -1)), Some((0, 1))],
+        ];
+        match TABLE[(value & 7) as usize][self.stepper_rotor as usize & 3] {
+            Some((pos, mv)) => {
+                self.stepper_rotor = pos;
+                self.stepper_dot = (self.stepper_dot as i32 + mv as i32).rem_euclid(32) as u8;
+                self.stepper_last_move = mv.signum();
+            }
+            None => self.stepper_last_move = 0,
+        }
     }
 }

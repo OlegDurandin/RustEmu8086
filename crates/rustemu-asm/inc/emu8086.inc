@@ -90,18 +90,18 @@ CURSOROFF MACRO
         PUSH    AX
         PUSH    CX
         MOV     AH, 1                   ; BIOS: set cursor shape
-        MOV     CX, 2607h               ; bit 5 of CH = cursor invisible
+        MOV     CX, 2809h               ; bit 5 of CH = cursor invisible
         INT     10h
         POP     CX
         POP     AX
 ENDM
 
-; CURSORON - shows the text cursor again (underline shape 06h..07h). AX, CX are preserved.
+; CURSORON - shows the text cursor again (scan lines 8..9). AX, CX are preserved.
 CURSORON MACRO
         PUSH    AX
         PUSH    CX
         MOV     AH, 1                   ; BIOS: set cursor shape
-        MOV     CX, 0607h               ; scan lines 6..7 = underline
+        MOV     CX, 0809h               ; visible cursor, scan lines 8..9
         INT     10h
         POP     CX
         POP     AX
@@ -109,10 +109,12 @@ ENDM
 
 ; DEFINE_SCAN_NUM - emits procedure SCAN_NUM.
 ; CALL SCAN_NUM reads a signed decimal number from the keyboard into CX
-; (range -32768..32767). Accepts digits, '-' (first), Backspace and Enter;
-; other keys are ignored. Digits are echoed. Other registers are preserved.
+; (range -32768..32767). Every key is echoed as typed; non-digits and digits that
+; would overflow are erased again, Backspace removes the last digit, '-' makes the
+; number negative and Enter finishes. Other registers are preserved.
 DEFINE_SCAN_NUM MACRO
-        LOCAL   skip_proc, next_key, not_enter, not_bksp, add_digit, reject, done, positive, minus_flag, ten
+        LOCAL   skip_proc, next_key, not_enter, not_bksp, not_minus, is_digit, erase, overflow, done, positive
+        LOCAL   minus_flag, ten, saved
         JMP     skip_proc               ; do not execute the procedure here
 SCAN_NUM PROC NEAR
         PUSH    DX
@@ -123,49 +125,50 @@ SCAN_NUM PROC NEAR
 next_key:
         MOV     AH, 0                   ; BIOS: wait for a key -> AL = ASCII
         INT     16h
+        MOV     AH, 0Eh                 ; echo it right away
+        INT     10h
         CMP     AL, 0Dh                 ; Enter finishes the input
         JNE     not_enter
         JMP     done
 not_enter:
-        CMP     AL, 8                   ; Backspace?
+        CMP     AL, 8                   ; Backspace (the cursor already moved back)
         JNE     not_bksp
         MOV     DX, 0                   ; drop the last digit: CX = CX / 10
         MOV     AX, CX
         DIV     WORD PTR CS:ten
         MOV     CX, AX
-        PUTC    8                       ; erase it on the screen
-        PUTC    ' '
+        PUTC    ' '                     ; clear the character and step back again
         PUTC    8
         JMP     next_key
 not_bksp:
-        CMP     AL, '-'                 ; minus is accepted only before digits
-        JNE     add_digit
-        CMP     CX, 0
-        JNE     next_key
+        CMP     AL, '-'                 ; minus: the result will be negated
+        JNE     not_minus
         MOV     BYTE PTR CS:minus_flag, 1
-        PUTC    '-'
         JMP     next_key
-add_digit:
-        CMP     AL, '0'                 ; ignore anything that is not a digit
-        JB      next_key
+not_minus:
+        CMP     AL, '0'                 ; only digits are accepted
+        JB      erase
         CMP     AL, '9'
-        JA      next_key
+        JBE     is_digit
+erase:
+        PUTC    8                       ; remove the echoed character
+        PUTC    ' '
+        PUTC    8
+        JMP     next_key
+is_digit:
         MOV     SI, AX
         AND     SI, 0Fh                 ; SI = digit value 0..9
+        MOV     CS:saved, CX
         MOV     AX, CX
         MUL     WORD PTR CS:ten         ; DX:AX = CX * 10
-        JC      reject                  ; too big
+        JC      overflow
         ADD     AX, SI                  ; + new digit
-        JC      reject
-        CMP     AX, 32767
-        JA      reject
+        JC      overflow
         MOV     CX, AX                  ; accept the digit
-        MOV     AX, SI
-        ADD     AL, '0'
-        PUTC    AL                      ; echo it
         JMP     next_key
-reject:
-        JMP     next_key
+overflow:
+        MOV     CX, CS:saved            ; too big: keep the old value, erase the digit
+        JMP     erase
 done:
         CMP     BYTE PTR CS:minus_flag, 0
         JE      positive
@@ -177,6 +180,7 @@ positive:
         RET
 minus_flag DB   0                       ; 1 when '-' was typed
 ten     DW      10
+saved   DW      0                       ; value before the last digit
 SCAN_NUM ENDP
 skip_proc:
 ENDM

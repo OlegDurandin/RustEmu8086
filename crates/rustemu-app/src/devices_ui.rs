@@ -13,16 +13,18 @@ pub enum Device {
     Thermometer,
     Printer,
     Robot,
+    SimpleIo,
 }
 
 impl Device {
-    const ALL: [(Device, &'static str); 6] = [
+    const ALL: [(Device, &'static str); 7] = [
         (Device::TrafficLights, "traffic lights"),
         (Device::Stepper, "stepper motor"),
         (Device::Led, "LED display"),
         (Device::Thermometer, "thermometer"),
         (Device::Printer, "printer"),
         (Device::Robot, "robot"),
+        (Device::SimpleIo, "simple I/O"),
     ];
 
     /// Maps an Emu8086 `#start=xxx.exe#` name to a device.
@@ -36,6 +38,7 @@ impl Device {
             "thermometer" => Device::Thermometer,
             "printer" => Device::Printer,
             "robot" => Device::Robot,
+            "simple" => Device::SimpleIo,
             _ => return None,
         })
     }
@@ -79,6 +82,10 @@ pub fn devices_window(app: &mut App, ctx: &egui::Context) {
                 Device::Robot => {
                     ui.label(RichText::new("Robot — ports 9 (command), 10 (data), 11 (status)").strong());
                     robot(app, ui);
+                }
+                Device::SimpleIo => {
+                    ui.label(RichText::new("Simple I/O — port 110 (byte), port 112 (word)").strong());
+                    simple_io(app, ui);
                 }
             }
         });
@@ -129,18 +136,28 @@ fn stepper(app: &App, ui: &mut Ui) {
     let c = rect.center();
     p.circle_filled(c, 52.0, Color32::from_gray(70));
     p.circle_stroke(c, 52.0, Stroke::new(2.0, Color32::from_gray(150)));
-    // 6 half-steps per 360/8 degrees of an 8-pole motor: show 7.5 degrees per half step.
-    let angle = d.stepper_angle as f32 * 7.5_f32.to_radians();
+    // The marker on the rim has 32 positions (one half-step = 11.25 degrees).
+    let angle = d.stepper_dot as f32 * 11.25_f32.to_radians();
     let tip = c + vec2(angle.sin(), -angle.cos()) * 45.0;
     p.line_segment([c, tip], Stroke::new(5.0, Color32::from_rgb(240, 200, 60)));
+    p.circle_filled(tip, 5.0, Color32::from_rgb(60, 200, 60));
     p.circle_filled(c, 6.0, Color32::from_gray(200));
-    for i in 0..3 {
+    // Magnets for bits 0, 1, 2 (red when energized).
+    for (i, a) in [(0, 45.0_f32), (1, 0.0), (2, -45.0)] {
         let on = d.stepper_pattern & (1 << i) != 0;
-        let a = (i as f32 * 120.0).to_radians();
-        let cp = c + vec2(a.sin(), -a.cos()) * 58.0;
-        p.circle_filled(cp, 5.0, if on { Color32::from_rgb(80, 220, 80) } else { Color32::from_gray(40) });
+        let cp = c + vec2(a.to_radians().sin(), -a.to_radians().cos()) * 58.0;
+        p.circle_filled(cp, 5.0, if on { Color32::from_rgb(230, 50, 50) } else { Color32::from_rgb(50, 80, 200) });
     }
-    ui.label(RichText::new(format!("coils {:03b}  steps {}", d.stepper_pattern, d.stepper_angle)).monospace().small());
+    let arrow = match d.stepper_last_move {
+        1 => "↻",
+        -1 => "↺",
+        _ => "-",
+    };
+    ui.label(
+        RichText::new(format!("port 7 = {:08b}  {arrow}  position {}", d.stepper_pattern, d.stepper_dot))
+            .monospace()
+            .small(),
+    );
 }
 
 fn led(app: &App, ui: &mut Ui) {
@@ -157,17 +174,17 @@ fn led(app: &App, ui: &mut Ui) {
 
 fn thermometer(app: &mut App, ui: &mut Ui) {
     let d = &mut app.session.machine.sys.dev;
-    let t = d.temperature as f32 / 100.0;
+    let t = d.temperature as f32;
     let (rect, _) = ui.allocate_exact_size(vec2(200.0, 26.0), Sense::hover());
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 4.0, Color32::from_gray(40));
-    let frac = ((t + 20.0) / 120.0).clamp(0.0, 1.0);
+    let frac = ((t + 65.0) / 185.0).clamp(0.0, 1.0);
     let fill = Rect::from_min_size(rect.min, vec2(rect.width() * frac, rect.height()));
     p.rect_filled(fill, 4.0, Color32::from_rgb(220, 60, 40));
     p.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        format!("{t:.1} °C"),
+        format!("{t:.0} °C"),
         FontId::proportional(14.0),
         Color32::WHITE,
     );
@@ -178,10 +195,7 @@ fn thermometer(app: &mut App, ui: &mut Ui) {
         } else {
             RichText::new("heater: off").weak()
         });
-        let mut temp = t;
-        if ui.add(egui::Slider::new(&mut temp, -20.0..=100.0).text("set")).changed() {
-            d.temperature = (temp * 100.0) as i32;
-        }
+        ui.add(egui::Slider::new(&mut d.air_temperature, -65..=120).text("air °C"));
     });
 }
 
@@ -191,7 +205,13 @@ fn printer(app: &mut App, ui: &mut Ui) {
         .printer
         .iter()
         .filter(|&&b| b != b'\r')
-        .map(|&b| if b == b'\n' { '\n' } else { rustemu_core::font::cp437_to_char(b) })
+        .map(|&b| match b {
+            b'\n' => "\n".to_string(),
+            // Form feed: next page.
+            12 => "\n─────── page break ───────\n".to_string(),
+            b'\t' => "    ".to_string(),
+            _ => rustemu_core::font::cp437_to_char(b).to_string(),
+        })
         .collect();
     egui::Frame::new().fill(Color32::from_rgb(250, 250, 240)).inner_margin(6.0).show(ui, |ui| {
         ui.set_min_size(vec2(260.0, 110.0));
@@ -238,11 +258,14 @@ fn robot(app: &mut App, ui: &mut Ui) {
     let (dx, dy) = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)][(r.dir & 3) as usize];
     let tip: Pos2 = rc + vec2(dx, dy) * cell * 0.36;
     p.line_segment([rc, tip], Stroke::new(4.0, Color32::WHITE));
-    if resp.clicked()
-        && let Some(pos) = resp.interact_pointer_pos()
-    {
+    if let Some(pos) = resp.interact_pointer_pos() {
         let rel = pos - rect.min;
-        r.cycle_cell((rel.x / cell) as usize, (rel.y / cell) as usize);
+        let (cx, cy) = ((rel.x / cell) as usize, (rel.y / cell) as usize);
+        if resp.clicked() {
+            r.cycle_cell(cx, cy);
+        } else if resp.secondary_clicked() {
+            r.place(cx, cy);
+        }
     }
     let st = r.status();
     ui.horizontal(|ui| {
@@ -260,6 +283,29 @@ fn robot(app: &mut App, ui: &mut Ui) {
         if ui.small_button("clear").clicked() {
             r.clear_map();
         }
-        ui.weak("click a cell: wall → lamp → empty");
+        ui.weak("click: wall → lamp on → lamp off → empty, robot cell: turn; right-click: move robot");
     });
+}
+
+fn simple_io(app: &mut App, ui: &mut Ui) {
+    let latch = &mut app.session.machine.sys.dev.latch;
+    let byte = |l: &std::collections::HashMap<u16, u16>, p: u16| l.get(&p).copied().unwrap_or(0) as u8;
+    let mut b110 = byte(latch, 110);
+    let mut w112 = byte(latch, 112) as u16 | ((byte(latch, 113) as u16) << 8);
+    egui::Grid::new("simple_io").num_columns(3).show(ui, |ui| {
+        let l = ui.label("port 110").id;
+        if ui.add(egui::DragValue::new(&mut b110).hexadecimal(2, false, true)).labelled_by(l).changed() {
+            latch.insert(110, b110 as u16);
+        }
+        ui.label(RichText::new(format!("{b110:08b}b  {b110}")).monospace());
+        ui.end_row();
+        let l = ui.label("port 112").id;
+        if ui.add(egui::DragValue::new(&mut w112).hexadecimal(4, false, true)).labelled_by(l).changed() {
+            latch.insert(112, w112 & 0xFF);
+            latch.insert(113, w112 >> 8);
+        }
+        ui.label(RichText::new(format!("{w112:016b}b  {w112}")).monospace());
+        ui.end_row();
+    });
+    ui.weak("values written with OUT appear here; edit them to change what IN reads");
 }

@@ -184,12 +184,43 @@ fn fits_i8(v: &Val) -> bool {
 
 /// Resolves the operand width (true = 16-bit) of a two-operand instruction.
 fn width(a: &Op, b: &Op) -> R<bool> {
+    let is_reg = |o: &Op| matches!(o, Op::R8(_) | Op::R16(_) | Op::Sr(_));
     match (a.size(), b.size()) {
+        // Emu8086: the register decides when it disagrees with a variable's type or PTR
+        // (`mov ax, dword_var`, `mov w. byte_var, al`).
+        (Some(x), Some(y)) if x != y && is_reg(a) && !is_reg(b) => width_of(x),
+        (Some(x), Some(y)) if x != y && is_reg(b) && !is_reg(a) => width_of(y),
         (Some(x), Some(y)) if x != y => Err(format!("operand size mismatch ({x} vs {y} bytes)")),
+        (None, None) if matches!(b, Op::Imm(_)) => Ok(!imm_fits_byte(b)),
+        (None, None) if matches!(a, Op::Imm(_)) => Ok(!imm_fits_byte(a)),
         (Some(1), _) | (_, Some(1)) => Ok(false),
         (Some(2), _) | (_, Some(2)) => Ok(true),
         (Some(s), _) | (_, Some(s)) => Err(format!("invalid operand size {s}")),
         (None, None) => Err("operand size not specified (use BYTE PTR or WORD PTR)".into()),
+    }
+}
+
+fn width_of(size: u8) -> R<bool> {
+    match size {
+        1 => Ok(false),
+        2 => Ok(true),
+        s => Err(format!("invalid operand size {s}")),
+    }
+}
+
+fn imm_fits_byte(o: &Op) -> bool {
+    match o {
+        Op::Imm(v) => v.seg_base.is_none() && v.label_seg.is_none() && (-128..=255).contains(&v.num),
+        _ => false,
+    }
+}
+
+/// Width of `dst` used with an immediate: an untyped memory operand is a byte when the value
+/// fits in 8 bits and a word otherwise (Emu8086 infers the size like this: `mov [bx], 0`).
+fn width_with_imm(dst: &Op, v: &Val) -> R<bool> {
+    match dst.size() {
+        Some(s) => width_of(s),
+        None => Ok(!imm_fits_byte(&Op::Imm(v.clone()))),
     }
 }
 
@@ -273,6 +304,10 @@ fn simple(m: &str) -> Option<&'static [u8]> {
         "SCASB" => &[0xAE],
         "SCASW" => &[0xAF],
         "SALC" => &[0xD6],
+        // 80186 instructions supported by Emu8086.
+        "PUSHA" => &[0x60],
+        "POPA" => &[0x61],
+        "LEAVE" => &[0xC9],
         _ => return None,
     })
 }
@@ -443,6 +478,13 @@ pub fn encode(prefixes: &[String], mnem: &str, ops: &[Operand], env: &dyn Env, c
             };
             let (target, _, unknown) = rel_target(&ops[0], ctx)?;
             let d = target - (ctx.loc + e.bytes.len() as i64 + 2);
+            if (unknown || !(-128..=127).contains(&d)) && op == 0xE3 {
+                // Emu8086 assembles a far JCXZ as OR CX, CX + JZ (inverted short jump + near JMP).
+                e.bytes.extend_from_slice(&[0x0B, 0xC9, 0x75, 0x03, 0xE9]);
+                let near = target - (ctx.loc + e.bytes.len() as i64 + 2);
+                e.w(near as u16);
+                return Ok(e);
+            }
             if !unknown && !(-128..=127).contains(&d) {
                 return Err(format!("{mnem} target out of range by {} byte(s)", d.abs() - 127));
             }
@@ -614,7 +656,16 @@ pub fn encode(prefixes: &[String], mnem: &str, ops: &[Operand], env: &dyn Env, c
                         emit_rm(&mut e, &[0xFF], 6, &ops[0])?;
                     }
                 }
-                Op::Imm(_) => return Err("PUSH immediate is not available on the 8086".into()),
+                Op::Imm(v) if !pop => {
+                    // 80186 PUSH imm (supported by Emu8086).
+                    if fits_i8(v) {
+                        e.b(0x6A);
+                        e.b(v.num as u8);
+                    } else {
+                        e.b(0x68);
+                        imm_w(&mut e, v)?;
+                    }
+                }
                 _ => return Err(format!("{mnem} requires a 16-bit operand")),
             }
         }
@@ -756,7 +807,7 @@ fn alu(e: &mut Enc, n: u8, a: &Op, b: &Op) -> R<()> {
         (Op::Imm(_), _) => Err("destination cannot be a constant".into()),
         (Op::Mem(_), Op::Mem(_)) => Err("memory-to-memory operation is not allowed".into()),
         (dst, Op::Imm(v)) if dst.is_rm() => {
-            let w = single_width(dst)?;
+            let w = width_with_imm(dst, v)?;
             match dst {
                 Op::R8(0) | Op::R16(0) if !(w && fits_i8(v)) => {
                     e.b((n << 3) | 4 | w as u8);
@@ -816,7 +867,7 @@ fn mov(e: &mut Enc, a: &Op, b: &Op) -> R<()> {
             imm_w(e, v)
         }
         (Op::Mem(_), Op::Imm(v)) => {
-            let w = single_width(a)?;
+            let w = width_with_imm(a, v)?;
             emit_rm(e, &[0xC6 | w as u8], 0, a)?;
             imm(e, v, w)
         }

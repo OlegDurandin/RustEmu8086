@@ -139,6 +139,8 @@ pub struct EmuDirectives {
     pub regs: Vec<(String, u16)>,
     /// Devices / programs to start (`#start=traffic_lights.exe#`).
     pub start: Vec<String>,
+    /// Memory preset with `#MEM=...#`: (physical address, bytes).
+    pub mem: Vec<(u32, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone)]

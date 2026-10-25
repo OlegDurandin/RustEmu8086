@@ -342,3 +342,29 @@ fn disasm_samples() {
     assert_eq!(disassemble(&[0xEB, 0xFE], 0x100).text, "JMP 0100h");
     assert_eq!(disassemble(&[0xE8, 0x00, 0x00], 0x100).text, "CALL 0103h");
 }
+
+#[test]
+fn i80186_extensions() {
+    let mut bus = TestBus { mem: Memory::new(), ports: vec![] };
+    // MOV AX,1 ; MOV BX,2 ; PUSHA ; XOR AX,AX ; XOR BX,BX ; POPA ; PUSH 1234h ; POP CX ;
+    // PUSH -2 ; POP DX ; IMUL SI, BX, 7 ; SHL BX, 3 ; HLT
+    let code = [
+        0xB8, 0x01, 0x00, 0xBB, 0x02, 0x00, 0x60, 0x31, 0xC0, 0x31, 0xDB, 0x61, 0x68, 0x34, 0x12, 0x59, 0x6A, 0xFE,
+        0x5A, 0x6B, 0xF3, 0x07, 0xC1, 0xE3, 0x03, 0xF4,
+    ];
+    bus.mem.load(0x1000, &code);
+    let mut cpu = Cpu::new();
+    cpu.model = CpuModel::I80186;
+    cpu.sregs = [0x100, 0x100, 0, 0x100];
+    cpu.ip = 0;
+    cpu.regs[SP] = 0xFFFE;
+    while cpu.step(&mut bus) != StepResult::Halted {}
+    assert_eq!(cpu.regs[AX], 1);
+    assert_eq!(cpu.regs[CX], 0x1234);
+    assert_eq!(cpu.regs[DX], 0xFFFE);
+    assert_eq!(cpu.regs[SI], 14);
+    assert_eq!(cpu.regs[BX], 16);
+    assert_eq!(cpu.regs[SP], 0xFFFE);
+    assert_eq!(disassemble(&[0x60], 0).text, "PUSHA");
+    assert_eq!(disassemble(&[0xC1, 0xE3, 0x03], 0).text, "SHL BX, 03h");
+}

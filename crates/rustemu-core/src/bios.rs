@@ -182,8 +182,22 @@ impl Machine {
 
     pub(crate) fn int15(&mut self) -> Svc {
         match self.ah() {
-            // Wait CX:DX microseconds - the emulator does not throttle here.
-            0x86 => self.cpu.set_flag(flags::CF, false),
+            // Wait CX:DX microseconds (real time).
+            0x86 => {
+                let us = ((self.cpu.regs[CX] as u64) << 16) | self.cpu.regs[DX] as u64;
+                let now = std::time::Instant::now();
+                match self.wait_until {
+                    _ if self.instant_waits => {}
+                    None => {
+                        self.wait_until = Some(now + std::time::Duration::from_micros(us));
+                        return Svc::Sleep;
+                    }
+                    Some(t) if now < t => return Svc::Sleep,
+                    Some(_) => {}
+                }
+                self.wait_until = None;
+                self.cpu.set_flag(flags::CF, false);
+            }
             0x88 => self.cpu.regs[AX] = 0,
             0xC0 => {
                 self.cpu.set_flag(flags::CF, true);

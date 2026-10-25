@@ -78,6 +78,9 @@ pub struct Stmt {
     /// Label defined at this statement (`name:`), uppercased.
     pub label: Option<String>,
     pub kind: StmtKind,
+    /// The label was written with a colon (`msg: db ...`): it is a plain address label, not a
+    /// typed variable (Emu8086 semantics: `mov dx, msg` loads the offset).
+    pub colon: bool,
 }
 
 pub type PErr = (usize, String);
@@ -97,7 +100,7 @@ pub fn parse_line(line: &str) -> Result<Stmt, PErr> {
     if trimmed.starts_with('#') {
         let body = trimmed.trim_start_matches('#');
         let body = body.split('#').next().unwrap_or("").trim().to_string();
-        return Ok(Stmt { label: None, kind: StmtKind::Emu(body) });
+        return Ok(Stmt { label: None, kind: StmtKind::Emu(body), colon: false });
     }
     let toks = tokenize(line)?;
     parse_tokens(&toks)
@@ -106,16 +109,18 @@ pub fn parse_line(line: &str) -> Result<Stmt, PErr> {
 pub fn parse_tokens(toks: &[Token]) -> Result<Stmt, PErr> {
     let mut p = Parser::new(toks);
     let mut label = None;
+    let mut colon = false;
 
     // `name:` label
     if let (Some(Tok::Ident(id)), Some(Tok::P(':'))) = (p.peek(), p.peek_at(1))
         && parse_reg(id).is_none()
     {
         label = Some(id.to_ascii_uppercase());
+        colon = true;
         p.pos += 2;
     }
     if p.at_end() {
-        return Ok(Stmt { label, kind: StmtKind::Empty });
+        return Ok(Stmt { colon: false, label, kind: StmtKind::Empty });
     }
 
     // `name DIRECTIVE ...`
@@ -130,14 +135,14 @@ pub fn parse_tokens(toks: &[Token]) -> Result<Stmt, PErr> {
                 StmtKind::Data { .. } => Some(name),
                 _ => None,
             };
-            return finish(&p, Stmt { label, kind });
+            return finish(&p, Stmt { label, kind, colon: false });
         }
     }
     if let (Some(Tok::Ident(name)), Some(Tok::P('='))) = (p.peek(), p.peek_at(1)) {
         let name = name.to_ascii_uppercase();
         p.pos += 2;
         let e = p.expr()?;
-        return finish(&p, Stmt { label, kind: StmtKind::Assign(name, e) });
+        return finish(&p, Stmt { colon: false, label, kind: StmtKind::Assign(name, e) });
     }
 
     let Some(Tok::Ident(word)) = p.advance() else {
@@ -147,7 +152,7 @@ pub fn parse_tokens(toks: &[Token]) -> Result<Stmt, PErr> {
 
     if let Some(&(_, size)) = DATA_DIRS.iter().find(|(d, _)| *d == u) {
         let items = data_items(&mut p, size)?;
-        return finish(&p, Stmt { label, kind: StmtKind::Data { size, items } });
+        return finish(&p, Stmt { colon, label, kind: StmtKind::Data { size, items } });
     }
 
     let kind = match u.as_str() {
@@ -191,7 +196,7 @@ pub fn parse_tokens(toks: &[Token]) -> Result<Stmt, PErr> {
             StmtKind::Instr { prefixes, mnem, ops }
         }
     };
-    finish(&p, Stmt { label, kind })
+    finish(&p, Stmt { label, kind, colon: false })
 }
 
 fn finish(p: &Parser, s: Stmt) -> Result<Stmt, PErr> {
@@ -261,7 +266,8 @@ fn data_items(p: &mut Parser, size: u8) -> Result<Vec<DataItem>, PErr> {
     }
     loop {
         items.push(data_item(p, size)?);
-        if !p.eat_p(',') {
+        // A trailing comma at the end of the line is tolerated.
+        if !p.eat_p(',') || p.at_end() {
             break;
         }
     }
@@ -309,7 +315,8 @@ fn operands(p: &mut Parser) -> Result<Vec<Operand>, PErr> {
     loop {
         let e = p.expr()?;
         // `seg:off` far immediate (segment registers are handled by the expression parser).
-        if p.eat_p(':') {
+        // A colon at the very end (`jne label:`) is tolerated.
+        if p.eat_p(':') && !p.at_end() {
             let off = p.expr()?;
             ops.push(Operand::Far(e, off));
         } else {

@@ -61,6 +61,8 @@ pub enum Event {
     Continue,
     /// Execution is blocked until a key is pressed.
     WaitingInput,
+    /// A timed BIOS wait (INT 15h/86h) is in progress; run again later.
+    Sleeping,
     /// HLT executed (waiting for an interrupt).
     Halted,
     /// Program terminated with an exit code.
@@ -97,6 +99,8 @@ pub struct LoadInfo {
 pub(crate) enum Svc {
     Ret,
     Block,
+    /// Like `Block`, but waiting for time to pass rather than for a key.
+    Sleep,
     Terminate(u8),
     /// Return from the interrupt immediately and stop with this event.
     Stop(Event),
@@ -138,6 +142,10 @@ pub struct Machine {
     tick_instr: u64,
     tick_time: Option<std::time::Instant>,
     tick_frac: f64,
+    /// End of a running INT 15h/86h wait.
+    pub(crate) wait_until: Option<std::time::Instant>,
+    /// Complete INT 15h/86h waits immediately (tests, headless runs).
+    pub instant_waits: bool,
 }
 
 impl Default for Machine {
@@ -148,8 +156,11 @@ impl Default for Machine {
 
 impl Machine {
     pub fn new() -> Self {
+        let mut cpu = Cpu::new();
+        // Emu8086 programs use a few 80186 instructions (PUSHA/POPA, PUSH imm, ...).
+        cpu.model = crate::cpu::CpuModel::I80186;
         let mut m = Machine {
-            cpu: Cpu::new(),
+            cpu,
             sys: System { mem: Memory::new(), dev: Devices::new(), keys: VecDeque::new(), irq: VecDeque::new() },
             breakpoints: HashSet::new(),
             loaded: None,
@@ -168,6 +179,8 @@ impl Machine {
             tick_instr: 0,
             tick_time: None,
             tick_frac: 0.0,
+            wait_until: None,
+            instant_waits: false,
         };
         m.reset();
         m
@@ -183,7 +196,13 @@ impl Machine {
         let root = self.dos.root.take();
         self.sys.mem.set_journaling(false);
         self.sys.mem.clear();
-        self.sys.dev = Devices::new();
+        // Devices are separate from the CPU (separate programs in Emu8086): the robot's room,
+        // the air temperature and the clock survive a reset.
+        let old = std::mem::take(&mut self.sys.dev);
+        self.sys.dev.clock = old.clock;
+        self.sys.dev.air_temperature = old.air_temperature;
+        self.sys.dev.robot = old.robot;
+        self.sys.dev.robot.reset_state();
         self.sys.keys.clear();
         self.sys.irq.clear();
         self.cpu.reset();
@@ -385,11 +404,25 @@ impl Machine {
         Ok(())
     }
 
+    /// Writes DOS command line parameters into the PSP (offset 80h: length, text, CR).
+    /// Like DOS, the text starts with a space: `"p1 p2"` is stored as `" p1 p2"`.
+    pub fn set_command_line(&mut self, args: &str) {
+        let Some(psp) = self.loaded.as_ref().and_then(|l| l.psp) else { return };
+        let text: Vec<u8> =
+            if args.is_empty() { Vec::new() } else { std::iter::once(b' ').chain(args.bytes()).take(126).collect() };
+        let base = linear(psp, 0x80);
+        self.sys.mem.write8(base, text.len() as u8);
+        self.sys.mem.load(base + 1, &text);
+        self.sys.mem.write8(base + 1 + text.len() as u32, 0x0D);
+    }
+
     /// Sets a register by name (`AX`..`DI`, `CS`..`SS`, `IP`, `FLAGS`).
     pub fn set_register(&mut self, name: &str, v: u16) -> bool {
         let u = name.to_ascii_uppercase();
         if let Some(i) = cpu::REG16_NAMES.iter().position(|r| *r == u) {
             self.cpu.regs[i] = v;
+        } else if let Some(i) = cpu::REG8_NAMES.iter().position(|r| *r == u) {
+            self.cpu.set_reg8(i as u8, v as u8);
         } else if let Some(i) = cpu::SREG_NAMES.iter().position(|r| *r == u) {
             self.cpu.sregs[i] = v;
         } else if u == "IP" {
@@ -507,7 +540,9 @@ impl Machine {
         {
             let undo = self.sys.mem.take_journal();
             // Re-polling a blocked input service changes nothing and is not worth recording.
-            let idle = ev == Event::WaitingInput && undo.is_empty() && self.cpu.same_state(&snap_cpu);
+            let idle = matches!(ev, Event::WaitingInput | Event::Sleeping)
+                && undo.is_empty()
+                && self.cpu.same_state(&snap_cpu);
             if !idle {
                 if self.history.len() >= HISTORY_DEPTH {
                     self.history.pop_front();
@@ -567,6 +602,7 @@ impl Machine {
                 self.output.truncate(s.output_len);
                 self.terminated = None;
                 self.dos.waiting = false;
+                self.wait_until = None;
                 true
             }
             None => false,
@@ -604,7 +640,8 @@ impl Machine {
             0x13 => self.int13(),
             0x15 => self.int15(),
             0x16 => self.int16(),
-            0x19 => Svc::Stop(Event::Error("INT 19h: reboot requested".into())),
+            // Reboot: the program ends (Emu8086 restarts the machine).
+            0x19 => Svc::Terminate(0),
             0x1A => self.int1a(),
             0x20 => Svc::Terminate(0),
             0x21 => self.int21(),
@@ -626,6 +663,10 @@ impl Machine {
                 self.dos.waiting = true;
                 self.cpu.ip = self.cpu.ip.wrapping_sub(3);
                 Event::WaitingInput
+            }
+            Svc::Sleep => {
+                self.cpu.ip = self.cpu.ip.wrapping_sub(3);
+                Event::Sleeping
             }
             Svc::Terminate(code) => {
                 self.dos.waiting = false;

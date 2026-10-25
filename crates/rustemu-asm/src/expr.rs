@@ -127,6 +127,24 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consumes `cc` written as two adjacent characters (`<<`, `>>`).
+    fn eat_pair(&mut self, c: char) -> bool {
+        let adjacent = match (self.toks.get(self.pos), self.toks.get(self.pos + 1)) {
+            (Some(a), Some(b)) => a.tok == Tok::P(c) && b.tok == Tok::P(c) && b.col == a.col + 1,
+            _ => false,
+        };
+        if adjacent {
+            self.pos += 2;
+        }
+        adjacent
+    }
+
+    /// Whether the token after the current one can start an operand (otherwise an operator
+    /// keyword such as SIZE or LOW is just a symbol name).
+    fn operand_follows(&self) -> bool {
+        !matches!(self.peek_at(1), None | Some(Tok::P(',' | ')' | ']' | '+' | '-' | '*' | '/' | ':' | '=')))
+    }
+
     pub fn eat_kw(&mut self, kw: &str) -> bool {
         if self.peek().is_some_and(|t| t.is_ident(kw)) {
             self.pos += 1;
@@ -198,9 +216,9 @@ impl<'a> Parser<'a> {
     fn shift_expr(&mut self) -> PResult<Expr> {
         let mut l = self.add_expr()?;
         loop {
-            let op = if self.eat_kw("SHL") {
+            let op = if self.eat_kw("SHL") || self.eat_pair('<') {
                 BinOp::Shl
-            } else if self.eat_kw("SHR") {
+            } else if self.eat_kw("SHR") || self.eat_pair('>') {
                 BinOp::Shr
             } else {
                 return Ok(l);
@@ -260,7 +278,7 @@ impl<'a> Parser<'a> {
             ("HIGH", UnOp::High),
         ];
         for (kw, op) in UNOPS {
-            if self.eat_kw(kw) {
+            if self.peek().is_some_and(|t| t.is_ident(kw)) && self.operand_follows() && self.eat_kw(kw) {
                 let e = self.unary()?;
                 return Ok(Expr::Un(op, Box::new(e)));
             }
