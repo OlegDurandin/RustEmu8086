@@ -330,3 +330,50 @@ pub fn assemble_file(path: &Path) -> std::io::Result<Result<Program, AsmErrors>>
     let mut loader = FsLoader { include_dirs: Vec::new() };
     Ok(assemble(&path.to_string_lossy(), &text, &mut loader))
 }
+
+/// Evaluates a constant expression in assembler syntax (`0FFh + 'A' * 2`, `1010b shl 3`, ...).
+pub fn evaluate(text: &str) -> Result<i64, String> {
+    struct NoSymbols;
+    impl expr::Env for NoSymbols {
+        fn lookup(&self, _: &str) -> Option<expr::SymVal> {
+            None
+        }
+        fn is_forward(&self, _: &str) -> Option<expr::ForwardKind> {
+            None
+        }
+        fn here(&self) -> (expr::SegId, i64) {
+            (0, 0)
+        }
+        fn seg_paragraph(&self, _: expr::SegId) -> i64 {
+            0
+        }
+    }
+    let toks = lexer::tokenize(text).map_err(|(_, m)| m)?;
+    if toks.is_empty() {
+        return Err("empty expression".into());
+    }
+    let mut p = expr::Parser::new(&toks);
+    let e = p.expr().map_err(|(_, m)| m)?;
+    if !p.at_end() {
+        return Err("unexpected text after the expression".into());
+    }
+    let v = expr::eval(&e, &NoSymbols)?;
+    if !v.is_plain() {
+        return Err("registers and memory are not allowed here".into());
+    }
+    Ok(v.num)
+}
+
+#[cfg(test)]
+mod evaluate_tests {
+    #[test]
+    fn expressions() {
+        assert_eq!(super::evaluate("0FFh + 1"), Ok(256));
+        assert_eq!(super::evaluate("'A' * 2"), Ok(130));
+        assert_eq!(super::evaluate("1010b shl 3 or 1"), Ok(81));
+        assert_eq!(super::evaluate("(10 - 25) / 5"), Ok(-3));
+        assert_eq!(super::evaluate("7 mod 3 + 1 << 4"), Ok(32));
+        assert!(super::evaluate("ax + 1").is_err());
+        assert!(super::evaluate("").is_err());
+    }
+}

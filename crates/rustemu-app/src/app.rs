@@ -133,12 +133,19 @@ pub struct App {
     pub library: crate::library_ui::LibraryState,
     /// Command line parameters dialog: (open, edited text).
     pub cmdline_dialog: Option<String>,
+    /// "choose code template" dialog: selected option while open.
+    pub new_dialog: Option<usize>,
+    pub options_open: bool,
+    pub calculator: crate::calc::CalcState,
+    /// Bookmarked lines (1-based).
+    pub bookmarks: std::collections::BTreeSet<u32>,
+    /// Undo (`true`) / redo (`false`) requested from the Edit menu.
+    pub pending_undo: Option<bool>,
 }
 
 #[derive(Clone)]
 pub enum PendingAction {
     New,
-    NewTemplate(usize),
     Open(Option<PathBuf>),
     Example(usize),
     Quit,
@@ -174,7 +181,7 @@ impl App {
             follow_source: true,
             mem_view_addr: 0,
             mem_addr_text: String::new(),
-            screen: Default::default(),
+            screen: crate::screen::ScreenState::new(),
             instr_per_frame: 50_000,
             notice: None,
             confirm_discard: None,
@@ -197,6 +204,11 @@ impl App {
             source_scroll_to: None,
             library: Default::default(),
             cmdline_dialog: None,
+            new_dialog: None,
+            options_open: false,
+            calculator: Default::default(),
+            bookmarks: Default::default(),
+            pending_undo: None,
         };
         let last = app.settings.last_file.clone();
         match last {
@@ -228,13 +240,10 @@ impl App {
 
     // ---- files ------------------------------------------------------------------
 
-    pub fn new_file(&mut self) {
-        self.new_from_template(0);
-    }
-
     pub fn new_from_template(&mut self, i: usize) {
         self.path = None;
-        self.text = crate::examples::TEMPLATES[i].1.to_string();
+        self.bookmarks.clear();
+        self.text = crate::examples::TEMPLATES.get(i).map(|t| t.1).unwrap_or("").to_string();
         self.saved_text = self.text.clone();
         self.messages.clear();
         self.error_lines.clear();
@@ -335,8 +344,7 @@ impl App {
 
     pub fn perform(&mut self, action: PendingAction) {
         match action {
-            PendingAction::New => self.new_file(),
-            PendingAction::NewTemplate(i) => self.new_from_template(i),
+            PendingAction::New => self.new_dialog = Some(0),
             PendingAction::Open(None) => self.open_dialog(),
             PendingAction::Open(Some(p)) => self.open_path(&p),
             PendingAction::Example(i) => self.load_example(i),
@@ -765,20 +773,45 @@ impl App {
         if fire(sc(Modifiers::SHIFT, Key::F11)) && self.loaded() {
             self.step_out();
         }
-        if fire(sc(cmd, Key::F)) {
+        // Editor commands are not taken while the program is typed into the emulator screen.
+        if self.screen.focused {
+            return;
+        }
+        let ctrl = Modifiers::CTRL;
+        if fire(sc(cmd, Key::F)) || fire(sc(cmd, Key::H)) || fire(sc(ctrl, Key::H)) {
             self.find.open = true;
             self.find.focus = true;
         }
-        if fire(sc(cmd | Modifiers::SHIFT, Key::G)) {
+        if fire(sc(cmd | Modifiers::SHIFT, Key::G)) || fire(sc(Modifiers::SHIFT, Key::F3)) {
             crate::find::find_next(self, true);
-        } else if fire(sc(cmd, Key::G)) {
+        } else if fire(sc(cmd, Key::G)) || fire(sc(Modifiers::NONE, Key::F3)) {
             crate::find::find_next(self, false);
         }
-        if fire(sc(cmd, Key::L)) {
+        if fire(sc(cmd, Key::L)) || fire(sc(ctrl, Key::G)) {
             self.find.goto_open = true;
         }
         if fire(sc(cmd, Key::Slash)) {
             crate::find::toggle_comment(self);
+        }
+        // Emu8086 editor keys (with the Control key).
+        if fire(sc(ctrl, Key::Q)) {
+            crate::editcmd::comment(self);
+        }
+        if fire(sc(ctrl, Key::W)) {
+            crate::editcmd::uncomment(self);
+        }
+        if fire(sc(ctrl, Key::L)) {
+            crate::editcmd::lowercase(self);
+        }
+        if fire(sc(ctrl, Key::U)) {
+            crate::editcmd::uppercase(self);
+        }
+        if fire(sc(ctrl, Key::F2)) || fire(sc(cmd, Key::F2)) {
+            crate::editcmd::toggle_bookmark(self);
+        } else if fire(sc(Modifiers::SHIFT, Key::F2)) {
+            crate::editcmd::prev_bookmark(self);
+        } else if fire(sc(Modifiers::NONE, Key::F2)) {
+            crate::editcmd::next_bookmark(self);
         }
     }
 }

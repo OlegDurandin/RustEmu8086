@@ -56,6 +56,13 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
             for i in first..last {
                 let y = top + i as f32 * row_h;
                 let n = i as u32 + 1;
+                if app.bookmarks.contains(&n) {
+                    painter.rect_filled(
+                        Rect::from_min_size(pos2(gutter_rect.left() + 2.0, y + 2.0), vec2(6.0, row_h - 4.0)),
+                        2.0,
+                        Color32::from_rgb(60, 130, 230),
+                    );
+                }
                 if error_lines.contains(&n) {
                     painter.rect_filled(
                         Rect::from_min_size(pos2(gutter_rect.left(), y), vec2(gutter_w - 4.0, row_h)),
@@ -77,6 +84,21 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
             );
 
             hover_help(app, ui, &out);
+
+            // Undo / redo requested from the Edit menu.
+            if let Some(undo) = app.pending_undo.take() {
+                let mut state = out.state.clone();
+                let mut undoer = state.undoer();
+                let range = state.cursor.char_range().unwrap_or_default();
+                let current = (range, app.text.clone());
+                let restored = if undo { undoer.undo(&current) } else { undoer.redo(&current) }.cloned();
+                if let Some((r, text)) = restored {
+                    app.text = text;
+                    state.cursor.set_char_range(Some(r));
+                }
+                state.set_undoer(undoer);
+                state.store(ui.ctx(), id);
+            }
 
             if let Some(r) = &out.cursor_range {
                 let idx = r.primary.index.0;

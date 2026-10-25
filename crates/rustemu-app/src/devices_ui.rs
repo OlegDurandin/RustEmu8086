@@ -17,7 +17,7 @@ pub enum Device {
 }
 
 impl Device {
-    const ALL: [(Device, &'static str); 7] = [
+    pub const ALL: [(Device, &'static str); 7] = [
         (Device::TrafficLights, "traffic lights"),
         (Device::Stepper, "stepper motor"),
         (Device::Led, "LED display"),

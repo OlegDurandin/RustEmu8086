@@ -142,3 +142,29 @@ fn stepping_into_library_macros() {
     h.run_steps(20);
     save(&mut h, "09_library");
 }
+
+#[test]
+fn new_dialog_menus_and_tools() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    h.get_by_label("🗋 new").click();
+    h.run_steps(5);
+    assert_eq!(h.state().new_dialog, Some(0));
+    save(&mut h, "11_new_dialog");
+    // Choose EXE template and confirm.
+    h.get_by_label("EXE template - advanced executable file. header: relocation, checksum").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    assert!(h.state().new_dialog.is_none());
+    assert!(h.state().text.contains("data segment"));
+
+    let st = h.state_mut();
+    st.calculator.open = true;
+    st.calculator.expr = "0FFh + 'A' * 2".into();
+    st.options_open = true;
+    st.cursor_line = 3;
+    crate::editcmd::toggle_bookmark(st);
+    h.run_steps(5);
+    save(&mut h, "12_calculator_options");
+}
