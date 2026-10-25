@@ -10,8 +10,16 @@ use crate::app::App;
 #[derive(Default)]
 pub struct ScreenState {
     pub focus_request: bool,
+    /// The emulator screen has keyboard focus (keys go to the program).
+    pub focused: bool,
     texture: Option<TextureHandle>,
     pub font_size: f32,
+}
+
+impl ScreenState {
+    pub fn new() -> Self {
+        ScreenState { font_size: 13.0, ..Default::default() }
+    }
 }
 
 /// The 16 CGA/EGA text colours.
@@ -73,6 +81,7 @@ fn screen_ui(app: &mut App, ui: &mut Ui) {
         app.screen.focus_request = false;
     }
     let focused = resp.has_focus();
+    app.screen.focused = focused;
     if focused {
         ui.memory_mut(|m| {
             m.set_focus_lock_filter(

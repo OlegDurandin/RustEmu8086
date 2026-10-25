@@ -1,10 +1,12 @@
 //! RustEmu8086 - 8086 assembler, emulator and debugger (Emu8086 compatible).
 
 mod app;
+mod calc;
 mod colors;
 mod console;
 mod debug;
 mod devices_ui;
+mod editcmd;
 mod editor;
 mod emulator;
 mod examples;
