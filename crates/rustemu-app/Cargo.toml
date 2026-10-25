@@ -1,0 +1,22 @@
+[package]
+name = "rustemu-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "RustEmu8086"
+path = "src/main.rs"
+
+[dependencies]
+rustemu-core.workspace = true
+rustemu-asm.workspace = true
+rustemu-session.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

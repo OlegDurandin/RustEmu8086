@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+rustemu-core = { path = "crates/rustemu-core" }
+rustemu-asm = { path = "crates/rustemu-asm" }
+rustemu-session = { path = "crates/rustemu-session" }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+debug = 1

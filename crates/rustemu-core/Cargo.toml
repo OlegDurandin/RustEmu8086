@@ -1,0 +1,11 @@
+[package]
+name = "rustemu-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+flate2 = "1"
+serde_json = "1"
