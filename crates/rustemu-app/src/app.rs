@@ -690,7 +690,7 @@ impl App {
     /// Assemble and load into the emulator.
     pub fn emulate(&mut self) {
         let Some(p) = self.assemble() else { return };
-        self.source_files = p
+        let source_files: Vec<(String, Vec<String>)> = p
             .files
             .iter()
             .enumerate()
@@ -706,16 +706,18 @@ impl App {
                 (name, text.lines().map(str::to_string).collect())
             })
             .collect();
-        self.source_index =
-            self.source_files.iter().map(|(_, lines)| rustemu_asm::library::index(&lines.join("\n"))).collect();
+        let source_index =
+            source_files.iter().map(|(_, lines)| rustemu_asm::library::index(&lines.join("\n"))).collect();
         let devices = p.emu.start.clone();
-        self.loaded_text = Some(self.text.clone());
         let root = self.vdrive();
-        self.session.machine.set_dos_root(root);
         if let Err(e) = self.session.load_program(p) {
             self.notice("Load", &e);
             return;
         }
+        self.source_files = source_files;
+        self.source_index = source_index;
+        self.loaded_text = Some(self.text.clone());
+        self.session.machine.set_dos_root(root);
         self.after_load();
         if let Some(d) = devices.iter().find_map(|n| crate::devices_ui::Device::from_start_name(n)) {
             self.device_tab = d;
@@ -840,6 +842,11 @@ impl App {
     pub fn start_run(&mut self) {
         if !self.loaded() {
             self.emulate();
+            // `emulate` leaves the assembly error in `status`. Do not turn a
+            // failed initial load into a seemingly successful run.
+            if !self.loaded() {
+                return;
+            }
         }
         if self.session.machine.terminated.is_some() {
             self.status = "Program has terminated - press Reload to run again".into();

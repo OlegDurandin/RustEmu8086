@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use rustemu_core::Event;
-use rustemu_session::Session;
+use rustemu_session::{Loadable, Session};
 
 fn examples() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples")
@@ -43,6 +43,49 @@ fn hello_com_and_exe() {
     let (out, ev) = run_example("hello_exe.asm", "");
     assert_eq!(out, "Hello from EXE!\r\n");
     assert_eq!(ev, Event::Terminated(0));
+}
+
+#[test]
+fn failed_load_keeps_the_previous_session_intact() {
+    let original = rustemu_asm::assemble_str("org 100h\nmov ax, 1234h\nhlt\n").unwrap();
+    let mut s = Session::new();
+    s.load_program(original).unwrap();
+    assert_eq!(s.machine.step(), Event::Continue);
+    let old_cpu = s.machine.cpu.clone();
+    let old_info = s.machine.loaded.clone();
+    let old_image = s.program.as_ref().unwrap().image.clone();
+
+    let mut oversized = rustemu_asm::assemble_str("org 100h\nnop\n").unwrap();
+    oversized.image.resize(0xFF00, 0);
+    assert!(s.load_program(oversized).is_err());
+
+    assert_eq!(s.machine.cpu, old_cpu);
+    assert_eq!(s.machine.loaded, old_info);
+    assert_eq!(s.program.as_ref().unwrap().image, old_image);
+
+    // This MZ gets past the basic header checks but has a truncated relocation
+    // table. Validation must finish before the old machine is reset.
+    let mut corrupt_exe = vec![0; 0x20];
+    corrupt_exe[..2].copy_from_slice(b"MZ");
+    let mut word = |at: usize, value: u16| corrupt_exe[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    word(2, 0x20); // bytes in the last page
+    word(4, 1); // pages
+    word(6, 1); // one relocation
+    word(8, 2); // 32-byte header
+    word(0x18, 0x1F); // relocation starts one byte before EOF
+    assert!(s.load_bytes(Loadable::Exe, corrupt_exe).is_err());
+    assert_eq!(s.machine.cpu, old_cpu);
+    assert_eq!(s.machine.loaded, old_info);
+    assert_eq!(s.program.as_ref().unwrap().image, old_image);
+
+    // Reload still refers to the original program, not either failed attempt.
+    s.reload().unwrap();
+    assert_eq!(s.program.as_ref().unwrap().image, old_image);
+    assert_eq!(s.machine.step(), Event::Continue);
+    assert_eq!(s.machine.cpu.regs[0], 0x1234);
+
+    s.load_bytes(Loadable::Com, vec![0xF4]).unwrap();
+    assert!(s.program.is_none());
 }
 
 #[test]
@@ -145,6 +188,100 @@ fn step_back_restores_registers_and_memory() {
     assert!(s.machine.step_back());
     assert_eq!(s.machine.cpu.pc(), base);
     assert!(!s.machine.step_back());
+}
+
+#[test]
+fn step_back_restores_input_devices_and_floppy() {
+    let input =
+        rustemu_asm::assemble_str("org 100h\nmov dx, offset buf\nmov ah, 0Ah\nint 21h\nhlt\nbuf db 10, 0, 10 dup(0)\n")
+            .unwrap();
+    let mut s = Session::new();
+    s.load_program(input).unwrap();
+    assert_eq!(s.machine.step(), Event::Continue);
+    assert_eq!(s.machine.step(), Event::Continue);
+    s.machine.push_char(b'a');
+    assert_eq!(s.machine.step(), Event::WaitingInput);
+    assert!(s.machine.step_back());
+    assert_eq!(s.machine.step(), Event::WaitingInput);
+    s.machine.push_char(b'\r');
+    assert_eq!(s.machine.step(), Event::Continue);
+    let ds = s.machine.cpu.sregs[3];
+    let buf = s.program.as_ref().unwrap().symbols.iter().find(|v| v.name == "BUF").unwrap().value as u16;
+    assert_eq!(s.machine.sys.mem.read8(rustemu_core::linear(ds, buf + 1)), 1);
+    assert_eq!(s.machine.sys.mem.read8(rustemu_core::linear(ds, buf + 2)), b'a');
+
+    let io = rustemu_asm::assemble_str(
+        "org 100h\nmov ax, 0249h\nout 4, ax\nmov ax, 0301h\nmov bx, offset data\nmov cx, 1\nmov dx, 0\nint 13h\nhlt\ndata db 512 dup(0AAh)\n",
+    )
+    .unwrap();
+    s.load_program(io).unwrap();
+    assert!(s.machine.floppy.is_empty());
+    assert_eq!(s.machine.step(), Event::Continue);
+    assert_eq!(s.machine.step(), Event::Continue);
+    assert_eq!(s.machine.sys.dev.traffic_lights, 0x0249);
+    assert!(s.machine.step_back());
+    assert_eq!(s.machine.sys.dev.traffic_lights, 0);
+    assert_eq!(s.machine.step(), Event::Continue);
+    for _ in 0..4 {
+        assert_eq!(s.machine.step(), Event::Continue);
+    }
+    assert_eq!(s.machine.step(), Event::Continue);
+    assert_eq!(s.machine.floppy.len(), 1_474_560);
+    assert_eq!(s.machine.floppy[0], 0xAA);
+    assert!(s.machine.step_back());
+    assert!(s.machine.floppy.is_empty());
+}
+
+#[test]
+fn int13_rejects_invalid_floppy_geometry() {
+    let src = "\
+org 100h
+    mov ax, 0200h       ; zero sectors
+    mov cx, 0001h
+    xor dx, dx
+    int 13h
+    jnc fail
+    mov ax, 0201h       ; sector 19
+    mov cx, 0013h
+    int 13h
+    jnc fail
+    mov cx, 0001h       ; head 2
+    mov dx, 0200h
+    int 13h
+    jnc fail
+    mov cx, 5001h       ; cylinder 80
+    xor dx, dx
+    int 13h
+    jnc fail
+    mov ax, 4C00h
+    int 21h
+fail:
+    mov ax, 4C01h
+    int 21h
+";
+    let (_, ev) = run_src(src, "");
+    assert_eq!(ev, Event::Terminated(0));
+}
+
+#[test]
+fn host_file_io_is_a_step_back_boundary() {
+    let root = std::env::temp_dir().join(format!("rustemu_history_boundary_{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let prog = rustemu_asm::assemble_str(
+        "org 100h\nmov ah, 3Ch\nmov dx, offset name\nint 21h\nhlt\nname db 'created.txt', 0\n",
+    )
+    .unwrap();
+    let mut s = Session::new();
+    s.machine.set_dos_root(root.clone());
+    s.load_program(prog).unwrap();
+    assert_eq!(s.machine.step(), Event::Continue);
+    assert_eq!(s.machine.step(), Event::Continue);
+    assert!(s.machine.history_len() >= 2);
+    assert_eq!(s.machine.step(), Event::Continue);
+    assert_eq!(s.machine.history_len(), 0);
+    assert!(!s.machine.step_back());
+    assert!(root.join("created.txt").exists());
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

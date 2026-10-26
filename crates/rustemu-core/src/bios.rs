@@ -251,7 +251,7 @@ impl Machine {
         if r[DX] as u8 != 0 {
             return Err(0x80);
         }
-        if sector == 0 {
+        if count == 0 || cyl >= 80 || head >= 2 || !(1..=18).contains(&sector) {
             return Err(0x04);
         }
         let lba = (cyl * 2 + head) * 18 + sector - 1;
@@ -267,7 +267,11 @@ impl Machine {
         for i in 0..count * 512 {
             let a = linear(es, bx.wrapping_add(i as u16));
             if write {
-                floppy[lba * 512 + i] = self.sys.mem.read8(a);
+                let at = lba * 512 + i;
+                if let Some(journal) = &mut self.floppy_journal {
+                    journal.push((at, floppy[at]));
+                }
+                floppy[at] = self.sys.mem.read8(a);
             } else {
                 let v = floppy[lba * 512 + i];
                 self.sys.mem.write8(a, v);

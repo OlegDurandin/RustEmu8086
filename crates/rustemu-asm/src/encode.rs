@@ -435,9 +435,28 @@ pub fn encode(prefixes: &[String], mnem: &str, ops: &[Operand], env: &dyn Env, c
         return Ok(e);
     }
 
+    if mnem == "IMUL" && matches!(n, 2 | 3) {
+        let (reg, src, imm) = match ops.as_slice() {
+            [Op::R16(reg), Op::Imm(imm)] => (*reg, &ops[0], imm),
+            [Op::R16(reg), src, Op::Imm(imm)] => (*reg, src, imm),
+            _ => return Err("IMUL immediate form expects a word register, r/m16 and an immediate".into()),
+        };
+        if !src.is_rm() || !width(&ops[0], src)? {
+            return Err("IMUL immediate form requires a word r/m operand".into());
+        }
+        if fits_i8(imm) {
+            emit_rm(&mut e, &[0x6B], reg, src)?;
+            e.b(imm.num as u8);
+        } else {
+            emit_rm(&mut e, &[0x69], reg, src)?;
+            imm_w(&mut e, imm)?;
+        }
+        return Ok(e);
+    }
+
     if let Some(i) = GRP3.iter().position(|a| *a == mnem) {
         if n != 1 {
-            return Err(format!("{mnem} expects 1 operand (80186+ forms are not supported)"));
+            return Err(format!("{mnem} expects 1 operand"));
         }
         if !ops[0].is_rm() {
             return Err(format!("{mnem}: register or memory operand expected"));

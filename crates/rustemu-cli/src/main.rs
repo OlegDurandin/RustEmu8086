@@ -113,9 +113,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             if executed > max { Event::Budget } else { s.machine.step() }
         } else {
             s.machine.history_enabled = false;
-            let e = s.machine.run(max.saturating_sub(executed).min(1_000_000));
-            executed += 1_000_000;
-            if e == Event::Budget && executed < max { Event::Continue } else { e }
+            run_chunk(&mut s, &mut executed, max)
         };
         if !screen && s.machine.output.len() > printed {
             stdout.write_all(&to_host_text(&s.machine.output[printed..])).ok();
@@ -174,6 +172,15 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
     Ok(code)
 }
 
+/// Runs one bounded chunk and charges only the steps that were actually
+/// consumed before an event such as input or a timed wait stopped execution.
+fn run_chunk(s: &mut Session, executed: &mut u64, max: u64) -> Event {
+    let budget = max.saturating_sub(*executed).min(1_000_000);
+    let (event, done) = s.machine.run_counted(budget);
+    *executed = executed.saturating_add(done);
+    if event == Event::Budget && *executed < max { Event::Continue } else { event }
+}
+
 /// Converts DOS console output to host text (CR LF -> LF, CP437 -> UTF-8).
 fn to_host_text(bytes: &[u8]) -> Vec<u8> {
     let mut s = String::new();
@@ -193,16 +200,7 @@ fn to_host_text(bytes: &[u8]) -> Vec<u8> {
 fn cmd_disasm(args: &[String]) -> Result<u8, String> {
     let path = file_arg(args)?;
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (code, org) = if bytes.starts_with(b"MZ") {
-        let hdr = u16::from_le_bytes([bytes[8], bytes[9]]) as usize * 16;
-        (bytes[hdr.min(bytes.len())..].to_vec(), 0u16)
-    } else {
-        let default = if is_ext(&path, "com") { 0x100 } else { 0 };
-        let org = opt(args, "--org")
-            .and_then(|v| u16::from_str_radix(v.trim_end_matches(['h', 'H']), 16).ok())
-            .unwrap_or(default);
-        (bytes, org)
-    };
+    let (code, org) = disasm_input(bytes, &path, args)?;
     let mut pos = 0;
     while pos < code.len() {
         let end = (pos + 8).min(code.len());
@@ -215,6 +213,46 @@ fn cmd_disasm(args: &[String]) -> Result<u8, String> {
     Ok(0)
 }
 
+fn disasm_input(bytes: Vec<u8>, path: &Path, args: &[String]) -> Result<(Vec<u8>, u16), String> {
+    if bytes.starts_with(b"MZ") || bytes.starts_with(b"ZM") {
+        let code = rustemu_core::machine::mz_image(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok((code.to_vec(), 0))
+    } else {
+        let default = if is_ext(path, "com") { 0x100 } else { 0 };
+        let org = opt(args, "--org")
+            .and_then(|v| u16::from_str_radix(v.trim_end_matches(['h', 'H']), 16).ok())
+            .unwrap_or(default);
+        Ok((bytes, org))
+    }
+}
+
 fn is_ext(p: &Path, e: &str) -> bool {
     p.extension().is_some_and(|x| x.eq_ignore_ascii_case(e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sleeping_only_consumes_steps_actually_executed() {
+        let src = "org 100h\nmov ah, 86h\nmov cx, 004Ch\nmov dx, 4B40h\nint 15h\nhlt\n";
+        let mut session = Session::new();
+        session.load_program(rustemu_asm::assemble_str(src).unwrap()).unwrap();
+        session.machine.history_enabled = false;
+        let mut executed = 0;
+
+        assert_eq!(run_chunk(&mut session, &mut executed, 100_000_000), Event::Sleeping);
+        let first = executed;
+        assert!(first < 100, "only a few setup instructions should run, got {first}");
+
+        assert_eq!(run_chunk(&mut session, &mut executed, 100_000_000), Event::Sleeping);
+        assert_eq!(executed - first, 1, "re-polling the blocked BIOS service is one step");
+    }
+
+    #[test]
+    fn short_mz_is_reported_instead_of_panicking() {
+        let err = disasm_input(b"MZ".to_vec(), Path::new("broken.exe"), &[]).unwrap_err();
+        assert!(err.contains("broken.exe: not an MZ executable"), "{err}");
+    }
 }

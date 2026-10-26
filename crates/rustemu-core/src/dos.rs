@@ -36,7 +36,46 @@ pub(crate) struct DosState {
     pub last_exit: u8,
     /// Memory allocation: next free paragraph for AH=48h.
     pub next_free: u16,
-    pub find: Option<(Vec<String>, usize)>,
+    /// Results of the current FindFirst/FindNext search: DOS name and file size.
+    pub find: Option<(Vec<(String, u64)>, usize)>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct DosSnapshot {
+    cwd: String,
+    psp: u16,
+    dta: (u16, u16),
+    waiting: bool,
+    line: Option<Vec<u8>>,
+    last_exit: u8,
+    next_free: u16,
+    find: Option<(Vec<(String, u64)>, usize)>,
+}
+
+impl DosState {
+    pub(crate) fn snapshot(&self) -> DosSnapshot {
+        DosSnapshot {
+            cwd: self.cwd.clone(),
+            psp: self.psp,
+            dta: self.dta,
+            waiting: self.waiting,
+            line: self.line.clone(),
+            last_exit: self.last_exit,
+            next_free: self.next_free,
+            find: self.find.clone(),
+        }
+    }
+
+    pub(crate) fn restore(&mut self, snapshot: DosSnapshot) {
+        self.cwd = snapshot.cwd;
+        self.psp = snapshot.psp;
+        self.dta = snapshot.dta;
+        self.waiting = snapshot.waiting;
+        self.line = snapshot.line;
+        self.last_exit = snapshot.last_exit;
+        self.next_free = snapshot.next_free;
+        self.find = snapshot.find;
+    }
 }
 
 const E_FILE_NOT_FOUND: u16 = 2;
@@ -80,6 +119,13 @@ impl Machine {
     pub(crate) fn int21(&mut self) -> Svc {
         let ah = (self.cpu.regs[AX] >> 8) as u8;
         let dl = self.cpu.regs[DX] as u8;
+        // Host filesystem changes and open-file cursor/handle changes cannot be
+        // rolled back safely. They form a reverse-debugging history boundary.
+        if matches!(ah, 0x39 | 0x3A | 0x3C | 0x3D | 0x41 | 0x56 | 0x5B)
+            || matches!(ah, 0x3E | 0x3F | 0x40 | 0x42) && self.cpu.regs[BX] >= 5
+        {
+            self.mark_history_barrier();
+        }
         match ah {
             0x00 => return Svc::Terminate(0),
             0x01 => match self.read_key() {
@@ -306,7 +352,11 @@ impl Machine {
 
     /// Maps a DOS path to a host path inside the root directory.
     fn host_path(&self, dos: &str) -> Option<PathBuf> {
-        let root = self.dos.root.clone()?;
+        // Work from the canonical root so a root configured through a symlink is
+        // treated as the directory it points to.  The final containment check
+        // below is what prevents symlinks inside the virtual drive from escaping
+        // to the host filesystem.
+        let root = std::fs::canonicalize(self.dos.root.as_ref()?).ok()?;
         let mut p = dos.trim().replace('\\', "/");
         if p.len() >= 2 && p.as_bytes()[1] == b':' {
             p = p[2..].to_string();
@@ -328,11 +378,11 @@ impl Machine {
                 c => parts.push(c),
             }
         }
-        let mut out = root;
+        let mut out = root.clone();
         for c in parts {
             out = out.join(find_case_insensitive(&out, c));
         }
-        Some(out)
+        path_is_confined(&root, &out).then_some(out)
     }
 
     fn path_arg(&mut self, seg: u16, off: u16) -> Option<PathBuf> {
@@ -528,22 +578,30 @@ impl Machine {
             let Some(hdir) = self.host_path(if dir.is_empty() { "." } else { &dir }) else {
                 return self.fail(E_PATH_NOT_FOUND);
             };
-            let mut names: Vec<String> = std::fs::read_dir(hdir)
+            let mask = mask.to_ascii_uppercase();
+            let mut entries: Vec<(String, u64)> = std::fs::read_dir(hdir)
                 .map(|rd| {
                     rd.filter_map(|e| e.ok())
                         .filter(|e| e.path().is_file())
-                        .map(|e| e.file_name().to_string_lossy().to_ascii_uppercase())
-                        .filter(|n| wildcard(&mask.to_ascii_uppercase(), n))
+                        .filter_map(|e| {
+                            let name = e.file_name().to_string_lossy().to_ascii_uppercase();
+                            if !wildcard(&mask, &name) {
+                                return None;
+                            }
+                            let dos_path = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
+                            let path = self.host_path(&dos_path)?;
+                            let size = std::fs::metadata(path).ok()?.len();
+                            Some((name, size))
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
-            names.sort();
-            self.dos.find = Some((names, 0));
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            self.dos.find = Some((entries, 0));
         }
-        let Some((names, idx)) = self.dos.find.as_mut() else { return self.fail(E_NO_MORE) };
-        let Some(name) = names.get(*idx).cloned() else { return self.fail(E_NO_MORE) };
+        let Some((entries, idx)) = self.dos.find.as_mut() else { return self.fail(E_NO_MORE) };
+        let Some((name, size)) = entries.get(*idx).cloned() else { return self.fail(E_NO_MORE) };
         *idx += 1;
-        let size = self.host_path(&name).and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()).unwrap_or(0);
         let (seg, off) = self.dos.dta;
         let base = |i: u16| linear(seg, off.wrapping_add(i));
         self.sys.mem.write8(base(0x15), 0x20);
@@ -587,6 +645,24 @@ fn find_case_insensitive(dir: &Path, name: &str) -> String {
         }
     }
     name.to_string()
+}
+
+/// Checks the nearest existing ancestor because create/rename destinations do
+/// not necessarily exist yet.  `symlink_metadata` distinguishes a genuinely
+/// missing component from a broken symlink: the latter must be rejected, since
+/// opening it could create its target outside the virtual drive.
+fn path_is_confined(root: &Path, path: &Path) -> bool {
+    let mut probe = path;
+    loop {
+        match std::fs::symlink_metadata(probe) {
+            Ok(_) => return std::fs::canonicalize(probe).is_ok_and(|p| p.starts_with(root)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let Some(parent) = probe.parent() else { return false };
+                probe = parent;
+            }
+            Err(_) => return false,
+        }
+    }
 }
 
 fn io_code(e: &std::io::Error) -> u16 {
@@ -680,5 +756,62 @@ mod tests {
         assert!(wildcard("*.TXT", "A.TXT"));
         assert!(!wildcard("*.TXT", "A.BIN"));
         assert!(wildcard("A?C.*", "ABC.D"));
+    }
+
+    #[test]
+    fn find_in_subdirectory_reports_the_file_size() {
+        let unique = format!(
+            "rustemu_dos_find_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(root.join("subdir")).unwrap();
+        std::fs::write(root.join("subdir/example.txt"), b"seven!!").unwrap();
+
+        let mut machine = Machine::new();
+        machine.set_dos_root(root.clone());
+        machine.dos.dta = (0x0200, 0);
+        machine.cpu.sregs[DS] = 0x0100;
+        machine.cpu.regs[DX] = 0;
+        machine.sys.mem.load(linear(0x0100, 0), b"subdir\\*.txt\0");
+        machine.dos_find(true);
+
+        let dta = linear(0x0200, 0);
+        let size = machine.sys.mem.read16(dta + 0x1A) as u32 | (machine.sys.mem.read16(dta + 0x1C) as u32) << 16;
+        assert_eq!(size, 7);
+        assert_eq!(machine.read_string(0x0200, 0x1E, 0, 13), b"EXAMPLE.TXT");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dos_paths_cannot_escape_root_through_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let unique = format!(
+            "rustemu_dos_symlink_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        );
+        let base = std::env::temp_dir().join(unique);
+        let root = base.join("root");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+        symlink(&outside, root.join("external")).unwrap();
+        symlink(outside.join("missing.txt"), root.join("broken")).unwrap();
+
+        let mut machine = Machine::new();
+        machine.set_dos_root(root.clone());
+
+        assert!(machine.host_path("normal/new.txt").is_some());
+        assert!(machine.host_path("external/secret.txt").is_none());
+        assert!(machine.host_path("external/new.txt").is_none());
+        assert!(machine.host_path("broken").is_none());
+
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
