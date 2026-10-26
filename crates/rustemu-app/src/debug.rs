@@ -8,7 +8,7 @@ use rustemu_core::linear;
 
 use crate::app::App;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NumFormat {
     #[default]
     Hex,

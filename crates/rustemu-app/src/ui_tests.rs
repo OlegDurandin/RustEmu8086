@@ -342,3 +342,82 @@ fn emulator_bottom_buttons_and_aux_menu() {
     h.run_steps(2);
     assert_eq!(h.state().session.machine.cpu.ip, 0x100);
 }
+
+#[test]
+fn session_is_restored_after_restart() {
+    use crate::app::Settings;
+    let dir = std::env::temp_dir().join(format!("rustemu_session_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.asm"), dir.join("b.asm"));
+    std::fs::write(&a, "include 'emu8086.inc'\norg 100h\n    mov cx, 3\nnext:\n    putc 'x'\n    loop next\n    ret\n")
+        .unwrap();
+    std::fs::write(&b, LOOP_SRC).unwrap();
+
+    let mut app = App::with_settings(Settings { last_file: None, ..Default::default() });
+    app.open_path(&a);
+    app.emulate();
+    app.toggle_breakpoint_at_line(0, 3);
+    app.bp_lines.get_mut(&(0, 3)).unwrap().condition = "cx == 3".into();
+    app.toggle_breakpoint_at_line(0, 6);
+    app.bp_lines.get_mut(&(0, 6)).unwrap().enabled = false;
+    // A breakpoint inside emu8086.inc (file 1): the first line with code of the PUTC macro.
+    let inc = app.source_files.iter().position(|f| f.0 == "emu8086.inc").unwrap();
+    let putc = app.source_index[inc].iter().find(|e| e.name == "PUTC").unwrap().line;
+    app.toggle_breakpoint_at_line(inc, putc);
+    let inc_bp = *app.bp_lines.keys().find(|k| k.0 == inc).unwrap();
+    crate::debugger::add_watch(&mut app, "cx");
+    app.bookmarks.insert(5);
+    app.stop_condition.text = "cx == 1".into();
+    app.windows.watch = true;
+    app.windows.alu = true;
+    app.screen.font_size = 17.0;
+    app.cursor_line = 4;
+
+    // Another file has its own (empty) session.
+    app.open_path(&b);
+    assert!(app.bp_lines.is_empty() && app.watches.is_empty() && app.bookmarks.is_empty());
+    app.toggle_breakpoint_at_line(0, 4);
+    app.store_settings();
+    let saved = app.settings.clone();
+
+    // "Restart": a new app from the saved settings reopens b.asm with its breakpoint.
+    let mut app = App::with_settings(saved);
+    assert_eq!(app.path.as_deref(), Some(b.as_path()));
+    assert!(app.bp_lines.contains_key(&(0, 4)) && app.bp_lines.len() == 1);
+    assert!(app.windows.watch && app.windows.alu);
+    assert_eq!(app.screen.font_size, 17.0);
+    // Back to a.asm: everything is there again.
+    app.open_path(&a);
+    assert_eq!(app.bp_lines[&(0, 3)].condition, "cx == 3");
+    assert!(!app.bp_lines[&(0, 6)].enabled);
+    assert_eq!(app.watches.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["cx"]);
+    assert!(app.bookmarks.contains(&5));
+    assert_eq!(app.stop_condition.text, "cx == 1");
+    assert_eq!(app.goto_line, Some(4));
+    // The emu8086.inc breakpoint returns when the program is loaded.
+    assert_eq!(app.pending_breakpoints.len(), 1);
+    app.emulate();
+    assert!(app.pending_breakpoints.is_empty());
+    assert!(app.bp_lines.contains_key(&inc_bp));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn screen_paste_and_copy() {
+    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    app.load_example(0);
+    app.emulate();
+    let m = &mut app.session.machine;
+    let before = m.sys.keys.len();
+    crate::screen::paste_keys(m, "12\r\n3\tx");
+    let keys: Vec<u16> = m.sys.keys.iter().skip(before).copied().collect();
+    assert_eq!(keys.len(), 6);
+    assert_eq!(keys[2], 0x1C0D, "new line is Enter");
+    assert_eq!(keys[4], 0x0F09, "tab is Tab");
+    assert_eq!(keys[0] & 0xFF, b'1' as u16);
+    // Copy: the text the program printed.
+    app.start_run();
+    run_until_paused(&mut app);
+    let text = crate::screen::screen_text(&app.session.machine.sys.mem);
+    assert!(text.contains("Hello"), "{text}");
+}

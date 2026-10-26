@@ -29,7 +29,41 @@ pub struct Settings {
     pub step_delay_ms: u32,
     pub last_file: Option<PathBuf>,
     pub timer_irq: bool,
+    /// Open windows (positions and sizes are kept by egui itself).
+    pub windows: Windows,
+    pub screen_zoom: f32,
+    pub show_macro_code: bool,
+    pub follow_source: bool,
+    pub vars_format: crate::debug::NumFormat,
+    /// Debugging session of recently used files, most recent first.
+    pub sessions: Vec<(String, FileSession)>,
 }
+
+/// What is remembered per source file between runs.
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+#[serde(default)]
+pub struct FileSession {
+    pub breakpoints: Vec<SavedBreakpoint>,
+    pub watches: Vec<String>,
+    pub bookmarks: Vec<u32>,
+    pub stop_condition: String,
+    pub stop_enabled: bool,
+    pub stop_on_change: bool,
+    pub cursor_line: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+#[serde(default)]
+pub struct SavedBreakpoint {
+    /// Empty for the edited file, otherwise the name of an included file (e.g. `emu8086.inc`).
+    pub file: String,
+    pub line: u32,
+    pub condition: String,
+    pub enabled: bool,
+}
+
+/// How many file sessions are remembered.
+const MAX_SESSIONS: usize = 30;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -40,11 +74,18 @@ impl Default for Settings {
             step_delay_ms: 0,
             last_file: None,
             timer_irq: false,
+            windows: Windows::default(),
+            screen_zoom: 13.0,
+            show_macro_code: true,
+            follow_source: true,
+            vars_format: Default::default(),
+            sessions: Vec::new(),
         }
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Windows {
     pub emulator: bool,
     pub screen: bool,
@@ -167,6 +208,13 @@ pub struct App {
     pub load_gen: u64,
     /// Editor line of the current instruction in the last frame (to scroll it into view).
     pub editor_exec_line: Option<u32>,
+    /// Breakpoints of included files waiting for the program to be loaded (file names are
+    /// resolved to file indices then).
+    pub pending_breakpoints: Vec<SavedBreakpoint>,
+    /// The current file's session may be saved (set once it was restored).
+    pub session_started: bool,
+    /// Session key of a built-in example (it has no path).
+    pub example_key: Option<String>,
     /// First address of the disassembly list.
     pub code_view_start: u32,
     pub last_source_pos: Option<(usize, u32)>,
@@ -249,6 +297,9 @@ impl App {
             loaded_text: None,
             load_gen: 0,
             editor_exec_line: None,
+            pending_breakpoints: Vec::new(),
+            session_started: false,
+            example_key: None,
             code_view_start: 0,
             last_source_pos: None,
             source_scroll_pending: None,
@@ -273,6 +324,12 @@ impl App {
             bookmarks: Default::default(),
             pending_undo: None,
         };
+        app.windows = app.settings.windows.clone();
+        app.windows.about = false;
+        app.screen.font_size = app.settings.screen_zoom.clamp(10.0, 22.0);
+        app.show_macro_code = app.settings.show_macro_code;
+        app.follow_source = app.settings.follow_source;
+        app.vars_format = app.settings.vars_format;
         let last = app.settings.last_file.clone();
         match last {
             Some(p) if p.exists() => app.open_path(&p),
@@ -304,7 +361,10 @@ impl App {
     // ---- files ------------------------------------------------------------------
 
     pub fn new_from_template(&mut self, i: usize) {
+        self.store_session();
         self.path = None;
+        self.example_key = None;
+        self.clear_session();
         self.bookmarks.clear();
         self.text = crate::examples::TEMPLATES.get(i).map(|t| t.1).unwrap_or("").to_string();
         self.saved_text = self.text.clone();
@@ -332,6 +392,7 @@ impl App {
     pub fn open_path(&mut self, p: &Path) {
         match std::fs::read(p) {
             Ok(bytes) => {
+                self.store_session();
                 self.text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
                 self.saved_text = self.text.clone();
                 self.path = Some(p.to_path_buf());
@@ -339,6 +400,8 @@ impl App {
                 self.error_lines.clear();
                 self.add_recent(p);
                 self.settings.last_file = Some(p.to_path_buf());
+                self.example_key = None;
+                self.restore_session();
                 self.status = format!("Opened {}", p.display());
             }
             Err(e) => self.notice("Open", &format!("Cannot open {}:\n{e}", p.display())),
@@ -372,6 +435,7 @@ impl App {
     fn save_to(&mut self, p: &Path) -> bool {
         match std::fs::write(p, &self.text) {
             Ok(()) => {
+                self.example_key = None;
                 self.saved_text = self.text.clone();
                 self.path = Some(p.to_path_buf());
                 self.add_recent(p);
@@ -388,12 +452,132 @@ impl App {
 
     pub fn load_example(&mut self, i: usize) {
         let (name, src) = EXAMPLES[i];
+        self.store_session();
         self.path = None;
+        self.example_key = Some(format!("example:{name}"));
         self.text = src.to_string();
         self.saved_text = self.text.clone();
         self.messages.clear();
         self.error_lines.clear();
+        self.restore_session();
         self.status = format!("Example: {name}");
+    }
+
+    // ---- session (per-file debugging state) ---------------------------------------------
+
+    /// Key under which the current file's session is stored (None for a new unsaved file).
+    pub fn session_key(&self) -> Option<String> {
+        match &self.path {
+            Some(p) => Some(p.to_string_lossy().into_owned()),
+            None => self.example_key.clone(),
+        }
+    }
+
+    /// The current file's breakpoints, watches, bookmarks and stop condition.
+    pub fn capture_session(&self) -> FileSession {
+        let name = |f: usize| {
+            if f == 0 { String::new() } else { self.source_files.get(f).map(|s| s.0.clone()).unwrap_or_default() }
+        };
+        let mut breakpoints: Vec<SavedBreakpoint> = self
+            .bp_lines
+            .iter()
+            .filter(|&(&(f, _), _)| f == 0 || f < self.source_files.len())
+            .map(|(&(f, line), bp)| SavedBreakpoint {
+                file: name(f),
+                line,
+                condition: bp.condition.clone(),
+                enabled: bp.enabled,
+            })
+            .collect();
+        breakpoints.extend(self.pending_breakpoints.iter().cloned());
+        let sc = &self.stop_condition;
+        FileSession {
+            breakpoints,
+            watches: self.watches.iter().map(|w| w.text.clone()).collect(),
+            bookmarks: self.bookmarks.iter().copied().collect(),
+            stop_condition: sc.text.clone(),
+            stop_enabled: sc.enabled,
+            stop_on_change: sc.on_change,
+            cursor_line: self.cursor_line,
+        }
+    }
+
+    /// Remembers the current file's session in the settings.
+    pub fn store_session(&mut self) {
+        if !self.session_started {
+            return;
+        }
+        let Some(key) = self.session_key() else { return };
+        let s = self.capture_session();
+        let list = &mut self.settings.sessions;
+        list.retain(|(k, _)| *k != key);
+        let empty = s == FileSession { cursor_line: s.cursor_line, ..Default::default() };
+        if !empty || s.cursor_line > 1 {
+            list.insert(0, (key, s));
+            list.truncate(MAX_SESSIONS);
+        }
+    }
+
+    fn clear_session(&mut self) {
+        self.bp_lines.clear();
+        self.pending_breakpoints.clear();
+        self.watches.clear();
+        self.bookmarks.clear();
+        self.stop_condition = StopCondition::default();
+        self.sync_breakpoints();
+        self.session_started = true;
+    }
+
+    /// Restores the session saved for the current file (or starts an empty one).
+    pub fn restore_session(&mut self) {
+        self.clear_session();
+        let Some(key) = self.session_key() else { return };
+        let Some(s) = self.settings.sessions.iter().find(|(k, _)| *k == key).map(|(_, s)| s.clone()) else { return };
+        for b in s.breakpoints {
+            if b.file.is_empty() {
+                let bp = Breakpoint { condition: b.condition, enabled: b.enabled, hits: 0, compiled: None };
+                self.bp_lines.insert((0, b.line), bp);
+            } else {
+                self.pending_breakpoints.push(b);
+            }
+        }
+        self.watches = s.watches.into_iter().map(|text| Watch { text, compiled: None, before: None }).collect();
+        self.bookmarks = s.bookmarks.into_iter().collect();
+        self.stop_condition = StopCondition {
+            text: s.stop_condition,
+            enabled: s.stop_enabled,
+            on_change: s.stop_on_change,
+            ..Default::default()
+        };
+        if s.cursor_line > 1 {
+            self.goto_line = Some(s.cursor_line);
+        }
+        self.resolve_pending_breakpoints();
+        self.sync_breakpoints();
+    }
+
+    /// Turns saved breakpoints of included files into line breakpoints once the program is loaded.
+    fn resolve_pending_breakpoints(&mut self) {
+        let pending = std::mem::take(&mut self.pending_breakpoints);
+        for b in pending {
+            match self.source_files.iter().position(|(n, _)| n.eq_ignore_ascii_case(&b.file)) {
+                Some(f) if f > 0 => {
+                    let bp = Breakpoint { condition: b.condition, enabled: b.enabled, hits: 0, compiled: None };
+                    self.bp_lines.insert((f, b.line), bp);
+                }
+                _ => self.pending_breakpoints.push(b),
+            }
+        }
+    }
+
+    /// Copies the window and debugging state into the settings (before they are saved).
+    pub fn store_settings(&mut self) {
+        self.store_session();
+        self.settings.windows = self.windows.clone();
+        self.settings.screen_zoom = self.screen.font_size;
+        self.settings.show_macro_code = self.show_macro_code;
+        self.settings.follow_source = self.follow_source;
+        self.settings.vars_format = self.vars_format;
     }
 
     /// Runs `action` now, or asks to discard unsaved changes first.
@@ -562,6 +746,7 @@ impl App {
             w.compiled = None;
         }
         self.stop_condition.compiled = None;
+        self.resolve_pending_breakpoints();
         self.sync_breakpoints();
         self.run = RunMode::Paused;
         self.begin_exec();
@@ -1107,6 +1292,7 @@ impl App {
 
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.store_settings();
         eframe::set_value(storage, eframe::APP_KEY, &self.settings);
     }
 
