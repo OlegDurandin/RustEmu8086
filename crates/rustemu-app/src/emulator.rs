@@ -19,8 +19,32 @@ pub fn emulator_window(app: &mut App, ctx: &egui::Context) {
     app.windows.emulator = open;
 }
 
+/// Warning shown while the loaded program is older than the editor text.
+pub fn stale_banner(app: &mut App, ui: &mut Ui) {
+    if !app.is_stale() {
+        return;
+    }
+    egui::Frame::new().fill(ui.visuals().warn_fg_color.gamma_multiply(0.18)).inner_margin(4.0).corner_radius(3.0).show(
+        ui,
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(
+                        "⚠ The source was changed after the program was loaded - the running code is outdated.",
+                    )
+                    .color(crate::colors::warn(ui)),
+                );
+                if ui.button("Reassemble and load (F9)").clicked() {
+                    app.emulate();
+                }
+            });
+        },
+    );
+}
+
 fn emulator_ui(app: &mut App, ui: &mut Ui) {
     let loaded = app.loaded();
+    stale_banner(app, ui);
     ui.horizontal_wrapped(|ui| {
         if ui.button("📂 Load").on_hover_text("Open an executable or source file").clicked() {
             app.open_dialog();
@@ -77,23 +101,53 @@ fn emulator_ui(app: &mut App, ui: &mut Ui) {
 
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| registers(app, ui));
-        ui.separator();
+        // A plain gap: a vertical separator would stretch the window to the bottom of the screen.
+        ui.add_space(14.0);
         ui.vertical(|ui| code_view(app, ui));
     });
     ui.separator();
+    bottom_buttons(app, ui);
+}
+
+/// The row of buttons at the bottom of the emulator window, as in Emu8086.
+fn bottom_buttons(app: &mut App, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         let w = &mut app.windows;
-        ui.toggle_value(&mut w.screen, "screen");
-        ui.toggle_value(&mut w.source, "source");
-        ui.toggle_value(&mut w.memory, "memory");
-        ui.toggle_value(&mut w.stack, "stack");
-        ui.toggle_value(&mut w.flags, "flags");
-        ui.toggle_value(&mut w.vars, "vars");
-        ui.toggle_value(&mut w.symbols, "symbols");
-        ui.toggle_value(&mut w.listing, "listing");
-        ui.toggle_value(&mut w.log, "log");
-        ui.toggle_value(&mut w.devices, "devices");
-        ui.toggle_value(&mut w.console, "debug");
+        ui.toggle_value(&mut w.screen, "screen").on_hover_text("emulator screen");
+        ui.toggle_value(&mut w.source, "source").on_hover_text("original source code");
+        if ui
+            .add_enabled(app.loaded(), egui::Button::new("reset"))
+            .on_hover_text(
+                "reset emulator: restore interrupt vector, close all file handles, clear screen and reload the program",
+            )
+            .clicked()
+        {
+            app.reload();
+        }
+        ui.menu_button("aux", |ui| {
+            let w = &mut app.windows;
+            ui.checkbox(&mut w.memory, "memory");
+            ui.checkbox(&mut w.alu, "ALU");
+            ui.add_enabled(false, egui::Checkbox::new(&mut false, "FPU"))
+                .on_disabled_hover_text("the 8087 FPU is not emulated");
+            ui.checkbox(&mut w.stop_condition, "stop on condition");
+            ui.separator();
+            ui.checkbox(&mut w.symbols, "symbol table");
+            ui.checkbox(&mut w.listing, "listing");
+            ui.separator();
+            ui.checkbox(&mut w.breakpoints, "breakpoints");
+            ui.checkbox(&mut w.watch, "watch");
+            ui.checkbox(&mut w.call_stack, "call stack");
+            ui.checkbox(&mut w.devices, "virtual devices");
+            ui.checkbox(&mut w.log, "log");
+        })
+        .response
+        .on_hover_text("auxiliary tools");
+        let w = &mut app.windows;
+        ui.toggle_value(&mut w.vars, "vars").on_hover_text("show defined variables, arrays and strings");
+        ui.toggle_value(&mut w.console, "debug").on_hover_text("log and debug.exe emulation");
+        ui.toggle_value(&mut w.stack, "stack").on_hover_text("memory at SS:SP from bottom to top");
+        ui.toggle_value(&mut w.flags, "flags").on_hover_text("show flags register");
     });
 }
 
@@ -129,16 +183,16 @@ fn registers(app: &mut App, ui: &mut Ui) {
         for i in [cpu::AX, cpu::BX, cpu::CX, cpu::DX] {
             reg_row(ui, REG16_NAMES[i], &mut c.regs[i], prev.regs[i], true);
         }
-        for i in [cpu::CS, cpu::DS, cpu::ES, cpu::SS] {
-            reg_row(ui, SREG_NAMES[i], &mut c.sregs[i], prev.sregs[i], false);
-        }
+        // Same order as in Emu8086: CS IP SS SP BP SI DI DS ES.
+        reg_row(ui, SREG_NAMES[cpu::CS], &mut c.sregs[cpu::CS], prev.sregs[cpu::CS], false);
         reg_row(ui, "IP", &mut c.ip, prev.ip, false);
+        reg_row(ui, SREG_NAMES[cpu::SS], &mut c.sregs[cpu::SS], prev.sregs[cpu::SS], false);
         for i in [cpu::SP, cpu::BP, cpu::SI, cpu::DI] {
             reg_row(ui, REG16_NAMES[i], &mut c.regs[i], prev.regs[i], false);
         }
-        let mut f = c.flags;
-        reg_row(ui, "FL", &mut f, prev.flags, false);
-        c.set_flags_word(f);
+        for i in [cpu::DS, cpu::ES] {
+            reg_row(ui, SREG_NAMES[i], &mut c.sregs[i], prev.sregs[i], false);
+        }
     });
     ui.add_space(4.0);
     let f = c.flags;
@@ -280,6 +334,7 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
         return;
     }
     let nfiles = app.source_files.len();
+    stale_banner(app, ui);
     // Inside macro code the position is shown in the macro definition (e.g. emu8086.inc).
     let view = app.session.current_view(app.show_macro_code).filter(|v| v.file < nfiles);
     let shown = view.as_ref().map(|v| (v.file, v.line));
@@ -363,6 +418,7 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
         ui.ctx().request_repaint();
     }
     let mut toggle: Option<u32> = None;
+    let mut run_to: Option<u32> = None;
     // One scroll state per file, so a short file does not limit scrolling in a long one.
     let mut sa = egui::ScrollArea::both().id_salt(("source_scroll", fidx)).auto_shrink([false, false]);
     if scroll_to.is_some() {
@@ -381,11 +437,11 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
         for i in range {
             let line_no = i as u32 + 1;
             let text = &app.source_files[fidx].1[i];
-            let bp = app.bp_lines.contains(&(fidx, line_no));
+            let bp = app.bp_lines.get(&(fidx, line_no));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let dot = if bp {
-                    RichText::new("●").color(Color32::from_rgb(220, 40, 40))
+                let dot = if let Some(bp) = bp {
+                    RichText::new("●").color(crate::debugger::marker_color(bp))
                 } else {
                     RichText::new("○").weak()
                 };
@@ -405,11 +461,21 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
                 } else {
                     t
                 };
-                ui.label(t);
+                ui.add(egui::Label::new(t).sense(egui::Sense::click())).context_menu(|ui| {
+                    if ui.button("Run to this line").clicked() {
+                        run_to = Some(line_no);
+                    }
+                    if ui.button("Toggle breakpoint").clicked() {
+                        toggle = Some(line_no);
+                    }
+                });
             });
         }
     });
     if let Some(l) = toggle {
         app.toggle_breakpoint_at_line(fidx, l);
+    }
+    if let Some(l) = run_to {
+        app.run_to_line(fidx, l);
     }
 }

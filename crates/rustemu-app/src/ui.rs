@@ -22,6 +22,7 @@ pub fn main_ui(app: &mut App, ui: &mut Ui) {
     crate::screen::screen_window(app, &ctx);
     crate::emulator::source_window(app, &ctx);
     crate::debug::debug_windows(app, &ctx);
+    crate::debugger::debugger_windows(app, &ctx);
     crate::devices_ui::devices_window(app, &ctx);
     tools(app, &ctx);
     crate::find::goto_dialog(app, &ctx);
@@ -331,6 +332,18 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
     if ui.add_enabled(loaded, egui::Button::new("Step back           ⇧F8")).clicked() {
         app.step_back();
     }
+    if ui.button("Run to cursor       F4").clicked() {
+        app.run_to_cursor();
+    }
+    if ui.button("Toggle breakpoint   ⌘F8").clicked() {
+        app.toggle_breakpoint_at_cursor();
+    }
+    if ui.button("Breakpoints…").clicked() {
+        app.windows.breakpoints = true;
+    }
+    if ui.button("Stop on condition…").clicked() {
+        app.windows.stop_condition = true;
+    }
     if ui.add_enabled(loaded, egui::Button::new("Reload")).clicked() {
         app.reload();
     }
@@ -393,9 +406,14 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
         ui.checkbox(&mut w.log, "Log");
         ui.checkbox(&mut w.devices, "Virtual devices");
         ui.checkbox(&mut w.console, "Debug console");
+        ui.checkbox(&mut w.breakpoints, "Breakpoints");
+        ui.checkbox(&mut w.watch, "Watch");
+        ui.checkbox(&mut w.call_stack, "Call stack");
+        ui.checkbox(&mut w.alu, "ALU");
     });
     if ui.button("Clear all breakpoints").clicked() {
         app.bp_lines.clear();
+        app.bp_addr.clear();
         app.session.machine.breakpoints.clear();
     }
 }

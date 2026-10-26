@@ -368,3 +368,29 @@ fn i80186_extensions() {
     assert_eq!(disassemble(&[0x60], 0).text, "PUSHA");
     assert_eq!(disassemble(&[0xC1, 0xE3, 0x03], 0).text, "SHL BX, 03h");
 }
+
+#[test]
+fn alu_trace_records_last_operation() {
+    // mov al, 250 / add al, 10 / mov cx, 5 (no ALU) -> ADD 250 + 10 = 4 with CF.
+    let (c, _) = run(&[0xB0, 0xFA, 0x04, 0x0A, 0xB9, 0x05, 0x00], |_| {});
+    let t = c.alu_trace;
+    assert_eq!((t.op, t.a, t.b, t.result, t.wide), (AluOp::Add, 250, 10, 4, false));
+    assert_eq!(t.ip, 2);
+    assert!(t.flags_out & CF != 0 && t.flags_in & CF == 0);
+    // inc bx -> INC (traced as ADD internally); mov bl, 4 / mul bl with AL = 200 -> 800.
+    let (c, _) = run(&[0x43], |_| {});
+    assert_eq!(c.alu_trace.op, AluOp::Inc);
+    let (c, _) = run(&[0xB0, 200, 0xB3, 4, 0xF6, 0xE3], |_| {});
+    assert_eq!((c.alu_trace.op, c.alu_trace.a, c.alu_trace.b, c.alu_trace.result), (AluOp::Mul, 200, 4, 800));
+    // mov ax, 1000 / xor dx, dx / mov bx, 7 / div bx -> quotient 142, remainder 6.
+    let (c, _) = run(&[0xB8, 0xE8, 0x03, 0x31, 0xD2, 0xBB, 7, 0, 0xF7, 0xF3], |_| {});
+    let t = c.alu_trace;
+    assert_eq!((t.op, t.a, t.b, t.result & 0xFFFF, t.result >> 16), (AluOp::Div, 1000, 7, 142, 6));
+    // mov cl, 4 / shl al, cl with AL = 3 -> 48; test al, 1 -> TEST; neg al -> NEG.
+    let (c, _) = run(&[0xB1, 4, 0xB0, 3, 0xD2, 0xE0], |_| {});
+    assert_eq!((c.alu_trace.op, c.alu_trace.a, c.alu_trace.b, c.alu_trace.result), (AluOp::Shl, 3, 4, 48));
+    let (c, _) = run(&[0xA8, 0x01], |_| {});
+    assert_eq!(c.alu_trace.op, AluOp::Test);
+    let (c, _) = run(&[0xB0, 5, 0xF6, 0xD8], |_| {});
+    assert_eq!((c.alu_trace.op, c.alu_trace.a, c.alu_trace.result), (AluOp::Neg, 5, 0xFB));
+}

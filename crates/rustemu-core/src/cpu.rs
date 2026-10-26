@@ -80,6 +80,95 @@ struct ModRm {
     ea: u16,
 }
 
+/// Kind of the last arithmetic / logic operation (see [`AluTrace`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AluOp {
+    #[default]
+    None,
+    Add,
+    Or,
+    Adc,
+    Sbb,
+    And,
+    Sub,
+    Xor,
+    Cmp,
+    Inc,
+    Dec,
+    Neg,
+    Not,
+    Test,
+    Rol,
+    Ror,
+    Rcl,
+    Rcr,
+    Shl,
+    Shr,
+    Setmo,
+    Sar,
+    Mul,
+    Imul,
+    Div,
+    Idiv,
+}
+
+impl AluOp {
+    const ALU: [AluOp; 8] =
+        [AluOp::Add, AluOp::Or, AluOp::Adc, AluOp::Sbb, AluOp::And, AluOp::Sub, AluOp::Xor, AluOp::Cmp];
+    const SHIFT: [AluOp; 8] =
+        [AluOp::Rol, AluOp::Ror, AluOp::Rcl, AluOp::Rcr, AluOp::Shl, AluOp::Shr, AluOp::Setmo, AluOp::Sar];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            AluOp::None => "",
+            AluOp::Add => "ADD",
+            AluOp::Or => "OR",
+            AluOp::Adc => "ADC",
+            AluOp::Sbb => "SBB",
+            AluOp::And => "AND",
+            AluOp::Sub => "SUB",
+            AluOp::Xor => "XOR",
+            AluOp::Cmp => "CMP",
+            AluOp::Inc => "INC",
+            AluOp::Dec => "DEC",
+            AluOp::Neg => "NEG",
+            AluOp::Not => "NOT",
+            AluOp::Test => "TEST",
+            AluOp::Rol => "ROL",
+            AluOp::Ror => "ROR",
+            AluOp::Rcl => "RCL",
+            AluOp::Rcr => "RCR",
+            AluOp::Shl => "SHL",
+            AluOp::Shr => "SHR",
+            AluOp::Setmo => "SETMO",
+            AluOp::Sar => "SAR",
+            AluOp::Mul => "MUL",
+            AluOp::Imul => "IMUL",
+            AluOp::Div => "DIV",
+            AluOp::Idiv => "IDIV",
+        }
+    }
+}
+
+/// The last operation done by the ALU, for the debugger's ALU window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct AluTrace {
+    pub op: AluOp,
+    /// First operand (for a word DIV/IDIV: the dividend DX:AX).
+    pub a: u32,
+    /// Second operand (shift count for shifts and rotates).
+    pub b: u16,
+    /// Result (MUL/IMUL: AX or DX:AX; DIV/IDIV: quotient in the low half, remainder in the high half).
+    pub result: u32,
+    pub wide: bool,
+    pub flags_in: u16,
+    pub flags_out: u16,
+    /// `instr_count` of the instruction and its address.
+    pub instr: u64,
+    pub cs: u16,
+    pub ip: u16,
+}
+
 /// Instruction set to emulate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CpuModel {
@@ -106,6 +195,9 @@ pub struct Cpu {
     inhibit_irq: bool,
     /// Last computed effective address (8086 uses it for LEA/LDS with a register operand).
     last_ea: u16,
+    /// IP of the instruction being executed.
+    instr_ip: u16,
+    pub alu_trace: AluTrace,
 }
 
 impl Default for Cpu {
@@ -133,6 +225,8 @@ impl Cpu {
             rep: Rep::None,
             inhibit_irq: false,
             last_ea: 0,
+            instr_ip: 0,
+            alu_trace: AluTrace::default(),
         };
         c.reset();
         c
@@ -149,6 +243,7 @@ impl Cpu {
         self.seg_override = None;
         self.rep = Rep::None;
         self.inhibit_irq = false;
+        self.alu_trace = AluTrace::default();
     }
 
     // ---- register helpers -------------------------------------------------
@@ -346,8 +441,32 @@ impl Cpu {
         self.set_flag(PF, parity(res as u8));
     }
 
+    /// Records an operation for the ALU window (flags_out is filled in when the instruction ends).
+    #[inline]
+    fn trace(&mut self, op: AluOp, a: u32, b: u16, result: u32, w: bool, flags_in: u16) {
+        self.alu_trace = AluTrace {
+            op,
+            a,
+            b,
+            result,
+            wide: w,
+            flags_in,
+            flags_out: self.flags,
+            instr: self.instr_count,
+            cs: self.sregs[CS],
+            ip: self.instr_ip,
+        };
+    }
+
+    /// Changes the kind of the operation just traced (INC done as ADD, TEST as AND, ...).
+    #[inline]
+    fn retrace(&mut self, op: AluOp) {
+        self.alu_trace.op = op;
+    }
+
     /// ALU operation `op` (0=ADD 1=OR 2=ADC 3=SBB 4=AND 5=SUB 6=XOR 7=CMP). Returns the result.
     pub fn alu(&mut self, op: u8, a: u16, b: u16, w: bool) -> u16 {
+        let flags_in = self.flags;
         let (mask, sign) = if w { (0xFFFFu32, 0x8000u32) } else { (0xFF, 0x80) };
         let a = a as u32 & mask;
         let b = b as u32 & mask;
@@ -379,6 +498,7 @@ impl Cpu {
             }
         } as u16;
         self.set_szp(w, res);
+        self.trace(AluOp::ALU[op as usize & 7], a, b as u16, res as u32, w, flags_in);
         res
     }
 
@@ -386,6 +506,7 @@ impl Cpu {
         let cf = self.flag(CF);
         let r = self.alu(if dec { 5 } else { 0 }, v, 1, w);
         self.set_flag(CF, cf);
+        self.retrace(if dec { AluOp::Dec } else { AluOp::Inc });
         r
     }
 
@@ -394,6 +515,7 @@ impl Cpu {
         if count == 0 {
             return val;
         }
+        let flags_in = self.flags;
         let bits = if w { 16 } else { 8 };
         let mask: u32 = if w { 0xFFFF } else { 0xFF };
         let msb: u32 = 1 << (bits - 1);
@@ -449,6 +571,7 @@ impl Cpu {
         if op >= 4 {
             self.set_szp(w, v as u16);
         }
+        self.trace(AluOp::SHIFT[op as usize & 7], val as u32, count as u16, v, w, flags_in);
         v as u16
     }
 
@@ -499,9 +622,13 @@ impl Cpu {
         self.inhibit_irq = false;
         let trap = self.flag(TF);
         let start_ip = self.ip;
+        self.instr_ip = start_ip;
         self.seg_override = None;
         self.rep = Rep::None;
         let res = self.exec(bus, start_ip);
+        if self.alu_trace.instr == self.instr_count {
+            self.alu_trace.flags_out = self.flags;
+        }
         self.instr_count += 1;
         if trap && !self.inhibit_irq && matches!(res, StepResult::Ok) {
             self.interrupt(bus, 1);
@@ -637,6 +764,7 @@ impl Cpu {
                 let a = self.read_op(bus, m.rm, w);
                 let b = self.read_reg(m.reg, w);
                 self.alu(4, a, b, w);
+                self.retrace(AluOp::Test);
             }
             0x86 | 0x87 => {
                 let w = op & 1 != 0;
@@ -732,10 +860,12 @@ impl Cpu {
                 let b = self.fetch8(bus) as u16;
                 let a = self.reg8(0) as u16;
                 self.alu(4, a, b, false);
+                self.retrace(AluOp::Test);
             }
             0xA9 => {
                 let b = self.fetch16(bus);
                 self.alu(4, self.regs[AX], b, true);
+                self.retrace(AluOp::Test);
             }
             0xB0..=0xB7 => {
                 let v = self.fetch8(bus);
@@ -1039,15 +1169,22 @@ impl Cpu {
     fn group3<B: Bus>(&mut self, bus: &mut B, w: bool, _start_ip: u16) {
         let m = self.modrm(bus);
         let v = self.read_op(bus, m.rm, w);
+        let before = (self.flags, self.regs[AX], self.regs[DX]);
         match m.reg {
             0 | 1 => {
                 let imm = if w { self.fetch16(bus) } else { self.fetch8(bus) as u16 };
                 self.alu(4, v, imm, w);
+                self.retrace(AluOp::Test);
             }
-            2 => self.write_op(bus, m.rm, w, !v),
+            2 => {
+                let flags = self.flags;
+                self.trace(AluOp::Not, v as u32, 0, !v as u32 & if w { 0xFFFF } else { 0xFF }, w, flags);
+                self.write_op(bus, m.rm, w, !v);
+            }
             3 => {
                 let r = self.alu(5, 0, v, w);
                 self.set_flag(CF, v & if w { 0xFFFF } else { 0xFF } != 0);
+                self.trace(AluOp::Neg, v as u32, 0, r as u32, w, self.alu_trace.flags_in);
                 self.write_op(bus, m.rm, w, r);
             }
             4 => {
@@ -1133,6 +1270,28 @@ impl Cpu {
                 }
             }
         }
+        // Reached only without a divide error.
+        if m.reg >= 4 {
+            self.trace_muldiv(m.reg, w, v, before);
+        }
+    }
+
+    /// Traces MUL / IMUL / DIV / IDIV (`reg` 4..7) given the flags, AX and DX before it.
+    fn trace_muldiv(&mut self, reg: u8, w: bool, v: u16, (flags_in, ax, dx): (u16, u16, u16)) {
+        let mul = reg < 6;
+        let a = match (mul, w) {
+            (true, false) => ax as u32 & 0xFF,
+            (true, true) | (false, false) => ax as u32,
+            (false, true) => (dx as u32) << 16 | ax as u32,
+        };
+        let result = match (mul, w) {
+            (true, false) => self.regs[AX] as u32,
+            (_, true) => (self.regs[DX] as u32) << 16 | self.regs[AX] as u32,
+            (false, false) => (self.reg8(4) as u32) << 16 | self.reg8(0) as u32,
+        };
+        let op = [AluOp::Mul, AluOp::Imul, AluOp::Div, AluOp::Idiv][reg as usize - 4];
+        let b = if w { v } else { v & 0xFF };
+        self.trace(op, a, b, result, w, flags_in);
     }
 
     fn group45<B: Bus>(&mut self, bus: &mut B, w: bool) {

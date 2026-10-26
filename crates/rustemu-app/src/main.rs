@@ -5,6 +5,7 @@ mod calc;
 mod colors;
 mod console;
 mod debug;
+mod debugger;
 mod devices_ui;
 mod editcmd;
 mod editor;

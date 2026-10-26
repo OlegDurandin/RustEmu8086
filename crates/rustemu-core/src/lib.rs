@@ -13,5 +13,5 @@ pub mod robot;
 pub mod video;
 
 pub use bus::{Bus, Memory, linear};
-pub use cpu::{Cpu, StepResult};
+pub use cpu::{AluOp, AluTrace, Cpu, StepResult};
 pub use machine::{Event, LoadInfo, LoadKind, Machine};
