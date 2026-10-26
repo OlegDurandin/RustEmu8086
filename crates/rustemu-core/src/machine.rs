@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::bus::{Bus, Memory, linear};
 use crate::cpu::{self, Cpu, StepResult, flags};
 use crate::devices::Devices;
-use crate::dos::DosState;
+use crate::dos::{DosSnapshot, DosState};
 use crate::video::{self, Video};
 
 /// Segment of the ROM area that holds interrupt stubs.
@@ -95,6 +95,67 @@ pub struct LoadInfo {
     pub psp: Option<u16>,
 }
 
+struct MzHeader {
+    header_size: usize,
+    file_size: usize,
+    ss: u16,
+    sp: u16,
+    ip: u16,
+    cs: u16,
+    relocs: Vec<(u16, u16)>,
+}
+
+fn parse_mz(file: &[u8]) -> Result<MzHeader, String> {
+    if file.len() < 0x1C || !matches!(&file[..2], b"MZ" | b"ZM") {
+        return Err("not an MZ executable".into());
+    }
+    let w = |o: usize| u16::from_le_bytes([file[o], file[o + 1]]);
+    let last = w(2) as usize;
+    let pages = w(4) as usize;
+    let nrel = w(6) as usize;
+    let header_size = w(8) as usize * 16;
+    let rel_off = w(0x18) as usize;
+    if pages == 0 || last >= 512 {
+        return Err("corrupt EXE size".into());
+    }
+    let file_size = if last == 0 { pages * 512 } else { (pages - 1) * 512 + last };
+    if file_size > file.len() {
+        return Err("truncated EXE file".into());
+    }
+    if !(0x1C..=file_size).contains(&header_size) {
+        return Err("corrupt EXE header".into());
+    }
+    let rel_end = rel_off
+        .checked_add(nrel.checked_mul(4).ok_or("corrupt relocation table")?)
+        .ok_or("corrupt relocation table")?;
+    if nrel != 0 && (rel_off < 0x1C || rel_end > header_size) {
+        return Err("corrupt relocation table".into());
+    }
+    let image_len = file_size - header_size;
+    let mut relocs = Vec::with_capacity(nrel);
+    for i in 0..nrel {
+        let at = rel_off + i * 4;
+        let (off, seg) = (w(at), w(at + 2));
+        let target = (seg as usize)
+            .checked_mul(16)
+            .and_then(|a| a.checked_add(off as usize))
+            .and_then(|a| a.checked_add(2))
+            .ok_or("corrupt relocation target")?;
+        if target > image_len {
+            return Err("corrupt relocation target".into());
+        }
+        relocs.push((off, seg));
+    }
+    Ok(MzHeader { header_size, file_size, ss: w(0x0E), sp: w(0x10), ip: w(0x14), cs: w(0x16), relocs })
+}
+
+/// Returns the load module of a validated MZ executable, excluding its header
+/// and any overlay bytes after the size declared in the header.
+pub fn mz_image(file: &[u8]) -> Result<&[u8], String> {
+    let h = parse_mz(file)?;
+    Ok(&file[h.header_size..h.file_size])
+}
+
 /// Service result of an HLE interrupt handler.
 pub(crate) enum Svc {
     Ret,
@@ -110,7 +171,21 @@ struct Snapshot {
     cpu: Cpu,
     undo: Vec<(u32, u8)>,
     keys: VecDeque<u16>,
+    irq: VecDeque<u8>,
+    dev: Box<Devices>,
+    dos: DosSnapshot,
     output_len: usize,
+    log_len: usize,
+    terminated: Option<u8>,
+    mouse: (u16, u16, u16),
+    mouse_visible: bool,
+    wait_until: Option<std::time::Instant>,
+    tick_instr: u64,
+    tick_time: Option<std::time::Instant>,
+    tick_frac: f64,
+    bios_ticks: u32,
+    floppy_len: usize,
+    floppy_undo: Vec<(usize, u8)>,
 }
 
 pub struct Machine {
@@ -126,6 +201,8 @@ pub struct Machine {
     /// Record history for step-back.
     pub history_enabled: bool,
     history: VecDeque<Snapshot>,
+    history_barrier: bool,
+    pub(crate) floppy_journal: Option<Vec<(usize, u8)>>,
     pub(crate) dos: DosState,
     /// Fixed date/time for INT 21h/1Ah (tests); `None` = host clock.
     pub fixed_time: Option<crate::dos::DateTime>,
@@ -169,6 +246,8 @@ impl Machine {
             terminated: None,
             history_enabled: true,
             history: VecDeque::new(),
+            history_barrier: false,
+            floppy_journal: None,
             dos: DosState::default(),
             fixed_time: None,
             mouse: (0, 0, 0),
@@ -210,6 +289,8 @@ impl Machine {
         self.log.clear();
         self.terminated = None;
         self.history.clear();
+        self.history_barrier = false;
+        self.floppy_journal = None;
         self.loaded = None;
         self.dos = DosState { root, ..DosState::default() };
         self.tick_instr = 0;
@@ -286,6 +367,7 @@ impl Machine {
         if image.len() > 0xFF00 - 2 {
             return Err("COM program is too large".into());
         }
+        self.reset();
         let seg = PROGRAM_SEG;
         self.make_psp(seg, 0xA000);
         let base = linear(seg, 0x100);
@@ -308,46 +390,30 @@ impl Machine {
 
     /// Loads an MZ executable after a PSP at PROGRAM_SEG.
     pub fn load_exe(&mut self, file: &[u8]) -> Result<(), String> {
-        if file.len() < 0x1C || &file[..2] != b"MZ" && &file[..2] != b"ZM" {
-            return Err("not an MZ executable".into());
-        }
-        let w = |o: usize| u16::from_le_bytes([file[o], file[o + 1]]);
-        let last = w(2) as usize;
-        let pages = w(4) as usize;
-        let nrel = w(6) as usize;
-        let hdr = w(8) as usize * 16;
-        let (ss, sp, ip, cs, rel_off) = (w(0x0E), w(0x10), w(0x14), w(0x16), w(0x18) as usize);
-        let mut size = pages * 512;
-        if last != 0 {
-            size = size - 512 + last;
-        }
-        let size = size.min(file.len());
-        if hdr > size {
-            return Err("corrupt EXE header".into());
-        }
-        let image = &file[hdr..size];
+        let h = parse_mz(file)?;
+        let image = &file[h.header_size..h.file_size];
         let psp = PROGRAM_SEG;
         let load = psp + 0x10;
         if linear(load, 0) as usize + image.len() > 0xA0000 {
             return Err("EXE program is too large".into());
         }
+
+        // All validation is complete. From here on loading cannot fail, so an
+        // invalid executable leaves the previously running machine untouched.
+        self.reset();
         self.make_psp(psp, 0xA000);
         let base = linear(load, 0);
         self.sys.mem.load(base, image);
-        for i in 0..nrel {
-            let o = rel_off + i * 4;
-            if o + 4 > file.len() {
-                return Err("corrupt relocation table".into());
-            }
-            let a = linear(load.wrapping_add(w(o + 2)), w(o));
+        for (off, seg) in h.relocs {
+            let a = linear(load.wrapping_add(seg), off);
             let v = self.sys.mem.read16(a).wrapping_add(load);
             self.sys.mem.write16(a, v);
         }
         let c = &mut self.cpu;
         c.regs = [0; 8];
-        c.sregs = [psp, load.wrapping_add(cs), load.wrapping_add(ss), psp];
-        c.ip = ip;
-        c.regs[cpu::SP] = sp;
+        c.sregs = [psp, load.wrapping_add(h.cs), load.wrapping_add(h.ss), psp];
+        c.ip = h.ip;
+        c.regs[cpu::SP] = h.sp;
         self.after_load(LoadInfo {
             kind: LoadKind::Exe,
             image_base: base,
@@ -364,6 +430,7 @@ impl Machine {
         if base as usize + image.len() > 0xA0000 {
             return Err("binary does not fit in memory".into());
         }
+        self.reset();
         self.sys.mem.load(base, image);
         let c = &mut self.cpu;
         c.regs = [0; 8];
@@ -386,6 +453,7 @@ impl Machine {
         if image.len() > 512 {
             return Err("boot sector must be at most 512 bytes".into());
         }
+        self.reset();
         let base = 0x7C00;
         self.sys.mem.load(base, image);
         let c = &mut self.cpu;
@@ -515,6 +583,7 @@ impl Machine {
             return Event::Terminated(code);
         }
         if !self.history_enabled {
+            self.floppy_journal = None;
             if self.sys.mem.is_journaling() {
                 self.sys.mem.set_journaling(false);
             }
@@ -526,10 +595,27 @@ impl Machine {
             }
             return ev;
         }
+        self.history_barrier = false;
+        self.floppy_journal = Some(Vec::new());
         self.sys.mem.set_journaling(true);
         let snap_cpu = self.cpu.clone();
         let snap_keys = self.sys.keys.clone();
+        let snap_irq = self.sys.irq.clone();
+        let snap_dev = Box::new(self.sys.dev.clone());
+        let snap_dos = self.dos.snapshot();
         let out_len = self.output.len();
+        let log_len = self.log.len();
+        let snap_terminated = self.terminated;
+        let snap_mouse = self.mouse;
+        let snap_mouse_visible = self.mouse_visible;
+        let snap_wait_until = self.wait_until;
+        let snap_tick_instr = self.tick_instr;
+        let snap_tick_time = self.tick_time;
+        let snap_tick_frac = self.tick_frac;
+        let snap_floppy_len = self.floppy.len();
+        let ticks_addr = video::BDA + 0x6C;
+        let snap_bios_ticks =
+            self.sys.mem.read16(ticks_addr) as u32 | ((self.sys.mem.read16(ticks_addr + 2) as u32) << 16);
         let mut ev = self.step_inner();
         // Finish BIOS stub code so that INT n steps over the service routine.
         let mut guard = 0;
@@ -539,15 +625,49 @@ impl Machine {
         }
         {
             let undo = self.sys.mem.take_journal();
+            let floppy_undo = self.floppy_journal.take().unwrap_or_default();
+            if self.history_barrier {
+                self.history.clear();
+                return ev;
+            }
             // Re-polling a blocked input service changes nothing and is not worth recording.
             let idle = matches!(ev, Event::WaitingInput | Event::Sleeping)
                 && undo.is_empty()
-                && self.cpu.same_state(&snap_cpu);
+                && floppy_undo.is_empty()
+                && self.cpu.same_state(&snap_cpu)
+                && self.sys.keys == snap_keys
+                && self.sys.irq == snap_irq
+                && self.dos.snapshot() == snap_dos
+                && self.output.len() == out_len
+                && self.log.len() == log_len
+                && self.terminated == snap_terminated
+                && self.mouse == snap_mouse
+                && self.mouse_visible == snap_mouse_visible
+                && self.wait_until == snap_wait_until;
             if !idle {
                 if self.history.len() >= HISTORY_DEPTH {
                     self.history.pop_front();
                 }
-                self.history.push_back(Snapshot { cpu: snap_cpu, undo, keys: snap_keys, output_len: out_len });
+                self.history.push_back(Snapshot {
+                    cpu: snap_cpu,
+                    undo,
+                    keys: snap_keys,
+                    irq: snap_irq,
+                    dev: snap_dev,
+                    dos: snap_dos,
+                    output_len: out_len,
+                    log_len,
+                    terminated: snap_terminated,
+                    mouse: snap_mouse,
+                    mouse_visible: snap_mouse_visible,
+                    wait_until: snap_wait_until,
+                    tick_instr: snap_tick_instr,
+                    tick_time: snap_tick_time,
+                    tick_frac: snap_tick_frac,
+                    bios_ticks: snap_bios_ticks,
+                    floppy_len: snap_floppy_len,
+                    floppy_undo,
+                });
             }
         }
         ev
@@ -564,6 +684,11 @@ impl Machine {
 
     /// Runs up to `budget` steps, stopping at breakpoints and events.
     pub fn run(&mut self, budget: u64) -> Event {
+        self.run_counted(budget).0
+    }
+
+    /// Like [`Machine::run`], also returning the number of consumed steps.
+    pub fn run_counted(&mut self, budget: u64) -> (Event, u64) {
         // Devices advance in small slices so programs polling them see progress.
         const SLICE: u64 = 128;
         let mut ev = Event::Budget;
@@ -589,20 +714,36 @@ impl Machine {
         }
         self.sys.dev.tick(pending);
         self.timer(pending);
-        ev
+        (ev, done)
     }
 
     /// Undoes the last step. Returns false when there is no history.
     pub fn step_back(&mut self) -> bool {
         match self.history.pop_back() {
             Some(s) => {
+                self.sys.mem.set_journaling(false);
                 self.sys.mem.undo(&s.undo);
                 self.cpu = s.cpu;
                 self.sys.keys = s.keys;
+                self.sys.irq = s.irq;
+                self.sys.dev = *s.dev;
+                self.dos.restore(s.dos);
                 self.output.truncate(s.output_len);
-                self.terminated = None;
-                self.dos.waiting = false;
-                self.wait_until = None;
+                self.log.truncate(s.log_len);
+                self.terminated = s.terminated;
+                self.mouse = s.mouse;
+                self.mouse_visible = s.mouse_visible;
+                self.wait_until = s.wait_until;
+                self.tick_instr = s.tick_instr;
+                self.tick_time = s.tick_time;
+                self.tick_frac = s.tick_frac;
+                let ticks_addr = video::BDA + 0x6C;
+                self.sys.mem.write16(ticks_addr, s.bios_ticks as u16);
+                self.sys.mem.write16(ticks_addr + 2, (s.bios_ticks >> 16) as u16);
+                for (i, value) in s.floppy_undo.into_iter().rev() {
+                    self.floppy[i] = value;
+                }
+                self.floppy.truncate(s.floppy_len);
                 true
             }
             None => false,
@@ -615,6 +756,10 @@ impl Machine {
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+    }
+
+    pub(crate) fn mark_history_barrier(&mut self) {
+        self.history_barrier = true;
     }
 
     fn service(&mut self, n: u8) -> Event {
@@ -715,5 +860,49 @@ impl Machine {
             o = o.wrapping_add(1);
         }
         v
+    }
+}
+
+#[cfg(test)]
+mod mz_tests {
+    use super::*;
+
+    fn word(file: &mut [u8], at: usize, value: u16) {
+        file[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn mz(image: &[u8]) -> Vec<u8> {
+        let mut file = vec![0; 0x20];
+        file[..2].copy_from_slice(b"MZ");
+        file.extend_from_slice(image);
+        let size = file.len() as u16;
+        word(&mut file, 2, size);
+        word(&mut file, 4, 1);
+        word(&mut file, 8, 2);
+        word(&mut file, 0x18, 0x1C);
+        file
+    }
+
+    #[test]
+    fn mz_validation_rejects_truncation_and_bad_relocations() {
+        assert!(mz_image(b"MZ").is_err());
+
+        let mut truncated = mz(&[0xF4]);
+        word(&mut truncated, 2, 0);
+        word(&mut truncated, 4, 2);
+        assert!(mz_image(&truncated).is_err());
+
+        let mut bad_reloc = mz(&[0xF4, 0x90]);
+        word(&mut bad_reloc, 6, 1);
+        word(&mut bad_reloc, 0x1C, 1);
+        word(&mut bad_reloc, 0x1E, 0);
+        assert!(mz_image(&bad_reloc).is_err());
+    }
+
+    #[test]
+    fn mz_image_excludes_the_header_and_overlay() {
+        let mut file = mz(&[0xF4, 0x90]);
+        file.extend_from_slice(&[0xAA, 0xBB]);
+        assert_eq!(mz_image(&file).unwrap(), [0xF4, 0x90]);
     }
 }

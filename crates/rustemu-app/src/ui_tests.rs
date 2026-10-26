@@ -19,9 +19,21 @@ fn harness(app: App) -> Harness<'static, App> {
 fn save(h: &mut Harness<'_, App>, name: &str) {
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/ui-snapshots");
     std::fs::create_dir_all(&dir).unwrap();
-    match h.render() {
-        Ok(img) => img.save(dir.join(format!("{name}.png"))).unwrap(),
-        Err(e) => eprintln!("render failed (no GPU?): {e}"),
+    // egui_kittest 0.37 panics while lazily creating its renderer when WGPU
+    // has no adapter, instead of returning the documented `Err`. UI logic is
+    // still testable in such headless environments; only the PNG is skipped.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.render())) {
+        Ok(Ok(img)) => img.save(dir.join(format!("{name}.png"))).unwrap(),
+        Ok(Err(e)) => eprintln!("render skipped: {e}"),
+        Err(panic) => {
+            let message =
+                panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied());
+            if message.is_some_and(|m| m.contains("No adapter found")) {
+                eprintln!("render skipped: WGPU renderer is unavailable");
+            } else {
+                std::panic::resume_unwind(panic);
+            }
+        }
     }
 }
 
@@ -29,6 +41,18 @@ fn app_with_example(i: usize) -> App {
     let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
     app.load_example(i);
     app
+}
+
+#[test]
+fn run_does_not_start_after_assembly_failure() {
+    let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+    app.text = "org 100h\nnot_an_instruction\n".into();
+
+    app.start_run();
+
+    assert_eq!(app.run, crate::app::RunMode::Paused);
+    assert!(!app.loaded());
+    assert_eq!(app.status, "Assembly failed");
 }
 
 #[test]

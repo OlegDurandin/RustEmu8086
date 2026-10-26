@@ -95,14 +95,15 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
 - [x] 2.1 Лексер
 - [x] 2.2 Операнды и выражения (`[bx+si+d]`, `var[bx]`, `b.`/`w.`, `ptr`, `seg:`, `offset`, `seg`, `type`,
       `length`, `size`, `low/high`, `$`, `dup`, сравнения)
-- [x] 2.3 Кодогенерация всех инструкций 8086 (сверка с NASM)
-- [x] 2.4 Директивы: ORG, DB/DW/DD/DQ/DT, EQU/=, SEGMENT/ENDS, PROC/ENDP (FAR → RETF), LABEL, END,
+- [x] 2.3 Кодогенерация всех инструкций 8086 и используемых Emu8086 расширений 80186
+      (PUSHA/POPA, PUSH imm, IMUL imm; сверка с NASM)
+- [x] 2.4 Директивы: ORG, DB/DW/DD/DQ/DT, числовые и текстовые EQU/=, SEGMENT/ENDS, PROC/ENDP (FAR → RETF), LABEL, END,
       .MODEL/.STACK/.DATA/.CODE, INCLUDE, MACRO/ENDM/LOCAL/EXITM, REPT, IF/IFE/IFDEF/IFNDEF/ELSE/ENDIF, EVEN/ALIGN
 - [x] 2.5 Директивы Emu8086: `#make_com/exe/bin/boot#`, `#load_segment/offset=#`, `#AX=..#`, `#start=..#`
 - [x] 2.6 Вывод COM/EXE(MZ)/BIN/BOOT, листинг, таблица символов, карта адрес → строка
 - [~] 2.7 Сообщения об ошибках: строка есть, колонка — только для синтаксических ошибок
-- [ ] 2.8 Недостающее: `STRUC`, `IRP/IRPC`, текстовые `EQU`, `ASSUME`-автопрефиксы, `.binf`-файл,
-      инструкции 80186 (PUSHA/POPA/PUSH imm/IMUL imm) — проверить, что поддерживает Emu8086
+- [ ] 2.8 Недостающее: `STRUC`, `IRP/IRPC`, `ASSUME`-автопрефиксы, `.binf`-файл — проверить,
+      что поддерживает Emu8086
 
 ### Этап 3. BIOS/DOS HLE и загрузка программ
 - [x] 3.1 IVT + ROM-заглушки (BOP), BIOS Data Area

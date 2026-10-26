@@ -94,19 +94,29 @@ impl Session {
             }
         };
         let bytes = if prog.format == Format::Boot { prog.image.clone() } else { bytes };
-        self.program = Some(prog);
-        self.load_bytes(kind, bytes)
+        self.load_bytes_with_program(kind, bytes, Some(prog))
     }
 
     /// Loads raw executable bytes without debug information.
     pub fn load_bytes(&mut self, kind: Loadable, bytes: Vec<u8>) -> Result<(), String> {
-        self.machine.reset();
+        self.load_bytes_with_program(kind, bytes, None)
+    }
+
+    /// Loads bytes and commits their matching debug information only after the
+    /// machine has accepted the executable.
+    fn load_bytes_with_program(
+        &mut self,
+        kind: Loadable,
+        bytes: Vec<u8>,
+        program: Option<Program>,
+    ) -> Result<(), String> {
         match kind {
             Loadable::Com => self.machine.load_com(&bytes)?,
             Loadable::Exe => self.machine.load_exe(&bytes)?,
             Loadable::Bin { seg, off } => self.machine.load_bin(&bytes, seg, off)?,
             Loadable::Boot => self.machine.load_boot(&bytes)?,
         }
+        self.program = program;
         if let Some(p) = &self.program {
             let info = self.machine.loaded.clone().unwrap();
             // Segment fixups of flat programs (COM/BIN/BOOT) refer to the load segment.
@@ -145,27 +155,17 @@ impl Session {
     pub fn load_path(&mut self, path: &Path) -> Result<(), String> {
         let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        if let Some(dir) = path.parent() {
-            self.machine.set_dos_root(if dir.as_os_str().is_empty() { PathBuf::from(".") } else { dir.to_path_buf() });
-        }
-        match ext.as_str() {
-            "com" => {
-                self.program = None;
-                self.load_bytes(Loadable::Com, bytes)
-            }
-            "exe" => {
-                self.program = None;
-                self.load_bytes(Loadable::Exe, bytes)
-            }
-            "bin" => {
-                self.program = None;
-                self.load_bytes(Loadable::Bin { seg: 0x0100, off: 0 }, bytes)
-            }
+        let root =
+            path.parent().map(|dir| if dir.as_os_str().is_empty() { PathBuf::from(".") } else { dir.to_path_buf() });
+        let mut floppy = None;
+        let result = match ext.as_str() {
+            "com" => self.load_bytes(Loadable::Com, bytes),
+            "exe" => self.load_bytes(Loadable::Exe, bytes),
+            "bin" => self.load_bytes(Loadable::Bin { seg: 0x0100, off: 0 }, bytes),
             "boot" | "img" => {
-                self.program = None;
                 let n = bytes.len().min(512);
                 if bytes.len() > 512 {
-                    self.machine.floppy = bytes.clone();
+                    floppy = Some(bytes.clone());
                 }
                 self.load_bytes(Loadable::Boot, bytes[..n].to_vec())
             }
@@ -176,7 +176,16 @@ impl Session {
                     rustemu_asm::assemble(&path.to_string_lossy(), &text, &mut loader).map_err(|e| e.to_string())?;
                 self.load_program(prog)
             }
+        };
+        if result.is_ok() {
+            if let Some(root) = root {
+                self.machine.set_dos_root(root);
+            }
+            if let Some(floppy) = floppy {
+                self.machine.floppy = floppy;
+            }
         }
+        result
     }
 
     /// Boots from the virtual floppy: sector 1 is loaded at 0000:7C00 (like the BIOS does).
@@ -185,7 +194,6 @@ impl Session {
             return Err("the virtual floppy is empty".into());
         }
         let sector = self.machine.floppy[..512].to_vec();
-        self.program = None;
         self.load_bytes(Loadable::Boot, sector)
     }
 
@@ -203,7 +211,8 @@ impl Session {
     pub fn reload(&mut self) -> Result<(), String> {
         let bps = self.machine.breakpoints.clone();
         let (kind, bytes) = self.loaded.clone().ok_or("nothing loaded")?;
-        self.load_bytes(kind, bytes)?;
+        let program = self.program.clone();
+        self.load_bytes_with_program(kind, bytes, program)?;
         self.machine.breakpoints = bps;
         Ok(())
     }
