@@ -175,6 +175,10 @@ pub struct App {
     pub messages: Vec<Message>,
     /// Error lines of the current file (1-based).
     pub error_lines: Vec<u32>,
+    /// A build/load has failed since the last successful emulator load. The
+    /// previous machine remains available for inspection, but Run must not
+    /// start it by mistake.
+    build_failed: bool,
     pub goto_line: Option<u32>,
     pub cursor_line: u32,
     // ---- emulator
@@ -272,6 +276,7 @@ impl App {
             saved_text: String::new(),
             messages: Vec::new(),
             error_lines: Vec::new(),
+            build_failed: false,
             goto_line: None,
             cursor_line: 1,
             session: Session::new(),
@@ -625,6 +630,7 @@ impl App {
                 Some(p)
             }
             Err(e) => {
+                self.build_failed = true;
                 for err in &e.errors {
                     let file = e.files.get(err.file).cloned().unwrap_or_default();
                     let short =
@@ -711,6 +717,7 @@ impl App {
         let devices = p.emu.start.clone();
         let root = self.vdrive();
         if let Err(e) = self.session.load_program(p) {
+            self.build_failed = true;
             self.notice("Load", &e);
             return;
         }
@@ -742,6 +749,7 @@ impl App {
     }
 
     fn after_load(&mut self) {
+        self.build_failed = false;
         self.session.machine.timer_irq = self.settings.timer_irq;
         self.load_gen += 1;
         for w in &mut self.watches {
@@ -840,11 +848,11 @@ impl App {
     }
 
     pub fn start_run(&mut self) {
-        if !self.loaded() {
+        if !self.loaded() || self.build_failed {
             self.emulate();
             // `emulate` leaves the assembly error in `status`. Do not turn a
-            // failed initial load into a seemingly successful run.
-            if !self.loaded() {
+            // failed load into a seemingly successful run of the old image.
+            if !self.loaded() || self.build_failed {
                 return;
             }
         }

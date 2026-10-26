@@ -53,6 +53,39 @@ fn run_does_not_start_after_assembly_failure() {
     assert_eq!(app.run, crate::app::RunMode::Paused);
     assert!(!app.loaded());
     assert_eq!(app.status, "Assembly failed");
+
+    // A failed rebuild keeps the previous machine available for inspection,
+    // but F5 must not start that stale image.
+    app.load_example(0);
+    app.emulate();
+    assert!(app.loaded());
+    let cpu = app.session.machine.cpu.clone();
+    app.text = "org 100h\nnot_an_instruction\n".into();
+    app.emulate();
+    assert_eq!(app.status, "Assembly failed");
+
+    app.start_run();
+
+    assert_eq!(app.run, crate::app::RunMode::Paused);
+    assert!(app.loaded());
+    assert_eq!(app.status, "Assembly failed");
+    assert_eq!(app.session.machine.cpu, cpu);
+
+    // A successful Compile writes files but does not load the resulting image.
+    // F5 must therefore still rebuild/load it instead of running the old image.
+    let dir = std::env::temp_dir().join(format!("rustemu_f5_after_error_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    app.path = Some(dir.join("fixed.asm"));
+    app.text = "org 100h\nmov ax, 1234h\nhlt\n".into();
+    let expected = rustemu_asm::assemble_str(&app.text).unwrap().image;
+    app.compile();
+    assert!(app.status.starts_with("Compiled to"));
+
+    app.start_run();
+
+    assert_eq!(app.run, crate::app::RunMode::Running);
+    assert_eq!(app.session.program.as_ref().unwrap().image, expected);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
