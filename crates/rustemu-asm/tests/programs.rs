@@ -101,6 +101,7 @@ fn emu8086_syntax_quirks() {
         bytes("org 100h\npusha\npopa\npush 5\npush 1234h\nimul si, bx, 7\nimul ax, 1234h\n"),
         [0x60, 0x61, 0x6A, 5, 0x68, 0x34, 0x12, 0x6B, 0xF3, 7, 0x69, 0xC0, 0x34, 0x12]
     );
+    assert!(err("org 100h\nimul ax, 10000h\n").contains("out of word range"));
     // ORG 100h with .data/.code is a COM file with the code first.
     let p = assemble_str("org 100h\n.data\nm db 'hi$'\n.code\nmov ax, @data\nmov dx, offset m\nret\n").unwrap();
     assert_eq!(p.format, Format::Com);

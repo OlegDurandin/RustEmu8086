@@ -281,6 +281,7 @@ fn host_file_io_is_a_step_back_boundary() {
     assert_eq!(s.machine.history_len(), 0);
     assert!(!s.machine.step_back());
     assert!(root.join("created.txt").exists());
+    drop(s);
     std::fs::remove_dir_all(root).unwrap();
 }
 

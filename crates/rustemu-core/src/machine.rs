@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::bus::{Bus, Memory, linear};
 use crate::cpu::{self, Cpu, StepResult, flags};
-use crate::devices::Devices;
+use crate::devices::{Devices, DevicesSnapshot};
 use crate::dos::{DosSnapshot, DosState};
 use crate::video::{self, Video};
 
@@ -172,7 +172,7 @@ struct Snapshot {
     undo: Vec<(u32, u8)>,
     keys: VecDeque<u16>,
     irq: VecDeque<u8>,
-    dev: Box<Devices>,
+    dev: DevicesSnapshot,
     dos: DosSnapshot,
     output_len: usize,
     log_len: usize,
@@ -584,6 +584,7 @@ impl Machine {
         }
         if !self.history_enabled {
             self.floppy_journal = None;
+            self.sys.dev.cancel_snapshot();
             if self.sys.mem.is_journaling() {
                 self.sys.mem.set_journaling(false);
             }
@@ -601,7 +602,7 @@ impl Machine {
         let snap_cpu = self.cpu.clone();
         let snap_keys = self.sys.keys.clone();
         let snap_irq = self.sys.irq.clone();
-        let snap_dev = Box::new(self.sys.dev.clone());
+        let snap_dev = self.sys.dev.begin_snapshot();
         let snap_dos = self.dos.snapshot();
         let out_len = self.output.len();
         let log_len = self.log.len();
@@ -626,6 +627,7 @@ impl Machine {
         {
             let undo = self.sys.mem.take_journal();
             let floppy_undo = self.floppy_journal.take().unwrap_or_default();
+            let snap_dev = self.sys.dev.finish_snapshot(snap_dev);
             if self.history_barrier {
                 self.history.clear();
                 return ev;
@@ -637,6 +639,7 @@ impl Machine {
                 && self.cpu.same_state(&snap_cpu)
                 && self.sys.keys == snap_keys
                 && self.sys.irq == snap_irq
+                && snap_dev.is_unchanged(&self.sys.dev)
                 && self.dos.snapshot() == snap_dos
                 && self.output.len() == out_len
                 && self.log.len() == log_len
@@ -726,7 +729,7 @@ impl Machine {
                 self.cpu = s.cpu;
                 self.sys.keys = s.keys;
                 self.sys.irq = s.irq;
-                self.sys.dev = *s.dev;
+                self.sys.dev.restore(s.dev);
                 self.dos.restore(s.dos);
                 self.output.truncate(s.output_len);
                 self.log.truncate(s.log_len);

@@ -188,15 +188,20 @@ fn thermometer(app: &mut App, ui: &mut Ui) {
         FontId::proportional(14.0),
         Color32::WHITE,
     );
-    ui.horizontal(|ui| {
-        let on = d.heater_on;
-        ui.label(if on {
-            RichText::new("heater: ON").color(Color32::from_rgb(240, 120, 60))
-        } else {
-            RichText::new("heater: off").weak()
-        });
-        ui.add(egui::Slider::new(&mut d.air_temperature, -65..=120).text("air °C"));
-    });
+    let changed = ui
+        .horizontal(|ui| {
+            let on = d.heater_on;
+            ui.label(if on {
+                RichText::new("heater: ON").color(Color32::from_rgb(240, 120, 60))
+            } else {
+                RichText::new("heater: off").weak()
+            });
+            ui.add(egui::Slider::new(&mut d.air_temperature, -65..=120).text("air °C")).changed()
+        })
+        .inner;
+    if changed {
+        app.session.machine.clear_history();
+    }
 }
 
 fn printer(app: &mut App, ui: &mut Ui) {
@@ -221,14 +226,19 @@ fn printer(app: &mut App, ui: &mut Ui) {
             );
         });
     });
-    if ui.small_button("clear paper").clicked() {
+    let cleared = ui.small_button("clear paper").clicked();
+    if cleared {
         d.printer.clear();
+    }
+    if cleared {
+        app.session.machine.clear_history();
     }
 }
 
 fn robot(app: &mut App, ui: &mut Ui) {
     use rustemu_core::robot::{Cell, STATUS_BUSY, STATUS_DATA, STATUS_ERROR};
     let r = &mut app.session.machine.sys.dev.robot;
+    let mut edited = false;
     let cell = 30.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(r.width as f32 * cell, r.height as f32 * cell), Sense::click());
     let p = ui.painter_at(rect);
@@ -263,8 +273,10 @@ fn robot(app: &mut App, ui: &mut Ui) {
         let (cx, cy) = ((rel.x / cell) as usize, (rel.y / cell) as usize);
         if resp.clicked() {
             r.cycle_cell(cx, cy);
+            edited = true;
         } else if resp.secondary_clicked() {
             r.place(cx, cy);
+            edited = true;
         }
     }
     let st = r.status();
@@ -279,16 +291,22 @@ fn robot(app: &mut App, ui: &mut Ui) {
         ui.separator();
         if ui.small_button("default room").clicked() {
             r.default_map();
+            edited = true;
         }
         if ui.small_button("clear").clicked() {
             r.clear_map();
+            edited = true;
         }
         ui.weak("click: wall → lamp on → lamp off → empty, robot cell: turn; right-click: move robot");
     });
+    if edited {
+        app.session.machine.clear_history();
+    }
 }
 
 fn simple_io(app: &mut App, ui: &mut Ui) {
     let latch = &mut app.session.machine.sys.dev.latch;
+    let mut edited = false;
     let byte = |l: &std::collections::HashMap<u16, u16>, p: u16| l.get(&p).copied().unwrap_or(0) as u8;
     let mut b110 = byte(latch, 110);
     let mut w112 = byte(latch, 112) as u16 | ((byte(latch, 113) as u16) << 8);
@@ -296,6 +314,7 @@ fn simple_io(app: &mut App, ui: &mut Ui) {
         let l = ui.label("port 110").id;
         if ui.add(egui::DragValue::new(&mut b110).hexadecimal(2, false, true)).labelled_by(l).changed() {
             latch.insert(110, b110 as u16);
+            edited = true;
         }
         ui.label(RichText::new(format!("{b110:08b}b  {b110}")).monospace());
         ui.end_row();
@@ -303,9 +322,13 @@ fn simple_io(app: &mut App, ui: &mut Ui) {
         if ui.add(egui::DragValue::new(&mut w112).hexadecimal(4, false, true)).labelled_by(l).changed() {
             latch.insert(112, w112 & 0xFF);
             latch.insert(113, w112 >> 8);
+            edited = true;
         }
         ui.label(RichText::new(format!("{w112:016b}b  {w112}")).monospace());
         ui.end_row();
     });
     ui.weak("values written with OUT appear here; edit them to change what IN reads");
+    if edited {
+        app.session.machine.clear_history();
+    }
 }

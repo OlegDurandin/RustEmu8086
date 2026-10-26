@@ -179,7 +179,10 @@ fn imm_w(e: &mut Enc, v: &Val) -> R<()> {
 }
 
 fn fits_i8(v: &Val) -> bool {
-    !v.unknown && v.seg_base.is_none() && (-128..=127).contains(&(v.num as u16 as i16))
+    !v.unknown
+        && v.seg_base.is_none()
+        && (-65_536..=65_535).contains(&v.num)
+        && (-128..=127).contains(&(v.num as u16 as i16))
 }
 
 /// Resolves the operand width (true = 16-bit) of a two-operand instruction.

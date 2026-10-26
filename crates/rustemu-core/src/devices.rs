@@ -66,6 +66,62 @@ pub struct Devices {
     /// Ports written (port, value) since the last [`Devices::take_events`].
     events: Vec<(u16, u16)>,
     pub robot: crate::robot::Robot,
+    latch_journal: Option<Vec<(u16, Option<u16>)>>,
+    palette_journal: Option<Vec<(usize, [u8; 3])>>,
+}
+
+/// Compact reversible state. Append-only observer buffers keep only their
+/// lengths; mutable collections record only entries touched by the step.
+pub(crate) struct DevicesSnapshot {
+    latch_undo: Vec<(u16, Option<u16>)>,
+    traffic_lights: u16,
+    stepper_pattern: u8,
+    stepper_rotor: u8,
+    stepper_dot: u8,
+    stepper_last_move: i8,
+    led: u16,
+    printer_len: usize,
+    heater_on: bool,
+    temperature: i32,
+    air_temperature: i32,
+    clock: DeviceClock,
+    last_tick: Option<std::time::Instant>,
+    thermo_ms: f64,
+    palette_undo: Vec<(usize, [u8; 3])>,
+    dac_write_index: u8,
+    dac_read_index: u8,
+    dac_component: u8,
+    retrace: u8,
+    last_scan: u8,
+    events_len: usize,
+    robot: crate::robot::RobotSnapshot,
+}
+
+impl DevicesSnapshot {
+    pub(crate) fn is_unchanged(&self, devices: &Devices) -> bool {
+        self.latch_undo.is_empty()
+            && self.traffic_lights == devices.traffic_lights
+            && self.stepper_pattern == devices.stepper_pattern
+            && self.stepper_rotor == devices.stepper_rotor
+            && self.stepper_dot == devices.stepper_dot
+            && self.stepper_last_move == devices.stepper_last_move
+            && self.led == devices.led
+            && self.printer_len == devices.printer.len()
+            && self.heater_on == devices.heater_on
+            && self.temperature == devices.temperature
+            && self.air_temperature == devices.air_temperature
+            && self.clock == devices.clock
+            && self.last_tick == devices.last_tick
+            && self.thermo_ms == devices.thermo_ms
+            && self.palette_undo.is_empty()
+            && self.dac_write_index == devices.dac_write_index
+            && self.dac_read_index == devices.dac_read_index
+            && self.dac_component == devices.dac_component
+            && self.retrace == devices.retrace
+            && self.last_scan == devices.last_scan
+            && self.events_len == devices.events.len()
+            && self.robot.is_unchanged(&devices.robot)
+    }
 }
 
 impl Default for Devices {
@@ -99,6 +155,108 @@ impl Devices {
             last_scan: 0,
             events: Vec::new(),
             robot: crate::robot::Robot::new(),
+            latch_journal: None,
+            palette_journal: None,
+        }
+    }
+
+    pub(crate) fn begin_snapshot(&mut self) -> DevicesSnapshot {
+        self.latch_journal = Some(Vec::new());
+        self.palette_journal = Some(Vec::new());
+        DevicesSnapshot {
+            latch_undo: Vec::new(),
+            traffic_lights: self.traffic_lights,
+            stepper_pattern: self.stepper_pattern,
+            stepper_rotor: self.stepper_rotor,
+            stepper_dot: self.stepper_dot,
+            stepper_last_move: self.stepper_last_move,
+            led: self.led,
+            printer_len: self.printer.len(),
+            heater_on: self.heater_on,
+            temperature: self.temperature,
+            air_temperature: self.air_temperature,
+            clock: self.clock,
+            last_tick: self.last_tick,
+            thermo_ms: self.thermo_ms,
+            palette_undo: Vec::new(),
+            dac_write_index: self.dac_write_index,
+            dac_read_index: self.dac_read_index,
+            dac_component: self.dac_component,
+            retrace: self.retrace,
+            last_scan: self.last_scan,
+            events_len: self.events.len(),
+            robot: self.robot.begin_snapshot(),
+        }
+    }
+
+    pub(crate) fn finish_snapshot(&mut self, mut snapshot: DevicesSnapshot) -> DevicesSnapshot {
+        snapshot.latch_undo = self.latch_journal.take().unwrap_or_default();
+        snapshot.palette_undo = self.palette_journal.take().unwrap_or_default();
+        snapshot.robot = self.robot.finish_snapshot(snapshot.robot);
+        snapshot
+    }
+
+    pub(crate) fn cancel_snapshot(&mut self) {
+        self.latch_journal = None;
+        self.palette_journal = None;
+        self.robot.cancel_snapshot();
+    }
+
+    pub(crate) fn restore(&mut self, snapshot: DevicesSnapshot) {
+        for (port, value) in snapshot.latch_undo.into_iter().rev() {
+            match value {
+                Some(value) => self.latch.insert(port, value),
+                None => self.latch.remove(&port),
+            };
+        }
+        self.traffic_lights = snapshot.traffic_lights;
+        self.stepper_pattern = snapshot.stepper_pattern;
+        self.stepper_rotor = snapshot.stepper_rotor;
+        self.stepper_dot = snapshot.stepper_dot;
+        self.stepper_last_move = snapshot.stepper_last_move;
+        self.led = snapshot.led;
+        self.printer.truncate(snapshot.printer_len);
+        self.heater_on = snapshot.heater_on;
+        self.temperature = snapshot.temperature;
+        self.air_temperature = snapshot.air_temperature;
+        self.clock = snapshot.clock;
+        self.last_tick = snapshot.last_tick;
+        self.thermo_ms = snapshot.thermo_ms;
+        for (i, value) in snapshot.palette_undo.into_iter().rev() {
+            self.palette[i] = value;
+        }
+        self.dac_write_index = snapshot.dac_write_index;
+        self.dac_read_index = snapshot.dac_read_index;
+        self.dac_component = snapshot.dac_component;
+        self.retrace = snapshot.retrace;
+        self.last_scan = snapshot.last_scan;
+        self.events.truncate(snapshot.events_len);
+        self.robot.restore(snapshot.robot);
+        self.latch_journal = None;
+        self.palette_journal = None;
+    }
+
+    fn set_latch(&mut self, port: u16, value: u16) {
+        if let Some(journal) = &mut self.latch_journal
+            && !journal.iter().any(|(p, _)| *p == port)
+        {
+            journal.push((port, self.latch.get(&port).copied()));
+        }
+        self.latch.insert(port, value);
+    }
+
+    pub(crate) fn set_palette(&mut self, index: usize, value: [u8; 3]) {
+        if let Some(journal) = &mut self.palette_journal
+            && !journal.iter().any(|(i, _)| *i == index)
+        {
+            journal.push((index, self.palette[index]));
+        }
+        self.palette[index] = value;
+    }
+
+    pub(crate) fn replace_palette(&mut self, palette: [[u8; 3]; 256]) {
+        for (i, value) in palette.into_iter().enumerate() {
+            self.set_palette(i, value);
         }
     }
 
@@ -191,7 +349,7 @@ impl Devices {
     }
 
     pub fn output8(&mut self, port: u16, v: u8) {
-        self.latch.insert(port, v as u16);
+        self.set_latch(port, v as u16);
         self.events.push((port, v as u16));
         match port {
             0x3C7 => {
@@ -203,7 +361,10 @@ impl Devices {
                 self.dac_component = 0;
             }
             0x3C9 => {
-                self.palette[self.dac_write_index as usize][self.dac_component as usize] = v & 0x3F;
+                let i = self.dac_write_index as usize;
+                let mut value = self.palette[i];
+                value[self.dac_component as usize] = v & 0x3F;
+                self.set_palette(i, value);
                 self.advance_dac(true);
             }
             ports::TRAFFIC_LIGHTS => self.traffic_lights = (self.traffic_lights & 0xFF00) | v as u16,
@@ -220,12 +381,12 @@ impl Devices {
         match port {
             ports::TRAFFIC_LIGHTS => {
                 self.traffic_lights = v;
-                self.latch.insert(port, v);
+                self.set_latch(port, v);
                 self.events.push((port, v));
             }
             ports::LED_DISPLAY => {
                 self.led = v;
-                self.latch.insert(port, v);
+                self.set_latch(port, v);
                 self.events.push((port, v));
             }
             _ => {
@@ -263,5 +424,42 @@ impl Devices {
             }
             None => self.stepper_last_move = 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::robot::Cell;
+
+    #[test]
+    fn snapshot_uses_deltas_for_collections_and_lengths_for_buffers() {
+        let mut d = Devices::new();
+        d.latch.insert(42, 7);
+        d.printer = Vec::with_capacity(1_000_001);
+        d.printer.resize(1_000_000, b'x');
+        d.robot.clear_map();
+        let printer_ptr = d.printer.as_ptr();
+        let old_palette = d.palette[0];
+
+        let snapshot = d.begin_snapshot();
+        assert_eq!(d.printer.as_ptr(), printer_ptr);
+        d.output8(42, 9);
+        d.output8(43, 10);
+        d.output8(ports::PRINTER, b'y');
+        d.output16(ports::TRAFFIC_LIGHTS, 0x0249);
+        d.set_palette(0, [1, 2, 3]);
+        d.robot.set(1, 1, Cell::Wall);
+        let snapshot = d.finish_snapshot(snapshot);
+
+        d.restore(snapshot);
+        assert_eq!(d.latch.get(&42), Some(&7));
+        assert!(!d.latch.contains_key(&43));
+        assert_eq!(d.printer.len(), 1_000_000);
+        assert_eq!(d.printer.as_ptr(), printer_ptr);
+        assert_eq!(d.traffic_lights, 0);
+        assert_eq!(d.palette[0], old_palette);
+        assert_eq!(d.robot.get(1, 1), Cell::Empty);
+        assert!(d.events.is_empty());
     }
 }
