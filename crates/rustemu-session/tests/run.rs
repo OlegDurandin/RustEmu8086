@@ -484,3 +484,57 @@ fn command_line_parameters_in_psp() {
 fn asm_ok(src: &str) -> rustemu_asm::Program {
     rustemu_asm::assemble_str(src).unwrap()
 }
+
+#[test]
+fn call_stack_and_expressions() {
+    let src = "org 100h
+    mov bx, 3
+    call outer
+    ret
+outer proc
+    push ax
+    call inner
+    pop ax
+    ret
+outer endp
+inner proc
+    int 3
+    ret
+inner endp
+value dw 1234h
+table db 1, 2, 3
+";
+    let prog = rustemu_asm::assemble_str(src).unwrap();
+    let mut s = Session::new();
+    s.load_program(prog).unwrap();
+    assert_eq!(s.machine.run(1000), Event::Breakpoint);
+    let frames = s.call_stack();
+    let lines: Vec<u32> = frames.iter().map(|f| s.line_at_addr(f.call_addr).unwrap().1).collect();
+    assert_eq!(lines, [7, 3], "{frames:?}");
+    let names: Vec<&str> = frames.iter().map(|f| s.symbol_at(f.target.unwrap()).unwrap()).collect();
+    assert_eq!(names, ["INNER", "OUTER"]);
+    let ev = |e: &str| s.compile(e).map(|x| x.eval(&s.machine));
+    assert_eq!(ev("value"), Ok(0x1234));
+    assert_eq!(ev("table[bx-1]"), Ok(3));
+    assert_eq!(ev("byte [offset table + 1]"), Ok(2));
+    assert_eq!(ev("value == 1234h && bx = 3"), Ok(1));
+    assert!(ev("nothing").is_err());
+
+    // EXE: variables live in the data segment.
+    let exe = "data segment
+    n dw 77
+data ends
+code segment
+start:
+    mov ax, data
+    mov ds, ax
+    int 3
+code ends
+end start
+";
+    let mut s = Session::new();
+    s.load_program(rustemu_asm::assemble_str(exe).unwrap()).unwrap();
+    assert_eq!(s.machine.run(1000), Event::Breakpoint);
+    assert_eq!(s.compile("n").unwrap().eval(&s.machine), 77);
+    assert_eq!(s.compile("ds == data").unwrap().eval(&s.machine), 1);
+}

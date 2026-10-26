@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use egui::{Key, KeyboardShortcut, Modifiers};
 use rustemu_core::cpu::Cpu;
 use rustemu_core::{Event, disasm};
+use rustemu_session::expr::Expr;
 use rustemu_session::{Session, StepGoal, StepKind};
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +61,12 @@ pub struct Windows {
     pub ascii: bool,
     pub converter: bool,
     pub console: bool,
+    pub breakpoints: bool,
+    pub watch: bool,
+    pub call_stack: bool,
+    pub alu: bool,
+    pub stop_condition: bool,
+    pub flag_analyser: bool,
 }
 
 pub struct Message {
@@ -69,14 +76,53 @@ pub struct Message {
     pub error: bool,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RunMode {
     Paused,
     Running,
-    /// Run until execution reaches this address (`g addr` in the console, binaries without source).
-    StepOver(u32),
+    /// Run until execution reaches one of these addresses (Run to cursor, `g addr` in the console,
+    /// Step Over in binaries without source).
+    RunTo(Vec<u32>),
     /// Source-level Step Over / Step Out in progress.
     Source(StepGoal),
+}
+
+/// A line breakpoint.
+#[derive(Clone)]
+pub struct Breakpoint {
+    /// Stop only when this expression is not zero (empty: always).
+    pub condition: String,
+    pub enabled: bool,
+    /// Times execution stopped here.
+    pub hits: u32,
+    /// Compiled condition, or why it does not compile (None: no condition / not compiled yet).
+    pub compiled: Option<Result<Expr, String>>,
+}
+
+impl Breakpoint {
+    pub fn new() -> Self {
+        Breakpoint { condition: String::new(), enabled: true, hits: 0, compiled: None }
+    }
+}
+
+/// "Stop on condition" (checked after every instruction while running).
+#[derive(Default)]
+pub struct StopCondition {
+    pub text: String,
+    pub enabled: bool,
+    /// Stop when the value changes (otherwise: when it becomes non-zero).
+    pub on_change: bool,
+    pub compiled: Option<Result<Expr, String>>,
+    /// Value after the previous instruction.
+    pub last: Option<i64>,
+}
+
+/// An expression in the watch window.
+pub struct Watch {
+    pub text: String,
+    pub compiled: Option<Result<Expr, String>>,
+    /// Value when execution was last started (to show what changed).
+    pub before: Option<i64>,
 }
 
 pub struct App {
@@ -109,8 +155,18 @@ pub struct App {
     pub notice: Option<(String, String)>,
     pub confirm_discard: Option<PendingAction>,
     pub converter_text: String,
-    /// Breakpoints as (file index, line).
-    pub bp_lines: std::collections::HashSet<(usize, u32)>,
+    /// Line breakpoints by (file index, line).
+    pub bp_lines: std::collections::BTreeMap<(usize, u32), Breakpoint>,
+    /// Address of each line breakpoint in the loaded program.
+    pub bp_addr: std::collections::HashMap<u32, (usize, u32)>,
+    pub stop_condition: StopCondition,
+    pub watches: Vec<Watch>,
+    /// Source text the loaded program was assembled from (to warn when it is outdated).
+    pub loaded_text: Option<String>,
+    /// Incremented on every load (compiled expressions refer to the program's symbols).
+    pub load_gen: u64,
+    /// Editor line of the current instruction in the last frame (to scroll it into view).
+    pub editor_exec_line: Option<u32>,
     /// First address of the disassembly list.
     pub code_view_start: u32,
     pub last_source_pos: Option<(usize, u32)>,
@@ -187,6 +243,12 @@ impl App {
             confirm_discard: None,
             converter_text: String::new(),
             bp_lines: Default::default(),
+            bp_addr: Default::default(),
+            stop_condition: Default::default(),
+            watches: Vec::new(),
+            loaded_text: None,
+            load_gen: 0,
+            editor_exec_line: None,
             code_view_start: 0,
             last_source_pos: None,
             source_scroll_pending: None,
@@ -463,6 +525,7 @@ impl App {
         self.source_index =
             self.source_files.iter().map(|(_, lines)| rustemu_asm::library::index(&lines.join("\n"))).collect();
         let devices = p.emu.start.clone();
+        self.loaded_text = Some(self.text.clone());
         let root = self.vdrive();
         self.session.machine.set_dos_root(root);
         if let Err(e) = self.session.load_program(p) {
@@ -486,6 +549,7 @@ impl App {
 
     /// After loading code without debug information (binary file, boot from floppy).
     pub fn after_binary_load(&mut self) {
+        self.loaded_text = None;
         self.source_files.clear();
         self.source_index.clear();
         self.after_load();
@@ -493,9 +557,14 @@ impl App {
 
     fn after_load(&mut self) {
         self.session.machine.timer_irq = self.settings.timer_irq;
+        self.load_gen += 1;
+        for w in &mut self.watches {
+            w.compiled = None;
+        }
+        self.stop_condition.compiled = None;
         self.sync_breakpoints();
         self.run = RunMode::Paused;
-        self.prev_cpu = self.session.machine.cpu.clone();
+        self.begin_exec();
         self.source_file_idx = 0;
         self.windows.emulator = true;
         self.windows.screen = true;
@@ -528,18 +597,23 @@ impl App {
         self.session.machine.loaded.is_some()
     }
 
+    /// The loaded program was assembled from a different version of the editor text.
+    pub fn is_stale(&self) -> bool {
+        self.loaded() && self.loaded_text.as_ref().is_some_and(|t| *t != self.text)
+    }
+
     // ---- execution -----------------------------------------------------------------------
 
     pub fn single_step(&mut self) {
         self.run = RunMode::Paused;
-        self.prev_cpu = self.session.machine.cpu.clone();
+        self.begin_exec();
         let ev = self.session.machine.step();
         self.handle_event(ev);
     }
 
     pub fn step_back(&mut self) {
         self.run = RunMode::Paused;
-        self.prev_cpu = self.session.machine.cpu.clone();
+        self.begin_exec();
         if self.session.machine.step_back() {
             self.status = "Stepped back".into();
         } else {
@@ -551,7 +625,7 @@ impl App {
     /// Without debug information: runs CALL / INT / LOOP / REP to the next instruction.
     pub fn step_over(&mut self) {
         if self.session.program.is_some() {
-            self.prev_cpu = self.session.machine.cpu.clone();
+            self.begin_exec();
             self.run = RunMode::Source(self.session.step_goal(StepKind::Over, self.show_macro_code));
             self.status = "Stepping over...".into();
             return;
@@ -564,8 +638,8 @@ impl App {
         let over = t.starts_with("CALL") || t.starts_with("INT") || t.starts_with("LOOP") || t.starts_with("REP");
         if over {
             let next = rustemu_core::linear(m.cpu.cs(), m.cpu.ip.wrapping_add(ins.len as u16));
-            self.prev_cpu = m.cpu.clone();
-            self.run = RunMode::StepOver(next);
+            self.begin_exec();
+            self.run = RunMode::RunTo(vec![next]);
         } else {
             self.single_step();
         }
@@ -573,7 +647,7 @@ impl App {
 
     /// Step Out: runs until the current macro or procedure returns to its caller.
     pub fn step_out(&mut self) {
-        self.prev_cpu = self.session.machine.cpu.clone();
+        self.begin_exec();
         self.run = RunMode::Source(self.session.step_goal(StepKind::Out, self.show_macro_code));
         self.status = "Stepping out...".into();
     }
@@ -586,9 +660,125 @@ impl App {
             self.status = "Program has terminated - press Reload to run again".into();
             return;
         }
-        self.prev_cpu = self.session.machine.cpu.clone();
+        self.begin_exec();
         self.run = RunMode::Running;
         self.status = "Running...".into();
+    }
+
+    /// F4: runs until execution reaches the line with the text cursor (or a breakpoint).
+    pub fn run_to_cursor(&mut self) {
+        self.run_to_line(0, self.cursor_line);
+    }
+
+    /// Runs until execution reaches `line` of source file `file` (the next line with code).
+    pub fn run_to_line(&mut self, file: usize, line: u32) {
+        if !self.loaded() || self.session.program.is_none() {
+            self.emulate();
+            if !self.loaded() {
+                return;
+            }
+        }
+        if file == 0 && self.is_stale() {
+            self.status = "The source was changed - reassemble (F9) before running to a line".into();
+            return;
+        }
+        if self.session.machine.terminated.is_some() {
+            self.status = "Program has terminated - press Reload to run again".into();
+            return;
+        }
+        let Some(l) = (line..line + 20).find(|&l| self.session.addr_of_line(file, l).is_some()) else {
+            self.status = format!("No code at line {line}");
+            return;
+        };
+        self.begin_exec();
+        self.run = RunMode::RunTo(self.session.addrs_of_line(file, l));
+        self.status = format!("Running to line {l}...");
+    }
+
+    /// Remembers the state before an execution command (changed registers and watches are highlighted).
+    pub fn begin_exec(&mut self) {
+        self.prev_cpu = self.session.machine.cpu.clone();
+        for i in 0..self.watches.len() {
+            self.watches[i].before = self.watch_value(i).ok();
+        }
+        let v = self.stop_value();
+        self.stop_condition.last = v;
+    }
+
+    /// Current value of watch `i`.
+    pub fn watch_value(&mut self, i: usize) -> Result<i64, String> {
+        let w = &mut self.watches[i];
+        if w.compiled.is_none() {
+            w.compiled = Some(self.session.compile(&w.text));
+        }
+        match w.compiled.as_ref().unwrap() {
+            Ok(e) => Ok(e.eval(&self.session.machine)),
+            Err(e) => Err(e.clone()),
+        }
+    }
+
+    /// Value of the stop condition, when it is enabled and valid.
+    fn stop_value(&mut self) -> Option<i64> {
+        let sc = &mut self.stop_condition;
+        if !sc.enabled || sc.text.trim().is_empty() || self.session.machine.loaded.is_none() {
+            return None;
+        }
+        if sc.compiled.is_none() {
+            sc.compiled = Some(self.session.compile(&sc.text));
+        }
+        sc.compiled.as_ref().unwrap().as_ref().ok().map(|e| e.eval(&self.session.machine))
+    }
+
+    fn stop_condition_active(&self) -> bool {
+        let sc = &self.stop_condition;
+        sc.enabled && !sc.text.trim().is_empty() && !matches!(sc.compiled, Some(Err(_)))
+    }
+
+    /// Checks the stop condition after an instruction; stops execution when it is met.
+    fn check_stop_condition(&mut self) -> bool {
+        let Some(v) = self.stop_value() else { return false };
+        let last = self.stop_condition.last.replace(v);
+        let met = if self.stop_condition.on_change { last.is_some_and(|l| l != v) } else { v != 0 && last == Some(0) };
+        if met {
+            self.run = RunMode::Paused;
+            let c = &self.session.machine.cpu;
+            self.status = if self.stop_condition.on_change {
+                format!(
+                    "Stopped: {} changed from {} to {v} at {:04X}:{:04X}",
+                    self.stop_condition.text,
+                    last.unwrap_or(0),
+                    c.cs(),
+                    c.ip
+                )
+            } else {
+                format!("Stopped: {} is true at {:04X}:{:04X}", self.stop_condition.text, c.cs(), c.ip)
+            };
+        }
+        met
+    }
+
+    /// Decides whether execution that reached a breakpoint address should stop there: the line
+    /// breakpoint's condition must hold. Counts the hit.
+    fn breakpoint_hit(&mut self, pc: u32) -> bool {
+        let Some(key) = self.bp_addr.get(&pc).copied() else { return true };
+        let Some(bp) = self.bp_lines.get_mut(&key) else { return true };
+        if bp.compiled.is_none() && !bp.condition.trim().is_empty() {
+            bp.compiled = Some(self.session.compile(&bp.condition));
+        }
+        let stop = match &bp.compiled {
+            Some(Ok(e)) if !bp.condition.trim().is_empty() => e.eval(&self.session.machine) != 0,
+            _ => true,
+        };
+        if stop {
+            bp.hits += 1;
+        }
+        stop
+    }
+
+    /// Is there a breakpoint at the current position that should stop execution?
+    fn at_breakpoint(&mut self) -> bool {
+        let pc = self.session.machine.cpu.pc();
+        self.session.machine.breakpoints.contains(&pc) && self.breakpoint_hit(pc)
     }
 
     pub fn stop(&mut self) {
@@ -649,6 +839,9 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
             return;
         }
+        // Emulation time per frame.
+        let frame = std::time::Duration::from_millis(12);
+        let start = std::time::Instant::now();
         match self.run.clone() {
             RunMode::Running if self.settings.step_delay_ms > 0 => {
                 if (now - self.last_step) * 1000.0 >= self.settings.step_delay_ms as f64 {
@@ -656,61 +849,107 @@ impl App {
                     self.prev_cpu = self.session.machine.cpu.clone();
                     let ev = self.session.machine.step();
                     self.handle_event(ev);
-                    if self.run != RunMode::Paused
-                        && self.session.machine.breakpoints.contains(&self.session.machine.cpu.pc())
-                    {
+                    if self.run != RunMode::Paused && self.at_breakpoint() {
                         self.handle_event(Event::Breakpoint);
+                    } else if self.run != RunMode::Paused {
+                        self.check_stop_condition();
                     }
                 }
                 ctx.request_repaint_after(std::time::Duration::from_millis(self.settings.step_delay_ms.min(30) as u64));
             }
-            RunMode::Running => {
-                let start = std::time::Instant::now();
-                let ev = self.session.machine.run(self.instr_per_frame);
-                // Aim at ~12 ms of emulation per frame.
-                let el = start.elapsed().as_secs_f64();
-                if ev == Event::Budget {
-                    if el < 0.008 {
-                        self.instr_per_frame = (self.instr_per_frame * 3 / 2).min(20_000_000);
-                    } else if el > 0.016 {
-                        self.instr_per_frame = (self.instr_per_frame * 2 / 3).max(1000);
+            RunMode::Running if self.stop_condition_active() => {
+                // The condition is checked after every instruction.
+                'run: while start.elapsed() < frame {
+                    for _ in 0..4096 {
+                        let ev = self.session.machine.step();
+                        if ev != Event::Continue {
+                            self.handle_event(ev);
+                            break 'run;
+                        }
+                        if self.at_breakpoint() {
+                            self.handle_event(Event::Breakpoint);
+                            break 'run;
+                        }
+                        if self.check_stop_condition() {
+                            break 'run;
+                        }
                     }
                 }
-                self.handle_event(ev);
                 ctx.request_repaint();
             }
-            RunMode::StepOver(target) => {
-                let m = &mut self.session.machine;
-                let mut ev = Event::Continue;
-                for _ in 0..self.instr_per_frame {
-                    ev = m.step();
-                    if ev != Event::Continue || m.cpu.pc() == target || m.breakpoints.contains(&m.cpu.pc()) {
+            RunMode::Running => {
+                loop {
+                    let t = std::time::Instant::now();
+                    let ev = self.session.machine.run(self.instr_per_frame);
+                    let el = t.elapsed().as_secs_f64();
+                    if ev == Event::Budget {
+                        // Aim at ~12 ms of emulation per frame.
+                        if el < 0.008 {
+                            self.instr_per_frame = (self.instr_per_frame * 3 / 2).min(20_000_000);
+                        } else if el > 0.016 {
+                            self.instr_per_frame = (self.instr_per_frame * 2 / 3).max(1000);
+                        }
+                    }
+                    // A conditional breakpoint whose condition is false: keep going.
+                    if ev == Event::Breakpoint && !self.breakpoint_hit(self.session.machine.cpu.pc()) {
+                        if start.elapsed() < frame {
+                            continue;
+                        }
                         break;
                     }
-                }
-                let pc = self.session.machine.cpu.pc();
-                if ev == Event::Continue && (pc == target || self.session.machine.breakpoints.contains(&pc)) {
-                    self.run = RunMode::Paused;
-                    self.status =
-                        format!("CS:IP = {:04X}:{:04X}", self.session.machine.cpu.cs(), self.session.machine.cpu.ip);
-                } else {
                     self.handle_event(ev);
+                    break;
+                }
+                ctx.request_repaint();
+            }
+            RunMode::RunTo(targets) => {
+                'run: while start.elapsed() < frame {
+                    for _ in 0..4096 {
+                        let ev = self.session.machine.step();
+                        if ev != Event::Continue {
+                            self.handle_event(ev);
+                            break 'run;
+                        }
+                        let pc = self.session.machine.cpu.pc();
+                        if targets.contains(&pc) {
+                            self.run = RunMode::Paused;
+                            let c = &self.session.machine.cpu;
+                            self.status = format!("CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
+                            break 'run;
+                        }
+                        if self.at_breakpoint() {
+                            self.handle_event(Event::Breakpoint);
+                            break 'run;
+                        }
+                        if self.stop_condition.enabled && self.check_stop_condition() {
+                            break 'run;
+                        }
+                    }
                 }
                 ctx.request_repaint();
             }
             RunMode::Source(mut goal) => {
-                match self.session.run_step_goal(&mut goal, self.instr_per_frame.max(10_000)) {
-                    None => self.run = RunMode::Source(goal),
-                    Some(Event::Continue) => {
-                        self.run = RunMode::Paused;
-                        let c = &self.session.machine.cpu;
-                        self.status = format!("CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
+                loop {
+                    match self.session.run_step_goal(&mut goal, self.instr_per_frame.max(10_000)) {
+                        None => self.run = RunMode::Source(goal.clone()),
+                        Some(Event::Continue) => {
+                            self.run = RunMode::Paused;
+                            let c = &self.session.machine.cpu;
+                            self.status = format!("CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
+                        }
+                        Some(Event::Breakpoint) if !self.breakpoint_hit(self.session.machine.cpu.pc()) => {
+                            self.run = RunMode::Source(goal.clone());
+                            if start.elapsed() < frame {
+                                continue;
+                            }
+                        }
+                        Some(ev @ (Event::WaitingInput | Event::Sleeping)) => {
+                            self.run = RunMode::Source(goal.clone());
+                            self.handle_event(ev);
+                        }
+                        Some(ev) => self.handle_event(ev),
                     }
-                    Some(ev @ (Event::WaitingInput | Event::Sleeping)) => {
-                        self.run = RunMode::Source(goal);
-                        self.handle_event(ev);
-                    }
-                    Some(ev) => self.handle_event(ev),
+                    break;
                 }
                 ctx.request_repaint();
             }
@@ -718,22 +957,53 @@ impl App {
         }
     }
 
+    /// Adds or removes a breakpoint. With a program loaded, a line without code puts the
+    /// breakpoint on the next line that has code.
     pub fn toggle_breakpoint_at_line(&mut self, file: usize, line: u32) {
-        if self.session.addr_of_line(file, line).is_none() {
-            self.status = format!("No code on line {line}");
+        if self.bp_lines.remove(&(file, line)).is_some() {
+            self.sync_breakpoints();
             return;
         }
-        if !self.bp_lines.remove(&(file, line)) {
-            self.bp_lines.insert((file, line));
-        }
+        let mapped = self.loaded() && self.session.program.is_some() && !(file == 0 && self.is_stale());
+        let line = if mapped {
+            match (line..line + 20).find(|&l| self.session.addr_of_line(file, l).is_some()) {
+                Some(l) => l,
+                None => {
+                    self.status = format!("No code on line {line}");
+                    return;
+                }
+            }
+        } else {
+            line
+        };
+        self.bp_lines.entry((file, line)).or_insert_with(Breakpoint::new);
         self.sync_breakpoints();
     }
 
-    /// Maps line breakpoints to addresses of the loaded program.
-    fn sync_breakpoints(&mut self) {
-        let addrs: std::collections::HashSet<u32> =
-            self.bp_lines.iter().flat_map(|&(f, l)| self.session.addrs_of_line(f, l)).collect();
-        self.session.machine.breakpoints = addrs;
+    /// Breakpoint on the editor line with the text cursor.
+    pub fn toggle_breakpoint_at_cursor(&mut self) {
+        self.toggle_breakpoint_at_line(0, self.cursor_line);
+    }
+
+    /// Maps line breakpoints to addresses of the loaded program (address breakpoints set in the
+    /// disassembly are kept). Outdated programs keep the old mapping until they are reassembled.
+    pub fn sync_breakpoints(&mut self) {
+        if self.is_stale() {
+            return;
+        }
+        let bps = &mut self.session.machine.breakpoints;
+        bps.retain(|a| !self.bp_addr.contains_key(a));
+        self.bp_addr.clear();
+        for (&(f, l), bp) in &mut self.bp_lines {
+            bp.compiled = None;
+            if !bp.enabled {
+                continue;
+            }
+            for a in self.session.addrs_of_line(f, l) {
+                self.bp_addr.insert(a, (f, l));
+                self.session.machine.breakpoints.insert(a);
+            }
+        }
     }
 
     // ---- shortcuts ------------------------------------------------------------------------------
@@ -802,6 +1072,12 @@ impl App {
         // F1: reference article for the word at the text cursor.
         if fire(sc(Modifiers::NONE, Key::F1)) {
             self.help_at_cursor();
+        }
+        if fire(sc(Modifiers::NONE, Key::F4)) {
+            self.run_to_cursor();
+        }
+        if fire(sc(cmd, Key::F8)) {
+            self.toggle_breakpoint_at_cursor();
         }
         if fire(sc(cmd, Key::Slash)) {
             crate::find::toggle_comment(self);

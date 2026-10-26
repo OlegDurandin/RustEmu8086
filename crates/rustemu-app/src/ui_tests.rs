@@ -189,3 +189,156 @@ fn reference_window_and_editor_lookup() {
     h.run_steps(5);
     save(&mut h, "14_reference_instruction");
 }
+
+/// Runs the emulation loop until execution pauses.
+fn run_until_paused(app: &mut App) {
+    let ctx = egui::Context::default();
+    for _ in 0..500 {
+        if app.run == crate::app::RunMode::Paused {
+            return;
+        }
+        app.tick(&ctx);
+    }
+    panic!("still running: {}", app.status);
+}
+
+const LOOP_SRC: &str = "org 100h
+    mov cx, 10
+next:
+    inc ax
+    loop next
+    mov bx, 1
+    ret
+";
+
+#[test]
+fn conditional_breakpoint_run_to_cursor_and_stop_condition() {
+    use rustemu_core::cpu::{AX, BX, CX};
+    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    app.text = LOOP_SRC.into();
+    app.emulate();
+    assert!(app.loaded());
+    // Breakpoint on `inc ax` that only stops when AX = 5.
+    app.toggle_breakpoint_at_line(0, 4);
+    app.bp_lines.get_mut(&(0, 4)).unwrap().condition = "ax == 5".into();
+    app.start_run();
+    run_until_paused(&mut app);
+    assert_eq!(app.session.machine.cpu.regs[AX], 5, "{}", app.status);
+    assert_eq!(app.bp_lines[&(0, 4)].hits, 1);
+    // Run to line 6: the condition is not true again on the way.
+    app.run_to_line(0, 6);
+    run_until_paused(&mut app);
+    assert_eq!(app.session.current_line(), Some((0, 6)));
+    assert_eq!(app.session.machine.cpu.regs[CX], 0);
+    // ALU window data: the last operation was the final INC AX.
+    assert_eq!(app.session.machine.cpu.alu_trace.op, rustemu_core::AluOp::Inc);
+
+    // Stop on condition: stops right after CX becomes 7.
+    app.reload();
+    app.bp_lines.clear();
+    app.sync_breakpoints();
+    app.stop_condition.text = "cx == 7".into();
+    app.stop_condition.enabled = true;
+    app.start_run();
+    run_until_paused(&mut app);
+    assert_eq!(app.session.machine.cpu.regs[CX], 7, "{}", app.status);
+    assert!(app.status.contains("is true"));
+    // "changes" mode on BX.
+    app.stop_condition.text = "bx".into();
+    app.stop_condition.compiled = None;
+    app.stop_condition.on_change = true;
+    app.start_run();
+    run_until_paused(&mut app);
+    assert_eq!(app.session.machine.cpu.regs[BX], 1, "{}", app.status);
+
+    // Editing the source makes the loaded program outdated.
+    assert!(!app.is_stale());
+    app.text.push_str("; changed\n");
+    assert!(app.is_stale());
+    app.run_to_line(0, 6);
+    assert_eq!(app.run, crate::app::RunMode::Paused);
+    assert!(app.status.contains("reassemble"));
+}
+
+#[test]
+fn breakpoints_follow_edited_lines() {
+    let map = crate::editor::line_mapper("a\nb\nc\nd", "a\nnew\nb\nc\nd");
+    assert_eq!((map(1), map(2), map(4)), (Some(1), Some(3), Some(5)));
+    // Typing inside a line keeps it; deleting a line drops its marks.
+    let map = crate::editor::line_mapper("a\nb\nc", "a\nbx\nc");
+    assert_eq!((map(2), map(3)), (Some(2), Some(3)));
+    let map = crate::editor::line_mapper("a\nb\nc", "a\nc");
+    assert_eq!((map(1), map(2), map(3)), (Some(1), None, Some(2)));
+}
+
+#[test]
+fn debugger_windows_snapshot() {
+    let src = "org 100h
+    mov ax, 7
+    call square
+    ret
+square proc
+    push bx
+    mov bx, ax
+    mul bx
+    pop bx
+    ret
+square endp
+value dw 1234h
+";
+    let mut h = harness(App::with_settings(crate::app::Settings { last_file: None, ..Default::default() }));
+    h.run();
+    let app = h.state_mut();
+    app.text = src.into();
+    app.emulate();
+    app.toggle_breakpoint_at_line(0, 9);
+    app.toggle_breakpoint_at_line(0, 2);
+    app.bp_lines.get_mut(&(0, 2)).unwrap().condition = "ax != 0".into();
+    app.start_run();
+    run_until_paused(app);
+    assert_eq!(app.session.current_line(), Some((0, 9)));
+    crate::debugger::add_watch(app, "ax");
+    crate::debugger::add_watch(app, "value");
+    crate::debugger::add_watch(app, "word ss:[sp]");
+    let w = &mut app.windows;
+    (w.breakpoints, w.call_stack, w.alu, w.source, w.emulator, w.screen) = (true, true, true, false, false, false);
+    h.run_steps(8);
+    save(&mut h, "15_debugger");
+}
+
+#[test]
+fn emu8086_style_emulator_windows() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    let app = h.state_mut();
+    app.emulate();
+    app.single_step();
+    let w = &mut app.windows;
+    (w.stack, w.flags, w.flag_analyser, w.console, w.source, w.screen) = (true, true, true, true, false, false);
+    h.run_steps(8);
+    save(&mut h, "16_emulator_emu8086_style");
+    // The debug log shows the state after the step, DEBUG.EXE style.
+    let lines = &h.state().console.lines;
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("AX=") && l.contains("BX=") && l.find("BX").unwrap() < l.find("CX").unwrap())
+    );
+}
+
+#[test]
+fn emulator_bottom_buttons_and_aux_menu() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    let app = h.state_mut();
+    app.emulate();
+    app.windows.screen = false;
+    app.windows.source = false;
+    h.run_steps(4);
+    h.get_by_label("aux").click();
+    h.run_steps(4);
+    save(&mut h, "17_emulator_aux_menu");
+    h.get_by_label("reset").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.machine.cpu.ip, 0x100);
+}

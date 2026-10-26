@@ -1,5 +1,7 @@
 //! Glue between the assembler and the emulator: loading programs, source-level debugging info.
 
+pub mod expr;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -351,11 +353,127 @@ impl Session {
         out
     }
 
+    /// Segment and offset where a program symbol lives (variables and labels).
+    fn symbol_seg_off(&self, s: &rustemu_asm::Symbol) -> Option<(u16, u16)> {
+        let (p, info) = (self.program.as_ref()?, self.machine.loaded.as_ref()?);
+        if info.kind == rustemu_core::LoadKind::Exe {
+            return Some((info.load_segment.wrapping_add(s.segment.unwrap_or(0)), s.value as u16));
+        }
+        let addr = info.image_base.wrapping_add((s.value as u32).wrapping_sub(p.origin as u32));
+        let base = addr.wrapping_sub(s.value as u16 as u32);
+        if base % 16 == 0 && base < 0x10_0000 {
+            Some(((base >> 4) as u16, s.value as u16))
+        } else {
+            Some(((addr >> 4) as u16, (addr & 15) as u16))
+        }
+    }
+
+    /// Resolves a name of the loaded program for debugger expressions (case-insensitive).
+    pub fn lookup_symbol(&self, name: &str) -> Option<expr::SymbolRef> {
+        let p = self.program.as_ref()?;
+        let s = p.symbols.iter().find(|s| s.name.eq_ignore_ascii_case(name))?;
+        Some(match s.kind {
+            SymbolKind::Variable => {
+                let (seg, off) = self.symbol_seg_off(s)?;
+                expr::SymbolRef::Variable { seg, off, size: s.size.unwrap_or(1).clamp(1, 8) }
+            }
+            SymbolKind::Segment => {
+                let base = self.machine.loaded.as_ref().map_or(0, |l| l.load_segment);
+                expr::SymbolRef::Value(base as i64 + s.value)
+            }
+            _ => expr::SymbolRef::Value(s.value),
+        })
+    }
+
+    /// Compiles a debugger expression against the loaded program's symbols.
+    pub fn compile(&self, text: &str) -> Result<expr::Expr, String> {
+        expr::Expr::parse(text, &|n| self.lookup_symbol(n))
+    }
+
+    /// Return addresses on the stack, innermost first (a heuristic walk: a word counts as a return
+    /// address when the bytes before it are a CALL, or an `INT n` for an interrupt frame).
+    pub fn call_stack(&self) -> Vec<Frame> {
+        let m = &self.machine;
+        let mem = &m.sys.mem;
+        let ss = m.cpu.sregs[cpu::SS];
+        let sp = m.cpu.regs[cpu::SP];
+        let (mut inner_cs, mut inner_ip, sp) = if m.cpu.cs() == ROM_SEG {
+            // Inside a BIOS/DOS service: the INT frame on top is the current position.
+            (mem.read16(linear(ss, sp.wrapping_add(2))), mem.read16(linear(ss, sp)).wrapping_sub(2), sp.wrapping_add(6))
+        } else {
+            (m.cpu.cs(), m.cpu.ip, sp)
+        };
+        let mut out = Vec::new();
+        let mut off = sp;
+        while off < 0xFFFE && out.len() < 64 {
+            let w = mem.read16(linear(ss, off));
+            let b = |cs: u16, ip: u16, back: u16| mem.read8(linear(cs, ip.wrapping_sub(back)));
+            let far_cs = mem.read16(linear(ss, off.wrapping_add(2)));
+            // Near CALL rel16: the target must be at or before the code that runs inside.
+            let frame = if b(inner_cs, w, 3) == 0xE8 && {
+                let target = w.wrapping_add(mem.read16(linear(inner_cs, w.wrapping_sub(2))));
+                target <= inner_ip && inner_ip - target < 0x4000
+            } {
+                let target = w.wrapping_add(mem.read16(linear(inner_cs, w.wrapping_sub(2))));
+                Some((FrameKind::Call, inner_cs, w, 3, Some(linear(inner_cs, target)), 2))
+            } else if b(inner_cs, w, 2) == 0xFF && (b(inner_cs, w, 1) & 0xF8) == 0xD0 {
+                // CALL reg16
+                Some((FrameKind::Call, inner_cs, w, 2, None, 2))
+            } else if off < 0xFFFA
+                && b(far_cs, w, 2) == 0xCD
+                && mem.read16(linear(ss, off.wrapping_add(4))) & 0x0002 != 0
+            {
+                Some((FrameKind::Interrupt(b(far_cs, w, 1)), far_cs, w, 2, None, 6))
+            } else if b(far_cs, w, 5) == 0x9A && mem.read16(linear(far_cs, w.wrapping_sub(2))) == inner_cs {
+                let t = mem.read16(linear(far_cs, w.wrapping_sub(4)));
+                Some((FrameKind::Call, far_cs, w, 5, Some(linear(inner_cs, t)), 4))
+            } else {
+                None
+            };
+            match frame {
+                Some((kind, cs, ret, len, target, size)) => {
+                    out.push(Frame {
+                        kind,
+                        return_addr: linear(cs, ret),
+                        call_addr: linear(cs, ret.wrapping_sub(len)),
+                        target,
+                        stack_offset: off,
+                    });
+                    inner_cs = cs;
+                    inner_ip = ret.wrapping_sub(len);
+                    off = off.wrapping_add(size);
+                }
+                None => off = off.wrapping_add(2),
+            }
+        }
+        out
+    }
+
     /// Runs headless until the program ends, blocks for input with no keys queued, or `budget`
     /// instructions are executed.
     pub fn run_headless(&mut self, budget: u64) -> Event {
         self.machine.run(budget)
     }
+}
+
+/// A return address found on the stack (see [`Session::call_stack`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Frame {
+    pub kind: FrameKind,
+    /// Where execution continues after the return.
+    pub return_addr: u32,
+    /// The CALL / INT instruction.
+    pub call_addr: u32,
+    /// The called address when it is known (direct calls).
+    pub target: Option<u32>,
+    /// SP offset of the frame in the stack segment.
+    pub stack_offset: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameKind {
+    Call,
+    Interrupt(u8),
 }
 
 /// Default load segment used for COM/EXE programs (PSP).

@@ -11,7 +11,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 |---|---|
 | `crates/rustemu-core` | Эмулятор: CPU 8086 (`cpu.rs`), шина/память 1 MiB с журналом (`bus.rs`), `Machine` (загрузчики, шаг/run/шаг назад, точки останова — `machine.rs`), BIOS (`bios.rs`: INT 10h/13h/15h/16h/1Ah/33h), DOS (`dos.rs`: INT 21h, файлы в песочнице), видео (`video.rs`), порты и виртуальные устройства (`devices.rs`), шрифт/CP437 (`font.rs`), скан-коды (`keyboard.rs`), дизассемблер (`disasm.rs`). Без зависимостей от GUI. |
 | `crates/rustemu-asm` | Ассемблер диалекта Emu8086/MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
-| `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload. |
+| `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
 | `crates/rustemu-app` | GUI-бинарь `RustEmu8086` на `eframe/egui` 0.37 (см. этап 5). |
 
@@ -124,7 +124,7 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
 Модули: `app.rs` (состояние, файлы, compile/emulate, цикл выполнения, горячие клавиши), `ui.rs` (меню,
 тулбар, сообщения, диалоги, инструменты), `editor.rs` + `highlight.rs`, `emulator.rs` (окно эмулятора и
 исходника), `screen.rs`, `debug.rs`, `devices_ui.rs`, `examples.rs` (встроенные `examples/*.asm`),
-`help.rs`, `reference.rs` + `reference_ui.rs`, `fonts.rs`, `ui_tests.rs` (kittest, PNG-снимки в `target/ui-snapshots/`).
+`help.rs`, `reference.rs` + `reference_ui.rs`, `debugger.rs`, `fonts.rs`, `ui_tests.rs` (kittest, PNG-снимки в `target/ui-snapshots/`).
 - [x] 5.1 Редактор: подсветка, номера строк, отметки ошибок, переход к строке по клику на ошибку,
       открыть/сохранить/недавние, примеры, compile (⌘B, пишет .com/.exe + .lst + .symbol), emulate (F9)
 - [x] 5.2 Окно эмулятора: редактируемые регистры (изменённые — красным), дизассемблер от CS:IP,
@@ -155,7 +155,16 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
       «choose code template» при New, закладки (`editcmd.rs`), калькулятор (`calc.rs`, `rustemu_asm::evaluate`),
       окно options, горячие клавиши редактора Emu8086 (⌃Q/⌃W/⌃L/⌃U/⌃G/⌃H, F2/F3)
 - [x] 5.11 Темы Light (по умолчанию)/Dark/System, акцентные цвета — `colors.rs`; меню Examples в строке меню
-- [~] 5.9 Debug-консоль в стиле DEBUG.EXE (`console.rs`: r/d/e/f/u/t/p/g/h); окна ALU пока нет
+- [x] 5.9 Debug-консоль в стиле DEBUG.EXE (`console.rs`: r/d/e/f/u/t/p/g/h)
+- [x] 5.14 Отладчик уровня IDE (`debugger.rs`): точки останова и текущая строка в редакторе (клик по полю,
+      ⌘F8; при правке точки и закладки сдвигаются со строками), Run to cursor (F4, контекстное меню),
+      условные точки останова со счётчиком попаданий, «stop on condition» (стало истинным / изменилось),
+      окна watch, call stack, ALU (`Cpu::alu_trace` — последняя операция АЛУ, ~3% к скорости),
+      значение регистра/переменной при наведении, предупреждение об устаревшей программе (`App::is_stale`)
+- [x] 5.15 Окно эмулятора как в Emu8086: регистры AX BX CX DX CS IP SS SP BP SI DI DS ES; кнопки screen / source /
+      reset / aux (memory, ALU, FPU — нет, stop on condition, symbol table, listing + наши окна) / vars (с константами) /
+      debug (журнал состояния в стиле DEBUG.EXE после каждой остановки) / stack (от SS:FFFE, SP выделен) /
+      flags (0/1, кнопка analyse → «lexical flag analyser»); подсказки кнопок — тексты оригинала
 
 ### Этап 6. Полировка
 - [x] 6.1 Сравнение с Emu8086: корпус из 84 оригинальных примеров (сборка + выполнение), устройства по

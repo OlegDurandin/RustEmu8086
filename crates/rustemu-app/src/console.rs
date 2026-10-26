@@ -27,6 +27,8 @@ pub struct ConsoleState {
     pub history: Vec<String>,
     last_dump: Option<u32>,
     last_unasm: Option<(u16, u16)>,
+    /// State last written to the log: (instruction count, CS:IP).
+    logged: Option<(u64, u32)>,
 }
 
 fn hex(s: &str) -> Option<u32> {
@@ -58,8 +60,9 @@ fn addr(app: &App, s: &str, default_seg: u16) -> Option<(u16, u16)> {
 fn regs_text(app: &App) -> Vec<String> {
     let c = &app.session.machine.cpu;
     let mut l1 = String::new();
-    for (i, n) in REG16_NAMES.iter().enumerate() {
-        l1.push_str(&format!("{n}={:04X}  ", c.regs[i]));
+    // DEBUG.EXE order: AX BX CX DX SP BP SI DI.
+    for i in [0, 3, 1, 2, 4, 5, 6, 7] {
+        l1.push_str(&format!("{}={:04X}  ", REG16_NAMES[i], c.regs[i]));
     }
     let f = c.flags;
     use rustemu_core::cpu::flags::*;
@@ -226,7 +229,8 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
         "g" if loaded => {
             if let Some(a) = args.first() {
                 let Some((s, o)) = addr(app, a, cs) else { return vec!["bad address".into()] };
-                app.run = crate::app::RunMode::StepOver(linear(s, o));
+                app.begin_exec();
+                app.run = crate::app::RunMode::RunTo(vec![linear(s, o)]);
             } else {
                 app.start_run();
             }
@@ -243,18 +247,39 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
 
 pub fn console_window(app: &mut App, ctx: &egui::Context) {
     let mut open = app.windows.console;
-    egui::Window::new("debug console")
+    egui::Window::new("debug log")
         .open(&mut open)
-        .default_pos(egui::pos2(60.0, 300.0))
+        .default_pos(egui::pos2(680.0, 470.0))
         .default_size([620.0, 360.0])
         .show(ctx, |ui| console_ui(app, ui));
     app.windows.console = open;
+}
+
+/// Writes the machine state to the log whenever execution stops at a new place (like Emu8086's
+/// debug window, which logs every step).
+pub fn log_state(app: &mut App) {
+    if !app.loaded() || app.run != crate::app::RunMode::Paused {
+        return;
+    }
+    let c = &app.session.machine.cpu;
+    let now = (c.instr_count, c.pc());
+    if app.console.logged == Some(now) {
+        return;
+    }
+    app.console.logged = Some(now);
+    let text = regs_text(app);
+    let con = &mut app.console;
+    if !con.lines.is_empty() {
+        con.lines.push(String::new());
+    }
+    con.lines.extend(text);
 }
 
 fn console_ui(app: &mut App, ui: &mut Ui) {
     if app.console.lines.is_empty() {
         app.console.lines.push("RustEmu8086 debug console - type ? for help".into());
     }
+    log_state(app);
     let h = ui.available_height() - 30.0;
     egui::ScrollArea::vertical().max_height(h.max(100.0)).stick_to_bottom(true).auto_shrink([false, false]).show(
         ui,
