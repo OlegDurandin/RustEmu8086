@@ -158,6 +158,23 @@ fn graphics_and_devices() {
 }
 
 #[test]
+fn editing_a_device_clears_step_back_history() {
+    let mut h = harness(app_with_example(0));
+    h.state_mut().emulate();
+    h.state_mut().single_step();
+    assert!(h.state().session.machine.history_len() > 0);
+    h.state_mut().session.machine.sys.dev.printer.extend_from_slice(b"AB");
+    h.state_mut().device_tab = crate::devices_ui::Device::Printer;
+    h.state_mut().windows.devices = true;
+    h.run();
+    h.get_by_label("clear paper").click();
+    h.run();
+
+    assert!(h.state().session.machine.sys.dev.printer.is_empty());
+    assert_eq!(h.state().session.machine.history_len(), 0);
+}
+
+#[test]
 fn stepping_into_library_macros() {
     let calc = crate::examples::EXAMPLES.iter().position(|e| e.0 == "calc.asm").unwrap();
     let mut h = harness(app_with_example(calc));

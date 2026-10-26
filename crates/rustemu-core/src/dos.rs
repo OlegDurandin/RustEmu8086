@@ -4,10 +4,13 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::bus::linear;
 use crate::cpu::{AX, BX, CX, DI, DS, DX, ES, SI, flags};
 use crate::machine::{Machine, Svc};
+
+type FindState = Option<(Arc<Vec<(String, u64)>>, usize)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DateTime {
@@ -37,10 +40,10 @@ pub(crate) struct DosState {
     /// Memory allocation: next free paragraph for AH=48h.
     pub next_free: u16,
     /// Results of the current FindFirst/FindNext search: DOS name and file size.
-    pub find: Option<(Vec<(String, u64)>, usize)>,
+    pub find: FindState,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) struct DosSnapshot {
     cwd: String,
     psp: u16,
@@ -49,8 +52,28 @@ pub(crate) struct DosSnapshot {
     line: Option<Vec<u8>>,
     last_exit: u8,
     next_free: u16,
-    find: Option<(Vec<(String, u64)>, usize)>,
+    find: FindState,
 }
+
+impl PartialEq for DosSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        let same_find = match (&self.find, &other.find) {
+            (None, None) => true,
+            (Some((a, ai)), Some((b, bi))) => ai == bi && Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        self.cwd == other.cwd
+            && self.psp == other.psp
+            && self.dta == other.dta
+            && self.waiting == other.waiting
+            && self.line == other.line
+            && self.last_exit == other.last_exit
+            && self.next_free == other.next_free
+            && same_find
+    }
+}
+
+impl Eq for DosSnapshot {}
 
 impl DosState {
     pub(crate) fn snapshot(&self) -> DosSnapshot {
@@ -356,7 +379,7 @@ impl Machine {
         // treated as the directory it points to.  The final containment check
         // below is what prevents symlinks inside the virtual drive from escaping
         // to the host filesystem.
-        let root = std::fs::canonicalize(self.dos.root.as_ref()?).ok()?;
+        let root = self.canonical_dos_root()?;
         let mut p = dos.trim().replace('\\', "/");
         if p.len() >= 2 && p.as_bytes()[1] == b':' {
             p = p[2..].to_string();
@@ -385,6 +408,10 @@ impl Machine {
         path_is_confined(&root, &out).then_some(out)
     }
 
+    fn canonical_dos_root(&self) -> Option<PathBuf> {
+        std::fs::canonicalize(self.dos.root.as_ref()?).ok()
+    }
+
     fn path_arg(&mut self, seg: u16, off: u16) -> Option<PathBuf> {
         let s = self.read_asciiz(seg, off);
         match self.host_path(&s) {
@@ -406,9 +433,15 @@ impl Machine {
             0x3A => std::fs::remove_dir(&p),
             0x3B => {
                 if p.is_dir() {
-                    let root = self.dos.root.clone().unwrap();
-                    self.dos.cwd = p.strip_prefix(&root).unwrap_or(Path::new("")).to_string_lossy().replace('\\', "/");
-                    Ok(())
+                    let cwd =
+                        self.canonical_dos_root().and_then(|root| p.strip_prefix(root).ok().map(Path::to_path_buf));
+                    match cwd {
+                        Some(cwd) => {
+                            self.dos.cwd = cwd.to_string_lossy().replace('\\', "/");
+                            Ok(())
+                        }
+                        None => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+                    }
                 } else {
                     Err(std::io::Error::from(std::io::ErrorKind::NotFound))
                 }
@@ -597,7 +630,7 @@ impl Machine {
                 })
                 .unwrap_or_default();
             entries.sort_by(|a, b| a.0.cmp(&b.0));
-            self.dos.find = Some((entries, 0));
+            self.dos.find = Some((Arc::new(entries), 0));
         }
         let Some((entries, idx)) = self.dos.find.as_mut() else { return self.fail(E_NO_MORE) };
         let Some((name, size)) = entries.get(*idx).cloned() else { return self.fail(E_NO_MORE) };
@@ -781,8 +814,36 @@ mod tests {
         let size = machine.sys.mem.read16(dta + 0x1A) as u32 | (machine.sys.mem.read16(dta + 0x1C) as u32) << 16;
         assert_eq!(size, 7);
         assert_eq!(machine.read_string(0x0200, 0x1E, 0, 13), b"EXAMPLE.TXT");
+        let snapshot = machine.dos.snapshot();
+        let entries = &machine.dos.find.as_ref().unwrap().0;
+        let snap_entries = &snapshot.find.as_ref().unwrap().0;
+        assert!(Arc::ptr_eq(entries, snap_entries));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn chdir_with_relative_root_keeps_the_relative_dos_path() {
+        let child = std::fs::read_dir(".")
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .expect("the project directory must contain a subdirectory")
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut machine = Machine::new();
+        machine.set_dos_root(PathBuf::from("."));
+        machine.cpu.sregs[DS] = 0x0100;
+        machine.cpu.regs[DX] = 0;
+        let mut path = child.as_bytes().to_vec();
+        path.push(0);
+        machine.sys.mem.load(linear(0x0100, 0), &path);
+        machine.dos_path_op(0x3B);
+
+        assert_eq!(machine.dos.cwd, child);
+        assert_eq!(machine.host_path("file.txt"), std::fs::canonicalize(&child).ok().map(|p| p.join("file.txt")));
     }
 
     #[cfg(unix)]
@@ -797,10 +858,12 @@ mod tests {
         );
         let base = std::env::temp_dir().join(unique);
         let root = base.join("root");
+        let linked_root = base.join("linked-root");
         let outside = base.join("outside");
-        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join("subdir")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+        symlink(&root, &linked_root).unwrap();
         symlink(&outside, root.join("external")).unwrap();
         symlink(outside.join("missing.txt"), root.join("broken")).unwrap();
 
@@ -811,6 +874,13 @@ mod tests {
         assert!(machine.host_path("external/secret.txt").is_none());
         assert!(machine.host_path("external/new.txt").is_none());
         assert!(machine.host_path("broken").is_none());
+
+        machine.set_dos_root(linked_root);
+        machine.cpu.sregs[DS] = 0x0100;
+        machine.cpu.regs[DX] = 0;
+        machine.sys.mem.load(linear(0x0100, 0), b"subdir\0");
+        machine.dos_path_op(0x3B);
+        assert_eq!(machine.dos.cwd, "subdir");
 
         std::fs::remove_dir_all(base).unwrap();
     }

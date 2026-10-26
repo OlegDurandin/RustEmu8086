@@ -29,6 +29,35 @@ pub struct Robot {
     status: u8,
     pending: Option<u8>,
     busy_ms: f64,
+    cell_journal: Option<Vec<(usize, Cell)>>,
+}
+
+pub(crate) struct RobotSnapshot {
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    dir: u8,
+    data: u8,
+    status: u8,
+    pending: Option<u8>,
+    busy_ms: f64,
+    cell_undo: Vec<(usize, Cell)>,
+}
+
+impl RobotSnapshot {
+    pub(crate) fn is_unchanged(&self, robot: &Robot) -> bool {
+        self.cell_undo.is_empty()
+            && self.width == robot.width
+            && self.height == robot.height
+            && self.x == robot.x
+            && self.y == robot.y
+            && self.dir == robot.dir
+            && self.data == robot.data
+            && self.status == robot.status
+            && self.pending == robot.pending
+            && self.busy_ms == robot.busy_ms
+    }
 }
 
 /// Duration of a move or a turn, in milliseconds.
@@ -57,6 +86,7 @@ impl Robot {
             status: 0,
             pending: None,
             busy_ms: 0.0,
+            cell_journal: None,
         };
         r.default_map();
         r
@@ -96,8 +126,55 @@ impl Robot {
 
     pub fn set(&mut self, x: usize, y: usize, c: Cell) {
         if x < self.width && y < self.height {
-            self.cells[y * self.width + x] = c;
+            let i = y * self.width + x;
+            if let Some(journal) = &mut self.cell_journal
+                && !journal.iter().any(|(at, _)| *at == i)
+            {
+                journal.push((i, self.cells[i]));
+            }
+            self.cells[i] = c;
         }
+    }
+
+    pub(crate) fn begin_snapshot(&mut self) -> RobotSnapshot {
+        self.cell_journal = Some(Vec::new());
+        RobotSnapshot {
+            width: self.width,
+            height: self.height,
+            x: self.x,
+            y: self.y,
+            dir: self.dir,
+            data: self.data,
+            status: self.status,
+            pending: self.pending,
+            busy_ms: self.busy_ms,
+            cell_undo: Vec::new(),
+        }
+    }
+
+    pub(crate) fn finish_snapshot(&mut self, mut snapshot: RobotSnapshot) -> RobotSnapshot {
+        snapshot.cell_undo = self.cell_journal.take().unwrap_or_default();
+        snapshot
+    }
+
+    pub(crate) fn cancel_snapshot(&mut self) {
+        self.cell_journal = None;
+    }
+
+    pub(crate) fn restore(&mut self, snapshot: RobotSnapshot) {
+        for (i, cell) in snapshot.cell_undo.into_iter().rev() {
+            self.cells[i] = cell;
+        }
+        self.width = snapshot.width;
+        self.height = snapshot.height;
+        self.x = snapshot.x;
+        self.y = snapshot.y;
+        self.dir = snapshot.dir;
+        self.data = snapshot.data;
+        self.status = snapshot.status;
+        self.pending = snapshot.pending;
+        self.busy_ms = snapshot.busy_ms;
+        self.cell_journal = None;
     }
 
     /// Map editing: empty -> wall -> lamp (on) -> lamp (off) -> empty.

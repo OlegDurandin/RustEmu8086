@@ -19,7 +19,7 @@ impl Machine {
         match ah {
             0x00 => {
                 Video::set_mode(mem, al);
-                self.sys.dev.palette = video::default_palette();
+                self.sys.dev.replace_palette(video::default_palette());
             }
             0x01 => mem.write16(video::BDA_CURSOR_SHAPE, r[CX]),
             0x02 => Video::set_cursor(mem, bh, dl as u16, dh as u16),
@@ -76,7 +76,7 @@ impl Machine {
                 0x03 => mem.write8(video::BDA + 0x65, if bl != 0 { 0x29 } else { 0x09 }),
                 0x10 => {
                     let i = r[BX] as u8 as usize;
-                    self.sys.dev.palette[i] = [dh & 0x3F, (r[CX] >> 8) as u8 & 0x3F, r[CX] as u8 & 0x3F];
+                    self.sys.dev.set_palette(i, [dh & 0x3F, (r[CX] >> 8) as u8 & 0x3F, r[CX] as u8 & 0x3F]);
                 }
                 0x15 => {
                     let p = self.sys.dev.palette[r[BX] as u8 as usize];
