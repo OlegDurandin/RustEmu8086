@@ -141,6 +141,17 @@ fn screen_ui(app: &mut App, ui: &mut Ui) {
             ui.weak("click the screen to type");
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button("copy").on_hover_text("Copy the text on the screen (⌘C)").clicked() {
+                ui.ctx().copy_text(screen_text(&app.session.machine.sys.mem));
+            }
+            if ui
+                .small_button("paste")
+                .on_hover_text("Type the clipboard text into the program (⌘V); new lines become Enter")
+                .clicked()
+            {
+                paste_from_clipboard(app);
+                app.screen.focus_request = true;
+            }
             if ui.small_button("clear").on_hover_text("Clear the screen").clicked() {
                 let m = &mut app.session.machine.sys.mem;
                 let mode = Video::mode(m);
@@ -215,11 +226,55 @@ fn draw_text(app: &App, ui: &Ui, rect: Rect, cw: f32, ch: f32, font: &FontId) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
 }
 
+/// Text of the screen in text modes, one line per row without trailing spaces.
+pub fn screen_text(mem: &rustemu_core::Memory) -> String {
+    if !Video::is_text(mem) {
+        return String::new();
+    }
+    let page = Video::page(mem);
+    let mut lines: Vec<String> = (0..Video::rows(mem))
+        .map(|r| {
+            let line: String = (0..Video::cols(mem))
+                .map(|c| match Video::read_cell(mem, page, c, r).0 {
+                    0 => ' ',
+                    b => cp437_to_char(b),
+                })
+                .collect();
+            line.trim_end().to_string()
+        })
+        .collect();
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
+/// Queues `text` as keystrokes: a new line is Enter, a tab is Tab.
+pub fn paste_keys(m: &mut rustemu_core::Machine, text: &str) {
+    for c in text.replace("\r\n", "\n").chars() {
+        match c {
+            '\n' | '\r' => m.push_key(0x1C, 13),
+            '\t' => m.push_key(0x0F, 9),
+            c if (c as u32) < 32 => {}
+            c => m.push_char(char_to_cp437(c)),
+        }
+    }
+}
+
+/// Paste from the menu or the button (egui only delivers the clipboard with ⌘V events).
+fn paste_from_clipboard(app: &mut App) {
+    if let Ok(out) = std::process::Command::new("pbpaste").output() {
+        paste_keys(&mut app.session.machine, &String::from_utf8_lossy(&out.stdout));
+    }
+}
+
 fn keyboard(app: &mut App, ui: &Ui) {
     let events = ui.input(|i| i.events.clone());
     let m = &mut app.session.machine;
     for ev in events {
         match ev {
+            egui::Event::Paste(t) => paste_keys(m, &t),
+            egui::Event::Copy => ui.ctx().copy_text(screen_text(&m.sys.mem)),
             egui::Event::Text(t) => {
                 for c in t.chars() {
                     m.push_char(char_to_cp437(c));
