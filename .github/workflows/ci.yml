@@ -21,3 +21,23 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+
+  # The application for download: a universal (Apple Silicon + Intel) RustEmu8086.app in a zip,
+  # attached to every successful run on main (Actions -> the run -> Artifacts).
+  bundle:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build RustEmu8086.app (universal)
+        run: UNIVERSAL=1 ./scripts/bundle_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RustEmu8086-macos
+          path: target/release/bundle/RustEmu8086-*-macos.zip
+          retention-days: 30

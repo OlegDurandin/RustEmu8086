@@ -5,12 +5,31 @@
 
 Чем RustEmu8086 отличается от оригинала — в разделе [Отличия от Emu8086](#отличия-от-emu8086).
 
-## Что нужно
+## Скачать готовое приложение
+
+Готовый `RustEmu8086.app` для Mac с Apple Silicon и Intel (macOS 11 или новее) лежит на странице
+[Releases](https://github.com/OlegDurandin/RustEmu8086/releases): скачайте `RustEmu8086-<версия>-macos.zip`,
+распакуйте и перетащите `RustEmu8086.app` в «Программы». Сборка из последнего состояния `main` есть в
+[Actions](https://github.com/OlegDurandin/RustEmu8086/actions): откройте последний успешный запуск CI, файл
+*RustEmu8086-macos* в разделе *Artifacts* (нужен вход в GitHub).
+
+Приложение не подписано сертификатом Apple и не прошло нотаризацию, поэтому при первом запуске macOS
+предупредит, что не может проверить разработчика. Открыть его можно одним из способов:
+
+- правый клик (или Control-клик) по приложению → **Открыть** → **Открыть** (macOS 14 и раньше);
+- **Системные настройки → Конфиденциальность и безопасность** → внизу **Всё равно открыть** (macOS 15 и новее);
+- или в Терминале: `xattr -dr com.apple.quarantine /Applications/RustEmu8086.app`.
+
+Внутри приложения есть и программа командной строки: `RustEmu8086.app/Contents/MacOS/rustemu`.
+
+## Сборка из исходников
+
+### Что нужно
 
 - macOS 11 или новее.
 - Rust 1.95 или новее. Установка: `curl https://sh.rustup.rs -sSf | sh`, обновление: `rustup update`.
 
-## Запуск графического приложения
+### Запуск графического приложения
 
 Из корня репозитория:
 
@@ -33,7 +52,19 @@ cargo run --release -p rustemu-app -- examples/hello.asm
 open target/release/bundle/RustEmu8086.app
 ```
 
-Скрипт собирает `target/release/bundle/RustEmu8086.app`. Его можно перетащить в «Программы».
+Скрипт собирает `target/release/bundle/RustEmu8086.app` (его можно перетащить в «Программы») и архив
+`RustEmu8086-<версия>-macos.zip`. С `UNIVERSAL=1 ./scripts/bundle_macos.sh` получается одна программа для
+Apple Silicon и Intel (нужно `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
+
+### Выпуск версии
+
+Версия задаётся в `Cargo.toml` (`[workspace.package] version`). Тег с тем же номером запускает сборку и
+публикацию релиза на GitHub:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## Работа в приложении
 

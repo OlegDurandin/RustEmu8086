@@ -1,13 +1,25 @@
 #!/bin/sh
-# Builds RustEmu8086.app in target/release/bundle/.
+# Builds RustEmu8086.app and RustEmu8086-<version>-macos.zip in target/release/bundle/.
+# UNIVERSAL=1 builds one binary for both Apple Silicon and Intel Macs
+# (needs: rustup target add aarch64-apple-darwin x86_64-apple-darwin).
 set -e
 cd "$(dirname "$0")/.."
-cargo build --release -p rustemu-app -p rustemu-cli
 BUNDLE=target/release/bundle/RustEmu8086.app
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
-cp target/release/RustEmu8086 "$BUNDLE/Contents/MacOS/RustEmu8086"
-cp target/release/rustemu "$BUNDLE/Contents/MacOS/rustemu"
+if [ "$UNIVERSAL" = 1 ]; then
+  for t in aarch64-apple-darwin x86_64-apple-darwin; do
+    cargo build --release --target $t -p rustemu-app -p rustemu-cli
+  done
+  for b in RustEmu8086 rustemu; do
+    lipo -create -output "$BUNDLE/Contents/MacOS/$b" \
+      "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
+  done
+else
+  cargo build --release -p rustemu-app -p rustemu-cli
+  cp target/release/RustEmu8086 "$BUNDLE/Contents/MacOS/RustEmu8086"
+  cp target/release/rustemu "$BUNDLE/Contents/MacOS/rustemu"
+fi
 
 # Icon
 ICONSET=target/release/bundle/RustEmu8086.iconset
@@ -40,12 +52,17 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
   <array>
     <dict>
       <key>CFBundleTypeName</key><string>8086 Assembly Source</string>
-      <key>CFBundleTypeExtensions</key><array><string>asm</string></array>
+      <key>CFBundleTypeExtensions</key><array><string>asm</string><string>nasm</string><string>inc</string></array>
       <key>CFBundleTypeRole</key><string>Editor</string>
     </dict>
   </array>
 </dict>
 </plist>
 PLIST
-codesign --force --deep --sign - "$BUNDLE" 2>/dev/null || true
+# Ad-hoc signature: required to run on Apple Silicon (there is no Developer ID / notarization).
+codesign --force --deep --sign - "$BUNDLE"
+ZIP="target/release/bundle/RustEmu8086-${VERSION}-macos.zip"
+rm -f "$ZIP"
+ditto -c -k --keepParent "$BUNDLE" "$ZIP"
 echo "Built $BUNDLE"
+echo "Archive $ZIP"
