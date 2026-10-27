@@ -1,0 +1,33 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds the universal RustEmu8086.app and publishes it as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Check that the tag matches the version in Cargo.toml
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          test "v$VERSION" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, Cargo.toml $VERSION"; exit 1; }
+      - name: Tests
+        run: cargo test --workspace
+      - name: Build RustEmu8086.app (universal)
+        run: UNIVERSAL=1 ./scripts/bundle_macos.sh
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" target/release/bundle/RustEmu8086-*-macos.zip \
+            --title "RustEmu8086 $GITHUB_REF_NAME" --generate-notes

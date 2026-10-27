@@ -148,8 +148,8 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
       (синтаксис, флаги ODITSZAPC, пример), директивы, прерывания BIOS/DOS по функциям; из редактора —
       подсказка при наведении, F1/⌘-клик открывает статью (для `INT nn` функция берётся из `mov ah, ..` выше).
       Тест: все примеры справочника собираются, все мнемоники ассемблера описаны
-- [x] 5.7 `scripts/bundle_macos.sh` → `target/release/bundle/RustEmu8086.app` (иконка генерируется
-      `cargo run -p rustemu-app --example make_icon`)
+- [x] 5.7 `scripts/bundle_macos.sh` → `target/release/bundle/RustEmu8086.app` + `RustEmu8086-<версия>-macos.zip`,
+      ad-hoc подпись; `UNIVERSAL=1` — arm64 + x86_64 через `lipo` (иконка: `cargo run -p rustemu-app --example make_icon`)
 - [x] 5.8 Редактор: поиск/замена (⌘F, ⌘G/⇧⌘G), переход к строке (⌘L), комментирование блока (⌘/) — `find.rs`
 - [x] 5.10 Прозрачность макросов: `Line/LineInfo.origin` — строка в определении макроса; окно исходника
       показывает код `emu8086.inc` при шаге внутри макроса/процедуры (плашка + строка вызова), подсказки
@@ -196,4 +196,6 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
       (лёгкий снимок CPU+память на каждую инструкцию; устройства, DOS, очереди и дискета — только для IN/OUT, INT,
       исключений, IRQ и кода BIOS, см. `Machine::may_touch_system`)
 - [x] 6.4 `.startup`/`.exit` (MASM 6), корпус примеров Emu8086
-- [x] 6.5 Git: ветка `main`, CI — `.github/workflows/ci.yml` (macOS: fmt, clippy -D warnings, тесты с NASM)
+- [x] 6.5 Git: ветка `main`, CI — `.github/workflows/ci.yml` (macOS: fmt, clippy -D warnings, тесты с NASM; задание
+      `bundle` на `main` — универсальный .app в артефактах). `release.yml`: тег `vX.Y.Z` (= версии в Cargo.toml) →
+      GitHub Release с zip. Без Developer ID и нотаризации (в README — как открыть при первом запуске)
