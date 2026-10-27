@@ -26,6 +26,8 @@ pub struct System {
     /// Keyboard buffer: (scan code << 8) | ASCII.
     pub keys: VecDeque<u16>,
     pub irq: VecDeque<u8>,
+    /// Port I/O, an accepted IRQ or a BIOS/DOS service happened (see [`Machine::step`] history).
+    pub(crate) touched: bool,
 }
 
 impl Bus for System {
@@ -38,19 +40,25 @@ impl Bus for System {
         self.mem.write8(a, v)
     }
     fn port_in8(&mut self, p: u16) -> u8 {
+        self.touched = true;
         self.dev.input8(p)
     }
     fn port_out8(&mut self, p: u16, v: u8) {
+        self.touched = true;
         self.dev.output8(p, v)
     }
     fn port_in16(&mut self, p: u16) -> u16 {
+        self.touched = true;
         self.dev.input16(p)
     }
     fn port_out16(&mut self, p: u16, v: u16) {
+        self.touched = true;
         self.dev.output16(p, v)
     }
     fn take_irq(&mut self) -> Option<u8> {
-        self.irq.pop_front()
+        let v = self.irq.pop_front();
+        self.touched |= v.is_some();
+        v
     }
 }
 
@@ -167,23 +175,31 @@ pub(crate) enum Svc {
     Stop(Event),
 }
 
+/// State before one step, for step-back. Kept small: most instructions only change the CPU and
+/// memory; the rest is captured only for instructions that can reach devices, the keyboard or
+/// BIOS/DOS (see [`Machine::may_touch_system`]).
 struct Snapshot {
     cpu: Cpu,
     undo: Vec<(u32, u8)>,
-    keys: VecDeque<u16>,
-    irq: VecDeque<u8>,
-    dev: DevicesSnapshot,
-    dos: DosSnapshot,
     output_len: usize,
     log_len: usize,
     terminated: Option<u8>,
-    mouse: (u16, u16, u16),
-    mouse_visible: bool,
-    wait_until: Option<std::time::Instant>,
     tick_instr: u64,
     tick_time: Option<std::time::Instant>,
     tick_frac: f64,
     bios_ticks: u32,
+    system: Option<Box<SystemSnapshot>>,
+}
+
+/// Devices, DOS, keyboard/IRQ queues, mouse and floppy before a step that can change them.
+struct SystemSnapshot {
+    keys: VecDeque<u16>,
+    irq: VecDeque<u8>,
+    dev: DevicesSnapshot,
+    dos: DosSnapshot,
+    mouse: (u16, u16, u16),
+    mouse_visible: bool,
+    wait_until: Option<std::time::Instant>,
     floppy_len: usize,
     floppy_undo: Vec<(usize, u8)>,
 }
@@ -238,7 +254,13 @@ impl Machine {
         cpu.model = crate::cpu::CpuModel::I80186;
         let mut m = Machine {
             cpu,
-            sys: System { mem: Memory::new(), dev: Devices::new(), keys: VecDeque::new(), irq: VecDeque::new() },
+            sys: System {
+                mem: Memory::new(),
+                dev: Devices::new(),
+                keys: VecDeque::new(),
+                irq: VecDeque::new(),
+                touched: false,
+            },
             breakpoints: HashSet::new(),
             loaded: None,
             output: Vec::new(),
@@ -597,23 +619,22 @@ impl Machine {
             return ev;
         }
         self.history_barrier = false;
-        self.floppy_journal = Some(Vec::new());
+        self.sys.touched = false;
         self.sys.mem.set_journaling(true);
+        let snap_system = if self.may_touch_system() {
+            Some(self.begin_system_snapshot())
+        } else {
+            self.floppy_journal = None;
+            self.sys.dev.cancel_snapshot();
+            None
+        };
         let snap_cpu = self.cpu.clone();
-        let snap_keys = self.sys.keys.clone();
-        let snap_irq = self.sys.irq.clone();
-        let snap_dev = self.sys.dev.begin_snapshot();
-        let snap_dos = self.dos.snapshot();
         let out_len = self.output.len();
         let log_len = self.log.len();
         let snap_terminated = self.terminated;
-        let snap_mouse = self.mouse;
-        let snap_mouse_visible = self.mouse_visible;
-        let snap_wait_until = self.wait_until;
         let snap_tick_instr = self.tick_instr;
         let snap_tick_time = self.tick_time;
         let snap_tick_frac = self.tick_frac;
-        let snap_floppy_len = self.floppy.len();
         let ticks_addr = video::BDA + 0x6C;
         let snap_bios_ticks =
             self.sys.mem.read16(ticks_addr) as u32 | ((self.sys.mem.read16(ticks_addr + 2) as u32) << 16);
@@ -626,8 +647,12 @@ impl Machine {
         }
         {
             let undo = self.sys.mem.take_journal();
-            let floppy_undo = self.floppy_journal.take().unwrap_or_default();
-            let snap_dev = self.sys.dev.finish_snapshot(snap_dev);
+            let snap_system = snap_system.map(|s| self.finish_system_snapshot(s));
+            // Safety net: an instruction that was not expected to reach devices or services did
+            // (e.g. a CPU exception handled by a BIOS stub). Its old state was not captured.
+            if snap_system.is_none() && self.sys.touched {
+                self.history_barrier = true;
+            }
             if self.history_barrier {
                 self.history.clear();
                 return ev;
@@ -635,18 +660,11 @@ impl Machine {
             // Re-polling a blocked input service changes nothing and is not worth recording.
             let idle = matches!(ev, Event::WaitingInput | Event::Sleeping)
                 && undo.is_empty()
-                && floppy_undo.is_empty()
                 && self.cpu.same_state(&snap_cpu)
-                && self.sys.keys == snap_keys
-                && self.sys.irq == snap_irq
-                && snap_dev.is_unchanged(&self.sys.dev)
-                && self.dos.snapshot() == snap_dos
                 && self.output.len() == out_len
                 && self.log.len() == log_len
                 && self.terminated == snap_terminated
-                && self.mouse == snap_mouse
-                && self.mouse_visible == snap_mouse_visible
-                && self.wait_until == snap_wait_until;
+                && snap_system.as_ref().is_none_or(|s| self.system_unchanged(s));
             if !idle {
                 if self.history.len() >= HISTORY_DEPTH {
                     self.history.pop_front();
@@ -654,26 +672,71 @@ impl Machine {
                 self.history.push_back(Snapshot {
                     cpu: snap_cpu,
                     undo,
-                    keys: snap_keys,
-                    irq: snap_irq,
-                    dev: snap_dev,
-                    dos: snap_dos,
                     output_len: out_len,
                     log_len,
                     terminated: snap_terminated,
-                    mouse: snap_mouse,
-                    mouse_visible: snap_mouse_visible,
-                    wait_until: snap_wait_until,
                     tick_instr: snap_tick_instr,
                     tick_time: snap_tick_time,
                     tick_frac: snap_tick_frac,
                     bios_ticks: snap_bios_ticks,
-                    floppy_len: snap_floppy_len,
-                    floppy_undo,
+                    system: snap_system.map(Box::new),
                 });
             }
         }
         ev
+    }
+
+    /// Can the next step change devices, the keyboard/IRQ queues, DOS or the floppy? Only port
+    /// I/O, software interrupts, CPU exceptions (divide error, BOUND, INTO, single-step trap),
+    /// hardware IRQs and code in the BIOS segment do.
+    fn may_touch_system(&self) -> bool {
+        let c = &self.cpu;
+        if c.cs() == ROM_SEG || c.flags & flags::TF != 0 || (c.flags & flags::IF != 0 && !self.sys.irq.is_empty()) {
+            return true;
+        }
+        let pc = c.pc();
+        let mut op = 0;
+        for i in 0..6 {
+            op = self.sys.mem.read8((pc + i) & 0xF_FFFF);
+            if !matches!(op, 0x26 | 0x2E | 0x36 | 0x3E | 0xF0 | 0xF1 | 0xF2 | 0xF3) {
+                break;
+            }
+        }
+        matches!(op, 0x62 | 0x6C..=0x6F | 0xCC..=0xCE | 0xD4 | 0xE4..=0xE7 | 0xEC..=0xEF | 0xF6 | 0xF7)
+    }
+
+    fn begin_system_snapshot(&mut self) -> SystemSnapshot {
+        self.floppy_journal = Some(Vec::new());
+        SystemSnapshot {
+            keys: self.sys.keys.clone(),
+            irq: self.sys.irq.clone(),
+            dev: self.sys.dev.begin_snapshot(),
+            dos: self.dos.snapshot(),
+            mouse: self.mouse,
+            mouse_visible: self.mouse_visible,
+            wait_until: self.wait_until,
+            floppy_len: self.floppy.len(),
+            floppy_undo: Vec::new(),
+        }
+    }
+
+    fn finish_system_snapshot(&mut self, s: SystemSnapshot) -> SystemSnapshot {
+        SystemSnapshot {
+            dev: self.sys.dev.finish_snapshot(s.dev),
+            floppy_undo: self.floppy_journal.take().unwrap_or_default(),
+            ..s
+        }
+    }
+
+    fn system_unchanged(&self, s: &SystemSnapshot) -> bool {
+        s.floppy_undo.is_empty()
+            && self.sys.keys == s.keys
+            && self.sys.irq == s.irq
+            && s.dev.is_unchanged(&self.sys.dev)
+            && self.dos.snapshot() == s.dos
+            && self.mouse == s.mouse
+            && self.mouse_visible == s.mouse_visible
+            && self.wait_until == s.wait_until
     }
 
     fn step_inner(&mut self) -> Event {
@@ -727,26 +790,29 @@ impl Machine {
                 self.sys.mem.set_journaling(false);
                 self.sys.mem.undo(&s.undo);
                 self.cpu = s.cpu;
-                self.sys.keys = s.keys;
-                self.sys.irq = s.irq;
-                self.sys.dev.restore(s.dev);
-                self.dos.restore(s.dos);
                 self.output.truncate(s.output_len);
                 self.log.truncate(s.log_len);
                 self.terminated = s.terminated;
-                self.mouse = s.mouse;
-                self.mouse_visible = s.mouse_visible;
-                self.wait_until = s.wait_until;
                 self.tick_instr = s.tick_instr;
                 self.tick_time = s.tick_time;
                 self.tick_frac = s.tick_frac;
                 let ticks_addr = video::BDA + 0x6C;
                 self.sys.mem.write16(ticks_addr, s.bios_ticks as u16);
                 self.sys.mem.write16(ticks_addr + 2, (s.bios_ticks >> 16) as u16);
-                for (i, value) in s.floppy_undo.into_iter().rev() {
-                    self.floppy[i] = value;
+                if let Some(sys) = s.system {
+                    let sys = *sys;
+                    self.sys.keys = sys.keys;
+                    self.sys.irq = sys.irq;
+                    self.sys.dev.restore(sys.dev);
+                    self.dos.restore(sys.dos);
+                    self.mouse = sys.mouse;
+                    self.mouse_visible = sys.mouse_visible;
+                    self.wait_until = sys.wait_until;
+                    for (i, value) in sys.floppy_undo.into_iter().rev() {
+                        self.floppy[i] = value;
+                    }
+                    self.floppy.truncate(sys.floppy_len);
                 }
-                self.floppy.truncate(s.floppy_len);
                 true
             }
             None => false,
@@ -766,6 +832,7 @@ impl Machine {
     }
 
     fn service(&mut self, n: u8) -> Event {
+        self.sys.touched = true;
         // Status flags as seen by the caller (they were pushed by INT).
         let ss = self.cpu.sregs[cpu::SS];
         let sp = self.cpu.regs[cpu::SP];

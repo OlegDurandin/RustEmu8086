@@ -93,6 +93,12 @@ fn read_modrm(r: &mut Reader, seg: Option<&str>) -> ModRm {
 }
 
 /// Disassembles one instruction from `bytes`, located at offset `ip` (used for jump targets).
+/// A sign-extended byte immediate (`83 /n ib`, `6A ib`, `6B /r ib`): `-01h` rather than `0FFh`.
+fn simm8(b: u8) -> String {
+    let v = b as i8;
+    if v < 0 { format!("-{}", hex8(v.unsigned_abs())) } else { hex8(b) }
+}
+
 pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
     let mut r = Reader { bytes, pos: 0 };
     let mut seg: Option<&str> = None;
@@ -164,13 +170,10 @@ pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
             format!("BOUND {}, {}", reg(m.reg, true), m.operand(true))
         }
         0x68 => format!("PUSH {}", hex16(r.u16())),
-        0x6A => {
-            let v = r.u8() as i8;
-            if v < 0 { format!("PUSH -{}", hex8(v.unsigned_abs())) } else { format!("PUSH {}", hex8(v as u8)) }
-        }
+        0x6A => format!("PUSH {}", simm8(r.u8())),
         0x69 | 0x6B => {
             let m = read_modrm(&mut r, seg);
-            let imm = if op == 0x69 { hex16(r.u16()) } else { hex8(r.u8()) };
+            let imm = if op == 0x69 { hex16(r.u16()) } else { simm8(r.u8()) };
             format!("IMUL {}, {}, {imm}", reg(m.reg, true), m.operand(true))
         }
         0x6C => "INSB".into(),
@@ -183,10 +186,7 @@ pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
             let m = read_modrm(&mut r, seg);
             let imm = match op {
                 0x81 => hex16(r.u16()),
-                0x83 => {
-                    let v = r.u8() as i8;
-                    if v < 0 { format!("-{}", hex8(v.unsigned_abs())) } else { hex8(v as u8) }
-                }
+                0x83 => simm8(r.u8()),
                 _ => hex8(r.u8()),
             };
             format!("{} {}, {imm}", ALU[m.reg as usize], m.sized(w))
