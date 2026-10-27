@@ -150,10 +150,10 @@ fn micro_os_boots_from_floppy() {
     let boot = build("micro-os_loader.asm");
     let kernel = build("micro-os_kernel.asm");
     let mut s = Session::new();
-    s.machine.floppy = vec![0; 1_474_560];
-    s.machine.floppy[..boot.image.len()].copy_from_slice(&boot.image);
-    s.machine.floppy[512..512 + kernel.image.len()].copy_from_slice(&kernel.image);
-    s.boot_from_floppy().unwrap();
+    s.machine.floppies[0] = vec![0; 1_474_560];
+    s.machine.floppies[0][..boot.image.len()].copy_from_slice(&boot.image);
+    s.machine.floppies[0][512..512 + kernel.image.len()].copy_from_slice(&kernel.image);
+    s.boot_from_floppy(0).unwrap();
     assert_eq!(s.machine.run(5_000_000), Event::WaitingInput);
     let screen = s.machine.screen_text();
     assert!(screen.contains("Welcome to micro-os!"), "{screen}");

@@ -14,4 +14,4 @@ pub mod video;
 
 pub use bus::{Bus, Memory, linear};
 pub use cpu::{AluOp, AluTrace, Cpu, StepResult};
-pub use machine::{Event, LoadInfo, LoadKind, Machine};
+pub use machine::{Event, LoadInfo, LoadKind, Machine, MachineState};

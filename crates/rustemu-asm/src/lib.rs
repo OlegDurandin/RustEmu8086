@@ -1,4 +1,4 @@
-//! 8086 assembler (Emu8086 / MASM dialect).
+//! 8086 assembler: the Emu8086 / MASM dialect and the NASM dialect (`-f bin` programs).
 //!
 //! ```
 //! let prog = rustemu_asm::assemble_str("org 100h\nmov ax, 5\nret\n").unwrap();
@@ -19,6 +19,96 @@ pub use source::FileLoader;
 
 /// Built-in include file with the Emu8086-compatible macro library.
 pub const EMU8086_INC: &str = include_str!("../inc/emu8086.inc");
+
+/// Source syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Dialect {
+    /// Emu8086 / MASM: `mov ax, var` reads memory, `byte ptr`, `seg segment ... ends`, `MACRO`.
+    #[default]
+    Masm,
+    /// NASM `-f bin`: `mov ax, var` loads the address, `[var]` reads memory, `byte [x]`, `section`,
+    /// `times`, `resb`, `%macro`, local labels `.name`.
+    Nasm,
+}
+
+impl Dialect {
+    pub fn name(self) -> &'static str {
+        match self {
+            Dialect::Masm => "Emu8086/MASM",
+            Dialect::Nasm => "NASM",
+        }
+    }
+}
+
+/// Guesses the dialect of a source file: `.nasm` files, an explicit `#nasm#` line, or NASM-only
+/// constructs (`bits 16`, `[org ..]`, `section .text`, `%define`, `%macro`, `times`, `resb`, `$$`)
+/// select NASM; everything else is Emu8086/MASM.
+pub fn detect_dialect(name: &str, text: &str) -> Dialect {
+    if name.to_ascii_lowercase().ends_with(".nasm") {
+        return Dialect::Nasm;
+    }
+    for line in text.lines() {
+        let code = code_without_strings(line).trim().to_ascii_lowercase();
+        if code.is_empty() {
+            continue;
+        }
+        let first = code.split_whitespace().next().unwrap_or("");
+        let nasm_line = code.starts_with("#nasm")
+            || code.starts_with("[bits")
+            || code.starts_with("[org")
+            || code.starts_with("[section")
+            || code.starts_with("[cpu")
+            || matches!(first, "bits" | "use16" | "section" | "cpu" | "global" | "extern")
+            || (first.starts_with('%')
+                && matches!(
+                    first,
+                    "%define" | "%macro" | "%include" | "%assign" | "%rep" | "%if" | "%ifdef" | "%ifndef"
+                ))
+            || code.contains("$$")
+            || nasm_word_directive(&code)
+            || size_without_ptr(&code);
+        if nasm_line {
+            return Dialect::Nasm;
+        }
+        if code.starts_with("#fasm") {
+            return Dialect::Masm;
+        }
+    }
+    Dialect::Masm
+}
+
+/// The code part of a line: strings are blanked out and the comment is removed.
+fn code_without_strings(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut quote = None;
+    for c in line.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => out.push(' '),
+            None if matches!(c, '\'' | '"' | '`') => quote = Some(c),
+            None if c == ';' => break,
+            None => out.push(c),
+        }
+    }
+    out
+}
+
+/// `byte [..]`, `word [..]`, `dword [..]` without PTR (MASM needs `byte ptr`).
+fn size_without_ptr(code: &str) -> bool {
+    let w: Vec<&str> = code.split(|c: char| c.is_whitespace() || c == ',').filter(|s| !s.is_empty()).collect();
+    w.windows(2).any(|p| matches!(p[0], "byte" | "word" | "dword") && p[1].starts_with('['))
+}
+
+/// `times N ...` or `[label] resb N` (and not a MASM variable that happens to be named so).
+fn nasm_word_directive(code: &str) -> bool {
+    let w: Vec<&str> = code.split_whitespace().collect();
+    let data = ["db", "dw", "dd", "dq", "dt", "equ", "=", "label", "proc", "macro", "segment"];
+    w.iter().enumerate().any(|(i, word)| {
+        let word = word.trim_end_matches(':');
+        let next = w.get(i + 1).copied().unwrap_or("");
+        matches!(word, "times" | "resb" | "resw" | "resd" | "resq") && !next.is_empty() && !data.contains(&next)
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -162,6 +252,7 @@ pub struct Program {
     pub segments: Vec<SegmentInfo>,
     pub files: Vec<String>,
     pub emu: EmuDirectives,
+    pub dialect: Dialect,
 }
 
 impl Program {
@@ -314,9 +405,21 @@ impl std::fmt::Display for AsmErrors {
     }
 }
 
-/// Assembles source text with a custom include loader.
+/// Assembles source text with a custom include loader; the dialect is detected
+/// ([`detect_dialect`]).
 pub fn assemble(name: &str, source: &str, loader: &mut dyn FileLoader) -> Result<Program, AsmErrors> {
-    asm::assemble(name, source, loader).map_err(|(errors, files)| AsmErrors { errors, files })
+    assemble_dialect(name, source, loader, None)
+}
+
+/// Assembles source text in the given dialect (`None`: detect it).
+pub fn assemble_dialect(
+    name: &str,
+    source: &str,
+    loader: &mut dyn FileLoader,
+    dialect: Option<Dialect>,
+) -> Result<Program, AsmErrors> {
+    let dialect = dialect.unwrap_or_else(|| detect_dialect(name, source));
+    asm::assemble(name, source, loader, dialect).map_err(|(errors, files)| AsmErrors { errors, files })
 }
 
 /// Assembles source text; only the built-in include files are available.

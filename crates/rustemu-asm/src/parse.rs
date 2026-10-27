@@ -1,7 +1,7 @@
 //! Statement parser: one source line -> [`Stmt`].
 
 use crate::expr::{Expr, Parser, describe, parse_reg};
-use crate::lexer::{Tok, Token, tokenize};
+use crate::lexer::{Tok, Token, tokenize, tokenize_nasm};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataItem {
@@ -64,6 +64,8 @@ pub enum StmtKind {
     Emu(String),
     /// Directives that are accepted and ignored (ASSUME, NAME, TITLE, PUBLIC, ...).
     Ignored,
+    /// NASM `times n <statement>`.
+    Times(Expr, Box<StmtKind>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +73,8 @@ pub enum DotSeg {
     Code,
     Data,
     Stack(Option<Expr>),
+    /// NASM `section .bss`: uninitialized data, not stored in the output file.
+    Bss,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -281,7 +285,7 @@ fn data_item(p: &mut Parser, size: u8) -> Result<DataItem, PErr> {
     }
     if let Some(Tok::Str(s)) = p.peek()
         && matches!(p.peek_at(1), None | Some(Tok::P(',')) | Some(Tok::P(')')))
-        && (size == 1 || s.len() > 2)
+        && (size == 1 || s.len() > 2 || p.nasm)
     {
         let s = s.clone();
         p.pos += 1;
@@ -305,6 +309,172 @@ fn data_item(p: &mut Parser, size: u8) -> Result<DataItem, PErr> {
         return Ok(DataItem::Dup(e, inner));
     }
     Ok(DataItem::Expr(e))
+}
+
+/// Parses one line of the NASM dialect.
+pub fn parse_line_nasm(line: &str) -> Result<Stmt, PErr> {
+    // `#nasm#` (and other `#...#` lines) select or configure the dialect.
+    if line.trim().starts_with('#') {
+        return parse_line(line);
+    }
+    let toks = tokenize_nasm(line)?;
+    let mut p = Parser::new(&toks);
+    p.nasm = true;
+    let mut label = None;
+
+    // `[bits 16]`, `[org 7C00h]`, `[section .text]`: the bracketed (primitive) directive forms.
+    let bracketed = matches!(p.peek(), Some(Tok::P('[')))
+        && matches!(toks.last().map(|t| &t.tok), Some(Tok::P(']')))
+        && p.peek_at(1).is_some_and(|t| {
+            ["BITS", "ORG", "SECTION", "SEGMENT", "CPU", "GLOBAL", "EXTERN", "DEFAULT", "USE16"]
+                .iter()
+                .any(|d| t.is_ident(d))
+        });
+    let toks = if bracketed { &toks[1..toks.len() - 1] } else { &toks[..] };
+    let mut p = Parser::new(toks);
+    p.nasm = true;
+
+    // `name:` / `.local:` label; `name db ...`, `name equ ...`, `name times ...`, `name resb ...`.
+    if let Some(Tok::Ident(id)) = p.peek()
+        && parse_reg(id).is_none()
+    {
+        let next = p.peek_at(1);
+        let named = next.is_some_and(|t| {
+            DATA_DIRS.iter().any(|(d, _)| t.is_ident(d))
+                || ["EQU", "TIMES", "RESB", "RESW", "RESD", "RESQ", "REST"].iter().any(|d| t.is_ident(d))
+        });
+        if next == Some(&Tok::P(':')) {
+            label = Some(id.to_ascii_uppercase());
+            p.pos += 2;
+        } else if named {
+            label = Some(id.to_ascii_uppercase());
+            p.pos += 1;
+        }
+    }
+    // `name = expr` (from %assign).
+    if label.is_none()
+        && let (Some(Tok::Ident(name)), Some(Tok::P('='))) = (p.peek(), p.peek_at(1))
+    {
+        let name = name.to_ascii_uppercase();
+        p.pos += 2;
+        let e = p.expr()?;
+        return finish(&p, Stmt { label: None, kind: StmtKind::Assign(name, e), colon: true });
+    }
+    if p.at_end() {
+        return Ok(Stmt { label, kind: StmtKind::Empty, colon: true });
+    }
+    if p.peek().is_some_and(|t| t.is_ident("EQU")) {
+        p.pos += 1;
+        let Some(name) = label else { return Err((p.col(), "EQU needs a name".into())) };
+        let e = p.expr()?;
+        return finish(&p, Stmt { label: None, kind: StmtKind::Equ(name, e), colon: true });
+    }
+    let kind = nasm_kind(&mut p)?;
+    // Every NASM label is an address; `mov ax, x` loads it, `[x]` reads memory.
+    finish(&p, Stmt { label, kind, colon: true })
+}
+
+/// The statement after the label of a NASM line.
+fn nasm_kind(p: &mut Parser) -> Result<StmtKind, PErr> {
+    let Some(Tok::Ident(word)) = p.advance() else {
+        let t = &p.toks[p.pos - 1];
+        return Err((t.col, format!("unexpected {}", describe(&t.tok))));
+    };
+    let u = word.to_ascii_uppercase();
+    if let Some(&(_, size)) = DATA_DIRS.iter().find(|(d, _)| *d == u) {
+        return Ok(StmtKind::Data { size, items: data_items(p, size)? });
+    }
+    let res = match u.as_str() {
+        "RESB" => Some(1),
+        "RESW" => Some(2),
+        "RESD" => Some(4),
+        "RESQ" => Some(8),
+        "REST" => Some(10),
+        _ => None,
+    };
+    if let Some(size) = res {
+        let n = p.expr()?;
+        return Ok(StmtKind::Data { size, items: vec![DataItem::Dup(n, vec![DataItem::Uninit])] });
+    }
+    Ok(match u.as_str() {
+        "TIMES" => {
+            let n = p.expr()?;
+            let inner = nasm_kind(p)?;
+            StmtKind::Times(n, Box::new(inner))
+        }
+        "ORG" => StmtKind::Org(p.expr()?),
+        "BITS" => {
+            let e = p.expr()?;
+            if e != Expr::Num(16) {
+                return Err((p.col(), "only 16-bit code (BITS 16) can run on the 8086".into()));
+            }
+            StmtKind::Ignored
+        }
+        "SECTION" | "SEGMENT" => {
+            let name = match p.advance() {
+                Some(Tok::Ident(n)) => n.to_ascii_lowercase(),
+                _ => return Err((p.col(), "section name expected".into())),
+            };
+            // Attributes such as `align=16` or `progbits` are ignored.
+            p.pos = p.toks.len();
+            match name.as_str() {
+                ".text" | ".code" => StmtKind::DotSeg(DotSeg::Code),
+                ".data" | ".rodata" => StmtKind::DotSeg(DotSeg::Data),
+                ".bss" => StmtKind::DotSeg(DotSeg::Bss),
+                _ => return Err((p.col(), format!("section '{name}': only .text, .data and .bss are supported"))),
+            }
+        }
+        "ALIGN" => {
+            let e = p.expr()?;
+            p.pos = p.toks.len();
+            StmtKind::Align(e)
+        }
+        "ALIGNB" => {
+            let e = p.expr()?;
+            p.pos = p.toks.len();
+            StmtKind::Times(
+                Expr::Bin(
+                    crate::expr::BinOp::Mod,
+                    Box::new(Expr::Bin(
+                        crate::expr::BinOp::Sub,
+                        Box::new(e.clone()),
+                        Box::new(Expr::Bin(
+                            crate::expr::BinOp::Mod,
+                            Box::new(Expr::Bin(
+                                crate::expr::BinOp::Sub,
+                                Box::new(Expr::Here),
+                                Box::new(Expr::SectionStart),
+                            )),
+                            Box::new(e.clone()),
+                        )),
+                    )),
+                    Box::new(e),
+                ),
+                Box::new(StmtKind::Data { size: 1, items: vec![DataItem::Uninit] }),
+            )
+        }
+        "USE16" | "CPU" | "GLOBAL" | "EXTERN" | "COMMON" | "DEFAULT" | "ABSOLUTE" => {
+            p.pos = p.toks.len();
+            StmtKind::Ignored
+        }
+        "INCBIN" => return Err((p.col(), "INCBIN is not supported".into())),
+        _ => {
+            let mut prefixes = Vec::new();
+            let mut mnem = u;
+            while PREFIXES.contains(&mnem.as_str()) {
+                match p.peek() {
+                    Some(Tok::Ident(next)) => {
+                        prefixes.push(mnem);
+                        mnem = next.to_ascii_uppercase();
+                        p.pos += 1;
+                    }
+                    _ => break,
+                }
+            }
+            let ops = operands(p)?;
+            StmtKind::Instr { prefixes, mnem, ops }
+        }
+    })
 }
 
 fn operands(p: &mut Parser) -> Result<Vec<Operand>, PErr> {

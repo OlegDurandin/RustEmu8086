@@ -1,10 +1,11 @@
-//! Source preprocessing: INCLUDE, MACRO/ENDM (with LOCAL), REPT, IF/IFDEF/ELSE/ENDIF.
+//! Source preprocessing: INCLUDE, MACRO/ENDM (with LOCAL), REPT, IF/IFDEF/ELSEIF/ELSE/ENDIF.
+//! NASM `%` directives are translated to these line by line (see [`Preprocessor::nasm_lines`]).
 
 use std::collections::HashMap;
 
 use crate::AsmError;
 use crate::expr::{Env, ForwardKind, Parser, SegId, SymVal, eval};
-use crate::lexer::tokenize;
+use crate::lexer::{tokenize, tokenize_nasm};
 
 /// One logical line after preprocessing.
 #[derive(Debug, Clone)]
@@ -57,6 +58,8 @@ pub struct Preprocessor<'a> {
     local_counter: u32,
     pub errors: Vec<AsmError>,
     pub out: Vec<Line>,
+    /// NASM dialect: `%` directives, `&` is an operator, backquoted strings.
+    pub nasm: bool,
 }
 
 /// Words that begin/end blocks we must track while collecting macro bodies.
@@ -73,7 +76,7 @@ fn strip_comment(text: &str) -> &str {
         match q {
             Some(qc) if c == qc => q = None,
             Some(_) => {}
-            None if c == '\'' || c == '"' => q = Some(c),
+            None if c == '\'' || c == '"' || c == '`' => q = Some(c),
             None if c == ';' => return &text[..i],
             None => {}
         }
@@ -135,7 +138,13 @@ fn split_args(s: &str) -> Vec<String> {
 }
 
 /// Replaces whole identifiers (outside strings) using `map`; `&` glues tokens and is removed.
+#[cfg(test)]
 fn substitute(text: &str, map: &HashMap<String, String>) -> String {
+    substitute_with(text, map, false)
+}
+
+/// [`substitute`]; in NASM `&` is an operator and backquotes delimit strings.
+fn substitute_with(text: &str, map: &HashMap<String, String>, nasm: bool) -> String {
     let mut out = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -144,7 +153,7 @@ fn substitute(text: &str, map: &HashMap<String, String>) -> String {
         let c = chars[i];
         if let Some(qc) = q {
             // Inside strings only `&name&` style substitution is done.
-            if c == '&' {
+            if c == '&' && !nasm {
                 let mut j = i + 1;
                 while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
                     j += 1;
@@ -166,7 +175,7 @@ fn substitute(text: &str, map: &HashMap<String, String>) -> String {
         if c == ';' {
             break;
         }
-        if c == '\'' || c == '"' {
+        if c == '\'' || c == '"' || (nasm && c == '`') {
             q = Some(c);
             out.push(c);
             i += 1;
@@ -193,7 +202,7 @@ fn substitute(text: &str, map: &HashMap<String, String>) -> String {
             }
             continue;
         }
-        if c == '&' {
+        if c == '&' && !nasm {
             i += 1;
             continue;
         }
@@ -232,6 +241,7 @@ impl<'a> Preprocessor<'a> {
             local_counter: 0,
             errors: Vec::new(),
             out: Vec::new(),
+            nasm: false,
         }
     }
 
@@ -242,23 +252,110 @@ impl<'a> Preprocessor<'a> {
     pub fn add_file(&mut self, name: &str, text: &str) {
         let idx = self.files.len();
         self.files.push(name.to_string());
-        let lines: Vec<Line> = text
-            .lines()
-            .enumerate()
-            .map(|(i, t)| Line {
-                text: t.to_string(),
-                file: idx,
-                line: i as u32 + 1,
-                macro_depth: 0,
-                chain: Vec::new(),
-            })
-            .collect();
+        let lines = self.file_lines(idx, text, 0);
         self.process(lines, 0);
     }
 
+    /// The lines of a source file (NASM directives translated).
+    fn file_lines(&mut self, file: usize, text: &str, depth: u32) -> Vec<Line> {
+        let numbered: Vec<(u32, String)> = if self.nasm {
+            self.nasm_lines(file, text)
+        } else {
+            text.lines().enumerate().map(|(i, t)| (i as u32 + 1, t.to_string())).collect()
+        };
+        numbered
+            .into_iter()
+            .map(|(line, text)| Line { text, file, line, macro_depth: depth, chain: Vec::new() })
+            .collect()
+    }
+
+    /// Translates the NASM preprocessor (`%define`, `%assign`, `%macro` with `%1` and `%%label`,
+    /// `%rep`, `%if`/`%elif`/`%else`/`%endif`, `%ifdef`, `%include`) to the MASM directives this
+    /// preprocessor handles. Lines keep their numbers (one NASM line may give several).
+    fn nasm_lines(&mut self, file: usize, text: &str) -> Vec<(u32, String)> {
+        let mut out = Vec::new();
+        // Inside `%macro`: (parameter count, local labels used).
+        let mut in_macro: Option<(usize, Vec<String>)> = None;
+        for (i, raw) in text.lines().enumerate() {
+            let n = i as u32 + 1;
+            let code = strip_comment(raw).trim();
+            let err = |s: &mut Self, msg: String| s.errors.push(AsmError { file, line: n, col: None, msg });
+            if let Some(directive) = code.strip_prefix('%').filter(|d| d.starts_with(|c: char| c.is_ascii_alphabetic()))
+            {
+                let word: String = directive.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+                let rest = directive[word.len()..].trim();
+                let word = word.to_ascii_lowercase();
+                let first_word = rest.split_whitespace().next().unwrap_or("");
+                let after_first = rest[first_word.len()..].trim();
+                let line = match word.as_str() {
+                    "define" | "xdefine" | "idefine" | "ixdefine" => {
+                        if first_word.contains('(') {
+                            err(self, "%define with parameters is not supported; use %macro".into());
+                            None
+                        } else {
+                            Some(format!("{first_word} EQU <{after_first}>"))
+                        }
+                    }
+                    "undef" => Some(format!("%UNDEF {first_word}")),
+                    "assign" | "iassign" => Some(format!("{first_word} = {after_first}")),
+                    "macro" | "imacro" => {
+                        // `%macro name 2`, `%macro name 1-3`, `%macro name 1+` (no greedy last parameter).
+                        let spec = after_first.split_whitespace().next().unwrap_or("0");
+                        let max = spec
+                            .split('-')
+                            .next_back()
+                            .and_then(|s| s.trim_end_matches(['+', '*']).parse::<usize>().ok())
+                            .or_else(|| spec.trim_end_matches(['+', '*']).parse().ok())
+                            .unwrap_or(0)
+                            .min(9);
+                        in_macro = Some((max, Vec::new()));
+                        let params: Vec<String> = (1..=max).map(|k| format!("__P{k}")).collect();
+                        Some(format!("{first_word} MACRO {}", params.join(", ")))
+                    }
+                    "endmacro" | "endm" => {
+                        if let Some((_, locals)) = in_macro.take()
+                            && !locals.is_empty()
+                        {
+                            out.push((n, format!("LOCAL {}", locals.join(", "))));
+                        }
+                        Some("ENDM".into())
+                    }
+                    "rep" => Some(format!("REPT {rest}")),
+                    "endrep" => Some("ENDM".into()),
+                    "if" => Some(format!("IF {rest}")),
+                    "elif" => Some(format!("ELSEIF {rest}")),
+                    "else" => Some("ELSE".into()),
+                    "endif" => Some("ENDIF".into()),
+                    "ifdef" => Some(format!("IFDEF {rest}")),
+                    "ifndef" => Some(format!("IFNDEF {rest}")),
+                    "elifdef" => Some(format!("ELSEIFDEF {rest}")),
+                    "elifndef" => Some(format!("ELSEIFNDEF {rest}")),
+                    "include" => Some(format!("INCLUDE {rest}")),
+                    "error" | "fatal" => Some(format!("%ERROR {rest}")),
+                    "warning" | "line" | "pragma" | "use" | "push" | "pop" => None,
+                    _ => {
+                        err(self, format!("NASM directive %{word} is not supported"));
+                        None
+                    }
+                };
+                if let Some(l) = line {
+                    out.push((n, l));
+                }
+                continue;
+            }
+            let mut line = raw.to_string();
+            if let Some((count, locals)) = &mut in_macro {
+                line = nasm_macro_body(&line, *count, locals);
+            }
+            out.push((n, line));
+        }
+        out
+    }
+
     fn eval_const(&self, text: &str) -> Option<i64> {
-        let toks = tokenize(text).ok()?;
+        let toks = if self.nasm { tokenize_nasm(text).ok()? } else { tokenize(text).ok()? };
         let mut p = Parser::new(&toks);
+        p.nasm = self.nasm;
         let e = p.expr().ok()?;
         eval(&e, &ConstEnv(&self.consts)).ok().map(|v| v.num)
     }
@@ -278,8 +375,11 @@ impl<'a> Preprocessor<'a> {
             let l = lines[i].clone();
             i += 1;
             let mut l = l;
-            if !self.text_equs.is_empty() && first_words(&l.text).1 != "EQU" {
-                l.text = substitute(&l.text, &self.text_equs);
+            let (fw1, fw2) = first_words(&l.text);
+            // Names tested by IFDEF and friends must not be replaced by their text.
+            let names_line = matches!(fw1.as_str(), "IFDEF" | "IFNDEF" | "ELSEIFDEF" | "ELSEIFNDEF" | "%UNDEF");
+            if !self.text_equs.is_empty() && fw2 != "EQU" && !names_line {
+                l.text = substitute_with(&l.text, &self.text_equs, self.nasm);
             }
             let code = strip_comment(&l.text).trim().to_string();
             let (w1, w2) = first_words(&code);
@@ -305,6 +405,30 @@ impl<'a> Preprocessor<'a> {
                         }
                     };
                     cond.push((v, v));
+                    continue;
+                }
+                "ELSEIF" | "ELSEIFDEF" | "ELSEIFNDEF" => {
+                    let n = cond.len();
+                    if n == 0 {
+                        self.error(&l, "ELSEIF without IF");
+                        continue;
+                    }
+                    let parent = cond[..n - 1].iter().all(|c| c.0);
+                    let taken = cond[n - 1].1;
+                    let v = parent && !taken && {
+                        let rest = code[w1.len()..].trim();
+                        match w1.as_str() {
+                            "ELSEIFDEF" => self.is_defined(rest),
+                            "ELSEIFNDEF" => !self.is_defined(rest),
+                            _ => {
+                                self.eval_const(rest).unwrap_or_else(|| {
+                                    self.error(&l, "ELSEIF requires a constant expression");
+                                    0
+                                }) != 0
+                            }
+                        }
+                    };
+                    cond[n - 1] = (v, taken || v);
                     continue;
                 }
                 "ELSE" => {
@@ -367,6 +491,17 @@ impl<'a> Preprocessor<'a> {
             }
 
             match w1.as_str() {
+                "%UNDEF" if self.nasm => {
+                    let name = w2.clone();
+                    self.text_equs.remove(&name);
+                    self.defined.remove(&name);
+                    continue;
+                }
+                "%ERROR" if self.nasm => {
+                    let msg = code[6..].trim().trim_matches(['\'', '"']).to_string();
+                    self.error(&l, if msg.is_empty() { "%error".to_string() } else { msg });
+                    continue;
+                }
                 // MASM 6 simplified startup/exit code.
                 ".STARTUP" => {
                     for t in ["@STARTUP:", "mov ax, @data", "mov ds, ax"] {
@@ -393,17 +528,7 @@ impl<'a> Preprocessor<'a> {
                         Some((resolved, text)) => {
                             let idx = self.files.len();
                             self.files.push(resolved);
-                            let inc: Vec<Line> = text
-                                .lines()
-                                .enumerate()
-                                .map(|(n, t)| Line {
-                                    text: t.to_string(),
-                                    file: idx,
-                                    line: n as u32 + 1,
-                                    macro_depth: depth,
-                                    chain: Vec::new(),
-                                })
-                                .collect();
+                            let inc = self.file_lines(idx, &text, depth);
                             self.process(inc, depth);
                         }
                         None => self.error(&l, format!("cannot open include file '{name}'")),
@@ -442,7 +567,7 @@ impl<'a> Preprocessor<'a> {
             }
 
             // Everything after END is ignored (Emu8086 allows free text there).
-            if w1 == "END" && depth == 0 {
+            if w1 == "END" && depth == 0 && !self.nasm {
                 self.out.push(l);
                 return;
             }
@@ -496,11 +621,12 @@ impl<'a> Preprocessor<'a> {
                     // `name??NNNN`: unique, but the debugger can still show the original name.
                     map.insert(loc.clone(), format!("{loc}??{:04X}", self.local_counter));
                 }
+                let nasm = self.nasm;
                 let expanded: Vec<Line> = m
                     .body
                     .iter()
                     .map(|b| Line {
-                        text: substitute(&b.text, &map),
+                        text: substitute_with(&b.text, &map, nasm),
                         file: l.file,
                         line: l.line,
                         macro_depth: depth + 1,
@@ -553,6 +679,74 @@ impl<'a> Preprocessor<'a> {
         self.error(start, "missing ENDM");
         (body, i)
     }
+}
+
+/// A line of a NASM macro body: `%1`..`%9` / `%{1}` become the parameters `__P1`..`__P9`,
+/// `%%name` becomes the local label `__L_name` (collected into `locals`).
+fn nasm_macro_body(line: &str, count: usize, locals: &mut Vec<String>) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let mut quote = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(q) = quote {
+            out.push(c);
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            ';' => {
+                out.extend(&chars[i..]);
+                break;
+            }
+            '\'' | '"' | '`' => {
+                quote = Some(c);
+                out.push(c);
+                i += 1;
+            }
+            '%' if chars.get(i + 1) == Some(&'%')
+                && chars.get(i + 2).is_some_and(|c| c.is_alphanumeric() || *c == '_') =>
+            {
+                let mut j = i + 2;
+                while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+                let name = format!("__L_{}", chars[i + 2..j].iter().collect::<String>()).to_ascii_uppercase();
+                if !locals.contains(&name) {
+                    locals.push(name.clone());
+                }
+                out.push_str(&name);
+                i = j;
+            }
+            '%' if chars.get(i + 1).is_some_and(|c| c.is_ascii_digit() || *c == '{') => {
+                let braced = chars[i + 1] == '{';
+                let start = if braced { i + 2 } else { i + 1 };
+                let mut j = start;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    j += 1;
+                }
+                let k: usize = chars[start..j].iter().collect::<String>().parse().unwrap_or(0);
+                if braced && chars.get(j) == Some(&'}') {
+                    j += 1;
+                }
+                if (1..=count).contains(&k) {
+                    out.push_str(&format!("__P{k}"));
+                } else {
+                    out.extend(&chars[i..j]);
+                }
+                i = j;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Splits `label: rest` (label is not a segment register prefix).

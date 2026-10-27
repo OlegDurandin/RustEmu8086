@@ -215,7 +215,7 @@ fn step_back_restores_input_devices_and_floppy() {
     )
     .unwrap();
     s.load_program(io).unwrap();
-    assert!(s.machine.floppy.is_empty());
+    assert!(s.machine.floppies[0].is_empty());
     assert_eq!(s.machine.step(), Event::Continue);
     assert_eq!(s.machine.step(), Event::Continue);
     assert_eq!(s.machine.sys.dev.traffic_lights, 0x0249);
@@ -226,10 +226,10 @@ fn step_back_restores_input_devices_and_floppy() {
         assert_eq!(s.machine.step(), Event::Continue);
     }
     assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.floppy.len(), 1_474_560);
-    assert_eq!(s.machine.floppy[0], 0xAA);
+    assert_eq!(s.machine.floppies[0].len(), 1_474_560);
+    assert_eq!(s.machine.floppies[0][0], 0xAA);
     assert!(s.machine.step_back());
-    assert!(s.machine.floppy.is_empty());
+    assert!(s.machine.floppies[0].is_empty());
 }
 
 #[test]
@@ -715,4 +715,135 @@ next:
     while s.machine.step() == Event::Continue {}
     assert_eq!(s.machine.sys.dev.led, 0x5678);
     assert_eq!(s.machine.cpu.regs[3], 3);
+}
+
+#[test]
+fn saved_state_restores_the_whole_machine() {
+    let src = "org 100h\n    mov cx, 5\nnext:\n    inc word ptr [200h]\n    mov ah, 2\n    mov dl, 'x'\n    int 21h\n    loop next\n    hlt\n";
+    let mut s = Session::new();
+    s.load_program(rustemu_asm::assemble_str(src).unwrap()).unwrap();
+    for _ in 0..6 {
+        s.machine.step();
+    }
+    let saved = s.save_state();
+    let (cpu, out) = (s.machine.cpu.clone(), s.machine.output.clone());
+    assert_eq!(s.machine.run(1000), Event::Halted);
+    let (end_cpu, end_out) = (s.machine.cpu.clone(), s.machine.output.clone());
+    s.restore_state(saved);
+    assert!(s.machine.cpu.same_state(&cpu));
+    assert_eq!(s.machine.output, out);
+    assert_eq!(s.current_line(), s.line_at_addr(s.machine.cpu.pc()));
+    // Running again gives the same result.
+    assert_eq!(s.machine.run(1000), Event::Halted);
+    assert!(s.machine.cpu.same_state(&end_cpu));
+    assert_eq!(s.machine.output, end_out);
+    // Reset emulator and RAM: nothing is loaded any more.
+    s.unload();
+    assert!(s.machine.loaded.is_none() && s.program.is_none());
+    assert_eq!(s.machine.sys.mem.read8(rustemu_core::linear(0x0700, 0x100)), 0);
+}
+
+#[test]
+fn bin_file_written_to_floppy_sectors() {
+    let mut s = Session::new();
+    let data: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
+    // Cylinder 0, head 0, sector 2 = right after the boot sector.
+    assert_eq!(s.write_floppy(0, 0, 0, 2, &data), Ok(2));
+    assert_eq!(s.machine.floppies[0].len(), 1_474_560);
+    assert_eq!(&s.machine.floppies[0][512..1512], &data[..]);
+    // Cylinder 1, head 1, sector 18 is the last sector of the second cylinder: LBA 71.
+    assert_eq!(s.write_floppy(0, 1, 1, 18, &[7; 512]), Ok(1));
+    assert_eq!(s.machine.floppies[0][71 * 512], 7);
+    assert!(s.write_floppy(0, 0, 0, 0, &data).is_err());
+    assert!(s.write_floppy(0, 79, 1, 18, &data).is_err(), "does not fit after the last sector");
+}
+
+#[test]
+fn several_floppy_drives() {
+    // INT 11h -> SI, then write one sector to drive DL = 1.
+    let src = "org 100h
+    int 11h
+    mov si, ax
+    mov ax, 0301h
+    mov cx, 1
+    mov dx, 1
+    mov bx, offset data
+    int 13h
+    hlt
+data db 512 dup(55h)
+";
+    let prog = rustemu_asm::assemble_str(src).unwrap();
+    let mut s = Session::new();
+    s.load_program(prog.clone()).unwrap();
+    s.machine.run(100);
+    assert!(s.machine.cpu.flags & rustemu_core::cpu::flags::CF != 0, "no FLOPPY_1 yet");
+    assert_eq!(s.machine.cpu.regs[rustemu_core::cpu::AX] >> 8, 0x80);
+    assert_eq!(s.machine.cpu.regs[rustemu_core::cpu::SI] & 0xC1, 0x01, "one drive");
+
+    assert_eq!(s.machine.add_floppy(), Some(1));
+    s.load_program(prog).unwrap();
+    while s.machine.cpu.regs[rustemu_core::cpu::SI] == 0 || s.machine.floppies[1][0] == 0 {
+        assert_eq!(s.machine.step(), Event::Continue);
+    }
+    assert_eq!(s.machine.cpu.regs[rustemu_core::cpu::SI] & 0xC1, 0x41, "two drives in INT 11h");
+    assert_eq!(s.machine.floppies[1][..512], [0x55; 512]);
+    assert!(s.machine.floppies[0].iter().all(|&b| b == 0), "FLOPPY_0 untouched");
+    assert!(s.machine.step_back());
+    assert_eq!(s.machine.floppies[1][0], 0, "step back undoes the write on FLOPPY_1");
+    // Booting from FLOPPY_1 passes its number in DL; at most four drives.
+    s.write_floppy(1, 0, 0, 1, &[0xF4]).unwrap();
+    s.boot_from_floppy(1).unwrap();
+    assert_eq!(s.machine.cpu.regs[rustemu_core::cpu::DX], 1);
+    assert_eq!((s.machine.add_floppy(), s.machine.add_floppy(), s.machine.add_floppy()), (Some(2), Some(3), None));
+    assert!(s.boot_from_floppy(4).is_err());
+}
+
+#[test]
+fn nasm_program_runs_and_debugs() {
+    let src = "bits 16
+org 100h
+section .text
+start:
+    mov word [count], 3
+.again:
+    mov dx, msg
+    mov ah, 9
+    int 21h
+    dec word [count]
+    jnz .again
+    int 3
+    ret
+section .data
+msg   db 'ok', 13, 10, '$'
+count dw 0
+";
+    let prog = rustemu_asm::assemble_str(src).unwrap();
+    assert_eq!(prog.dialect, rustemu_asm::Dialect::Nasm);
+    let mut s = Session::new();
+    s.load_program(prog).unwrap();
+    assert_eq!(s.current_line(), Some((0, 5)));
+    assert_eq!(s.machine.run(10_000), Event::Breakpoint);
+    assert_eq!(String::from_utf8_lossy(&s.machine.output), "ok\r\nok\r\nok\r\n");
+    assert_eq!(s.current_line(), Some((0, 13)));
+    // NASM meaning of names in debugger expressions: `count` is the address, `[count]` the word.
+    let ev = |e: &str| s.compile(e).map(|x| x.eval(&s.machine));
+    let addr = s.program.as_ref().unwrap().symbols.iter().find(|x| x.name == "COUNT").unwrap().value;
+    assert_eq!(ev("count"), Ok(addr));
+    assert_eq!(ev("[count]"), Ok(0));
+    assert_eq!(ev("byte [msg]"), Ok(b'o' as i64));
+    assert_eq!(ev("[ds:msg]"), Ok(b'o' as i64));
+    // The local label has its full name.
+    assert!(s.program.as_ref().unwrap().symbols.iter().any(|x| x.name == "START.AGAIN"));
+}
+
+#[test]
+fn nasm_examples() {
+    let (out, ev) = run_example("hello_nasm.asm", "");
+    assert_eq!(out, "Hello from NASM!\r\n".repeat(3));
+    assert_eq!(ev, Event::Terminated(0));
+    let mut s = Session::new();
+    s.load_path(&examples().join("boot_nasm.asm")).unwrap();
+    assert_eq!(s.program.as_ref().unwrap().format, rustemu_asm::Format::Boot);
+    assert_eq!(s.machine.run(100_000), Event::Halted);
+    assert!(s.machine.screen_text().contains("Booted from a NASM boot sector!"));
 }

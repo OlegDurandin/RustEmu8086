@@ -11,6 +11,7 @@ use rustemu_session::Session;
 const USAGE: &str = "\
 usage:
   rustemu asm <file.asm> [-o <out>] [-l] [-s]   assemble (-l listing, -s symbols)
+      --syntax <s>       nasm or masm (Emu8086); detected from the source by default
   rustemu run <file> [options]                  run .asm/.com/.exe/.bin/.boot headless
       --input <text>     keyboard input (\\n = Enter); otherwise stdin is used
       --args <text>      DOS command line parameters (PSP:80h)
@@ -55,13 +56,24 @@ fn file_arg(args: &[String]) -> Result<PathBuf, String> {
 
 fn cmd_asm(args: &[String]) -> Result<u8, String> {
     let path = file_arg(args)?;
-    let prog = rustemu_asm::assemble_file(&path).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    let dialect = match opt(args, "--syntax").map(str::to_ascii_lowercase).as_deref() {
+        None => None,
+        Some("nasm") => Some(rustemu_asm::Dialect::Nasm),
+        Some("masm" | "emu8086") => Some(rustemu_asm::Dialect::Masm),
+        Some(s) => return Err(format!("unknown syntax '{s}' (nasm or masm)")),
+    };
+    let text =
+        String::from_utf8_lossy(&std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).into_owned();
+    let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
+    let prog = rustemu_asm::assemble_dialect(&path.to_string_lossy(), &text, &mut loader, dialect)
+        .map_err(|e| e.to_string())?;
     let out = opt(args, "-o").map(PathBuf::from).unwrap_or_else(|| path.with_extension(prog.format.extension()));
     std::fs::write(&out, prog.file_bytes()).map_err(|e| format!("{}: {e}", out.display()))?;
     println!(
-        "{} -> {} ({} format, {} bytes)",
+        "{} -> {} ({} syntax, {} format, {} bytes)",
         path.display(),
         out.display(),
+        prog.dialect.name(),
         prog.format.name(),
         prog.file_bytes().len()
     );

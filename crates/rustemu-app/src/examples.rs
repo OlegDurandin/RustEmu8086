@@ -109,4 +109,61 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     example!("thermometer.asm"),
     example!("printer.asm"),
     example!("robot.asm"),
+    example!("hello_nasm.asm"),
+    example!("boot_nasm.asm"),
+];
+
+/// Templates for File -> New with "NASM syntax" (COM, BIN, boot sector).
+pub const NASM_TEMPLATES: &[(&str, &str)] = &[
+    (
+        "COM program (NASM)",
+        "\
+; COM program in NASM syntax: loaded at offset 100h.
+bits 16
+org 100h
+
+section .text
+start:
+        ; add your code here
+
+        mov ax, 4C00h           ; exit to DOS
+        int 21h
+
+section .data
+        ; msg db 'Hello!', 13, 10, '$'
+
+section .bss
+        ; buffer resb 16
+",
+    ),
+    (
+        "BIN file (NASM)",
+        "\
+; Pure binary in NASM syntax, loaded at 0100:0000 (CS = DS = 0100h).
+bits 16
+org 0
+
+start:
+        ; add your code here
+
+        hlt
+",
+    ),
+    (
+        "boot sector (NASM)",
+        "\
+; Boot sector in NASM syntax: loaded by the BIOS at 0000:7C00.
+; DOS services (INT 21h) are not available here.
+bits 16
+org 0x7c00
+
+start:
+        ; add your code here
+
+        int 19h                 ; reboot
+
+times 510-($-$$) db 0           ; pad to 510 bytes
+dw 0xAA55                       ; boot signature
+",
+    ),
 ];

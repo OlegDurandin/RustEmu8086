@@ -536,3 +536,156 @@ fn address_breakpoints_belong_to_one_program() {
     assert!(!app.session.machine.breakpoints.contains(&addr_bp), "dropped for a different program");
     assert!(app.session.machine.breakpoints.contains(&line_bp), "line breakpoints stay");
 }
+
+#[test]
+fn emulator_window_debug_and_file_menus() {
+    use rustemu_core::cpu::{BX, CX};
+    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    app.text = LOOP_SRC.into();
+    app.emulate();
+    // Select `mov bx, 1` (line 6) as if clicked in the disassembly.
+    let a6 = app.session.addr_of_line(0, 6).unwrap();
+    let sel = (0x0700, (a6 - rustemu_core::linear(0x0700, 0)) as u16);
+    app.code_selected = Some(sel);
+    app.run_until_selected();
+    run_until_paused(&mut app);
+    assert_eq!(app.session.machine.cpu.pc(), a6);
+    assert_eq!(app.session.machine.cpu.regs[CX], 0);
+
+    // set break point (selected) / show current break point / clear break point.
+    let a4 = app.session.addr_of_line(0, 4).unwrap();
+    app.code_selected = Some((0x0700, (a4 - 0x7000) as u16));
+    app.toggle_breakpoint_at_addr(a4);
+    assert!(app.bp_lines.contains_key(&(0, 4)), "maps to a line breakpoint");
+    app.show_next_breakpoint();
+    assert!(app.code_view_pinned && app.code_view_start == a4);
+    app.show_current_instruction();
+    assert!(!app.code_view_pinned);
+    app.toggle_breakpoint_at_addr(a4);
+    assert!(app.bp_lines.is_empty());
+
+    // set CS:IP to selected position: back to `inc ax`.
+    app.set_cs_ip_to_selected();
+    assert_eq!(app.session.machine.cpu.pc(), a4);
+
+    // save the emulator's state / load from previous state.
+    app.save_emulator_state();
+    app.single_step();
+    assert_ne!(app.session.machine.cpu.pc(), a4);
+    app.load_emulator_state();
+    assert_eq!(app.session.machine.cpu.pc(), a4);
+    assert_eq!(app.session.current_line(), Some((0, 4)));
+
+    // reset emulator and ram.
+    app.reset_emulator_and_ram();
+    assert!(!app.loaded());
+    assert_eq!(app.session.machine.cpu.regs[BX], 0);
+    app.load_emulator_state();
+    assert!(app.loaded(), "a saved state brings the program back");
+    app.close_emulator();
+    assert!(!app.windows.emulator);
+}
+
+#[test]
+fn emulator_menu_snapshots() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    let app = h.state_mut();
+    app.emulate();
+    (app.windows.screen, app.windows.source) = (false, false);
+    h.run_steps(4);
+    // "debug" is also a button at the bottom of the window; the menu comes first.
+    h.get_all_by_label("debug").next().unwrap().click();
+    h.run_steps(4);
+    save(&mut h, "18_emulator_debug_menu");
+    // The first click only closes the open menu.
+    h.get_by_label("file").click();
+    h.run_steps(4);
+    h.get_by_label("file").click();
+    h.run_steps(4);
+    save(&mut h, "19_emulator_file_menu");
+}
+
+#[test]
+fn value_viewer_addresses_and_view_menu_snapshots() {
+    let mut cpu = rustemu_core::Cpu::new();
+    cpu.sregs[rustemu_core::cpu::DS] = 0x0700;
+    cpu.regs[rustemu_core::cpu::SI] = 0x0010;
+    use crate::debugger::parse_view_addr;
+    assert_eq!(parse_view_addr(&cpu, "DS:0100"), Some(0x7100));
+    assert_eq!(parse_view_addr(&cpu, "ds:si"), Some(0x7010));
+    assert_eq!(parse_view_addr(&cpu, "07105h"), Some(0x7105));
+    assert_eq!(parse_view_addr(&cpu, "zz:1"), None);
+
+    let mut h = harness(app_with_example(0));
+    h.run();
+    let app = h.state_mut();
+    app.emulate();
+    (app.windows.screen, app.windows.source) = (false, false);
+    h.run_steps(4);
+    h.get_by_label("view").click();
+    h.run_steps(4);
+    save(&mut h, "20_emulator_view_menu");
+    let app = h.state_mut();
+    crate::debugger::view_register(app, "SP");
+    assert!(app.windows.value_viewer && app.value_viewer.reg == Some(7));
+    app.device_tab = crate::devices_ui::Device::VgaState;
+    app.windows.devices = true;
+    h.key_press(egui::Key::Escape);
+    h.run_steps(6);
+    save(&mut h, "21_value_viewer_vga_state");
+}
+
+#[test]
+fn value_viewer_sets_registers_and_memory() {
+    use crate::debugger::{set_viewed_value, view_register};
+    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    app.load_example(0);
+    app.emulate();
+    view_register(&mut app, "BX");
+    set_viewed_value(&mut app, "1010b").unwrap();
+    assert_eq!(app.session.machine.cpu.regs[rustemu_core::cpu::BX], 10);
+    set_viewed_value(&mut app, "-2").unwrap();
+    assert_eq!(app.session.machine.cpu.regs[rustemu_core::cpu::BX], 0xFFFE);
+    view_register(&mut app, "FLAGS");
+    set_viewed_value(&mut app, "1").unwrap();
+    assert!(app.session.machine.cpu.flags & rustemu_core::cpu::flags::CF != 0);
+    app.value_viewer.reg = None;
+    app.value_viewer.addr = "DS:0200".into();
+    set_viewed_value(&mut app, "'AB'").unwrap();
+    assert_eq!(app.session.machine.sys.mem.read16(0x7200), 0x4241);
+    assert!(set_viewed_value(&mut app, "70000").unwrap_err().contains("does not fit"));
+}
+
+#[test]
+fn nasm_templates_and_syntax_setting() {
+    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    for i in [0, 2, 3] {
+        app.new_from_nasm_template(i);
+        app.emulate();
+        assert!(app.loaded(), "template {i}: {:?}", app.messages.iter().map(|m| &m.text).collect::<Vec<_>>());
+        assert!(app.messages[0].text.contains("NASM syntax"), "{}", app.messages[0].text);
+    }
+    // Forcing the Emu8086 syntax on NASM code fails; forcing NASM works.
+    app.text = "mov ax, [bx]\nret\n".into();
+    app.settings.syntax = crate::app::SyntaxChoice::Nasm;
+    app.emulate();
+    assert!(app.messages[0].text.contains("NASM syntax"));
+    app.text = "org 100h\nmov word [count], 1\nret\ncount dw 0\n".into();
+    app.settings.syntax = crate::app::SyntaxChoice::Masm;
+    app.emulate();
+    assert!(app.messages.iter().any(|m| m.error));
+}
+
+#[test]
+fn nasm_editor_snapshot() {
+    let i = crate::examples::EXAMPLES.iter().position(|e| e.0 == "hello_nasm.asm").unwrap();
+    let mut h = harness(app_with_example(i));
+    h.run();
+    let app = h.state_mut();
+    app.emulate();
+    (app.windows.emulator, app.windows.screen, app.windows.source) = (false, false, false);
+    h.run_steps(4);
+    save(&mut h, "22_nasm_editor");
+    assert!(h.state().messages[0].text.contains("NASM syntax, COM format"));
+}

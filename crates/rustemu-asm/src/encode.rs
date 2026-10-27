@@ -187,6 +187,22 @@ fn fits_i8(v: &Val) -> bool {
         && (-128..=127).contains(&(v.num as u16 as i16))
 }
 
+thread_local! {
+    // NASM: a memory operand with an immediate needs an explicit size (no Emu8086 guessing).
+    static STRICT_SIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Selects NASM's operand size rule for the following [`encode`] calls on this thread.
+pub fn set_strict_size(on: bool) {
+    STRICT_SIZE.with(|s| s.set(on));
+}
+
+fn strict_size() -> bool {
+    STRICT_SIZE.with(|s| s.get())
+}
+
+const NO_SIZE: &str = "operation size not specified (write BYTE or WORD: mov byte [bx], 0)";
+
 /// Resolves the operand width (true = 16-bit) of a two-operand instruction.
 fn width(a: &Op, b: &Op) -> R<bool> {
     let is_reg = |o: &Op| matches!(o, Op::R8(_) | Op::R16(_) | Op::Sr(_));
@@ -196,6 +212,7 @@ fn width(a: &Op, b: &Op) -> R<bool> {
         (Some(x), Some(y)) if x != y && is_reg(a) && !is_reg(b) => width_of(x),
         (Some(x), Some(y)) if x != y && is_reg(b) && !is_reg(a) => width_of(y),
         (Some(x), Some(y)) if x != y => Err(format!("operand size mismatch ({x} vs {y} bytes)")),
+        (None, None) if matches!(b, Op::Imm(_)) && strict_size() && !matches!(a, Op::Imm(_)) => Err(NO_SIZE.into()),
         (None, None) if matches!(b, Op::Imm(_)) => Ok(!imm_fits_byte(b)),
         (None, None) if matches!(a, Op::Imm(_)) => Ok(!imm_fits_byte(a)),
         (Some(1), _) | (_, Some(1)) => Ok(false),
@@ -225,6 +242,7 @@ fn imm_fits_byte(o: &Op) -> bool {
 fn width_with_imm(dst: &Op, v: &Val) -> R<bool> {
     match dst.size() {
         Some(s) => width_of(s),
+        None if strict_size() => Err(NO_SIZE.into()),
         None => Ok(!imm_fits_byte(&Op::Imm(v.clone()))),
     }
 }

@@ -62,15 +62,19 @@ fn new_dialog(app: &mut App, ctx: &egui::Context) {
                 ui.add_space(40.0);
                 ui.radio_value(&mut choice, 5, "the emulator");
             });
-            let mut fasm = false;
-            ui.add_enabled(false, egui::Checkbox::new(&mut fasm, "use Flat Assembler / Intel syntax"))
-                .on_disabled_hover_text("FASM syntax is not supported yet");
+            ui.checkbox(&mut app.new_nasm, "use NASM syntax (bits 16, section, times, %macro)").on_hover_text(
+                "COM, BIN and boot sector templates in NASM syntax; EXE needs a linker and is not available",
+            );
+            if app.new_nasm && choice == 1 {
+                choice = 0;
+            }
             ui.separator();
             ui.horizontal(|ui| {
                 if ui.add_sized([120.0, 28.0], egui::Button::new(RichText::new("OK").strong())).clicked()
                     || ui.input(|i| i.key_pressed(egui::Key::Enter))
                 {
                     match choice {
+                        0..=4 if app.new_nasm => app.new_from_nasm_template(choice),
                         0..=3 => app.new_from_template(choice),
                         4 => app.new_from_template(usize::MAX),
                         _ => {
@@ -110,6 +114,16 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                     if changed {
                         app.apply_theme(ui.ctx());
                     }
+                });
+                ui.end_row();
+                ui.label("assembler syntax");
+                ui.horizontal(|ui| {
+                    use crate::app::SyntaxChoice;
+                    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(
+                        "NASM when the source uses bits 16, section, times, resb, %define, byte [..]...",
+                    );
+                    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
+                    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
                 });
                 ui.end_row();
                 ui.label("editor font size");
@@ -354,43 +368,9 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
     if ui.button("Set command line parameters…").clicked() {
         app.cmdline_dialog = Some(app.session.command_line.clone());
     }
-    ui.menu_button("Virtual drive", |ui| {
-        if ui.button("Load floppy image…").clicked()
-            && let Some(p) = rfd::FileDialog::new().pick_file()
-        {
-            match std::fs::read(&p) {
-                Ok(mut b) => {
-                    b.resize(b.len().max(1_474_560), 0);
-                    app.session.machine.floppy = b;
-                    app.status = format!("Floppy image loaded: {}", p.display());
-                }
-                Err(e) => app.notice("Virtual drive", &e.to_string()),
-            }
-        }
-        if ui.button("Save floppy image…").clicked()
-            && let Some(p) = rfd::FileDialog::new().set_file_name("FLOPPY_0").save_file()
-            && let Err(e) = std::fs::write(&p, &app.session.machine.floppy)
-        {
-            app.notice("Virtual drive", &e.to_string());
-        }
-        if ui.button("Write 512 bytes at 0000:7C00 to the boot sector").clicked() {
-            app.session.write_boot_sector();
-            app.status = "Boot sector written to the virtual floppy".into();
-        }
-        if ui.button("Boot from floppy").clicked() {
-            match app.session.boot_from_floppy() {
-                Ok(()) => app.after_binary_load(),
-                Err(e) => app.notice("Virtual drive", &e),
-            }
-        }
-    });
+    ui.menu_button("Virtual drive", |ui| virtual_drive_menu(app, ui));
     ui.menu_button("Virtual devices", |ui| {
-        for (d, name) in crate::devices_ui::Device::ALL {
-            if ui.button(name).clicked() {
-                app.device_tab = d;
-                app.windows.devices = true;
-            }
-        }
+        crate::emulator::virtual_devices_menu(app, ui);
     });
     ui.menu_button("Windows", |ui| {
         let w = &mut app.windows;
@@ -501,7 +481,132 @@ fn messages(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// Virtual drive menu (main Emulator menu and the emulator window), as in Emu8086. There is one
+/// drive, FLOPPY_0, kept in memory; images are loaded and saved explicitly.
+pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
+    use rustemu_core::machine::{FLOPPY_SIZE, MAX_FLOPPIES};
+    ui.set_min_width(330.0);
+    let drives = app.session.machine.floppies.len();
+    ui.menu_button("boot from virtual floppy", |ui| {
+        for d in 0..drives {
+            if ui.button(format!("FLOPPY_{d}")).clicked() {
+                match app.session.boot_from_floppy(d) {
+                    Ok(()) => app.after_binary_load(),
+                    Err(e) => app.notice("Virtual drive", &e),
+                }
+            }
+        }
+    });
+    ui.menu_button("write 512 bytes at 0000:7c00 to boot sector", |ui| {
+        for d in 0..drives {
+            if ui.button(format!("FLOPPY_{d}")).clicked() {
+                match app.session.write_boot_sector(d) {
+                    Ok(()) => app.status = format!("Boot sector of FLOPPY_{d} written"),
+                    Err(e) => app.notice("Virtual drive", &e),
+                }
+            }
+        }
+    });
+    if ui.button("write '.bin' file to floppy…").clicked() {
+        app.bin_to_floppy = Some(crate::app::BinToFloppy { path: String::new(), drive: 0, cyl: 0, head: 0, sector: 2 });
+    }
+    ui.separator();
+    if ui
+        .add_enabled(drives < MAX_FLOPPIES, egui::Button::new("create new floppy drive"))
+        .on_hover_text("Adds FLOPPY_1..FLOPPY_3 with an empty 1.44 MB disk (INT 13h DL = 1..3, INT 11h counts them)")
+        .on_disabled_hover_text("Emu8086 supports up to four floppy drives")
+        .clicked()
+        && let Some(d) = app.session.machine.add_floppy()
+    {
+        app.status = format!("FLOPPY_{d} created: an empty 1.44 MB disk, INT 13h drive DL = {d}");
+    }
+    ui.separator();
+    ui.menu_button("load floppy image", |ui| {
+        for d in 0..drives {
+            if ui.button(format!("into FLOPPY_{d}…")).clicked()
+                && let Some(p) = rfd::FileDialog::new().pick_file()
+            {
+                match std::fs::read(&p) {
+                    Ok(mut b) => {
+                        b.resize(b.len().max(FLOPPY_SIZE), 0);
+                        app.session.machine.floppies[d] = b;
+                        app.status = format!("FLOPPY_{d} loaded from {}", p.display());
+                    }
+                    Err(e) => app.notice("Virtual drive", &e.to_string()),
+                }
+            }
+        }
+    });
+    ui.menu_button("save floppy image", |ui| {
+        for d in 0..drives {
+            if ui.button(format!("FLOPPY_{d}…")).clicked()
+                && let Some(p) = rfd::FileDialog::new().set_file_name(format!("FLOPPY_{d}")).save_file()
+                && let Err(e) = std::fs::write(&p, &app.session.machine.floppies[d])
+            {
+                app.notice("Virtual drive", &e.to_string());
+            }
+        }
+    });
+}
+
+/// "write '.bin' file to floppy": file, then cylinder / head / sector to start at.
+fn bin_to_floppy_dialog(app: &mut App, ctx: &egui::Context) {
+    let Some(mut d) = app.bin_to_floppy.take() else { return };
+    let mut keep = true;
+    let mut write = false;
+    egui::Window::new("write '.bin' file to floppy")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut d.path).hint_text("file.bin").desired_width(300.0));
+                if ui.button("browse…").clicked()
+                    && let Some(p) = rfd::FileDialog::new().add_filter("binary", &["bin", "com", "img"]).pick_file()
+                {
+                    d.path = p.display().to_string();
+                }
+            });
+            ui.horizontal(|ui| {
+                let drives = app.session.machine.floppies.len();
+                egui::ComboBox::from_label("drive").selected_text(format!("FLOPPY_{}", d.drive)).show_ui(ui, |ui| {
+                    for i in 0..drives {
+                        ui.selectable_value(&mut d.drive, i, format!("FLOPPY_{i}"));
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut d.cyl).range(0..=79).prefix("cylinder "));
+                ui.add(egui::DragValue::new(&mut d.head).range(0..=1).prefix("head "));
+                ui.add(egui::DragValue::new(&mut d.sector).range(1..=18).prefix("sector "));
+            });
+            ui.weak("1.44 MB disk: 80 cylinders, 2 heads, 18 sectors of 512 bytes. Sector 1 of cylinder 0, head 0 is the boot sector.");
+            ui.horizontal(|ui| {
+                write = ui.add_enabled(!d.path.trim().is_empty(), egui::Button::new("write")).clicked();
+                if ui.button("cancel").clicked() {
+                    keep = false;
+                }
+            });
+        });
+    if write {
+        match std::fs::read(d.path.trim()) {
+            Ok(data) => match app.session.write_floppy(d.drive, d.cyl, d.head, d.sector, &data) {
+                Ok(n) => {
+                    app.status = format!("{} bytes ({n} sectors) written to FLOPPY_{}", data.len(), d.drive);
+                    keep = false;
+                }
+                Err(e) => app.notice("Virtual drive", &e),
+            },
+            Err(e) => app.notice("Virtual drive", &format!("{}: {e}", d.path.trim())),
+        }
+    }
+    if keep {
+        app.bin_to_floppy = Some(d);
+    }
+}
+
 fn dialogs(app: &mut App, ctx: &egui::Context) {
+    bin_to_floppy_dialog(app, ctx);
     if let Some(mut text) = app.cmdline_dialog.take() {
         let mut keep = true;
         egui::Window::new("Command line parameters")

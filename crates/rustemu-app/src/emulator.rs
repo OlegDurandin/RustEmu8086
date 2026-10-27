@@ -43,6 +43,22 @@ pub fn stale_banner(app: &mut App, ui: &mut Ui) {
 }
 
 fn emulator_ui(app: &mut App, ui: &mut Ui) {
+    egui::MenuBar::new().ui(ui, |ui| {
+        ui.menu_button("file", |ui| file_menu(app, ui));
+        ui.menu_button("math", |ui| {
+            if ui.button("multi base calculator").clicked() {
+                app.calculator.open = true;
+            }
+            if ui.button("base converter").clicked() {
+                app.windows.converter = true;
+            }
+        });
+        ui.menu_button("debug", |ui| debug_menu(app, ui));
+        ui.menu_button("view", |ui| view_menu(app, ui));
+        ui.menu_button("virtual devices", |ui| virtual_devices_menu(app, ui));
+        ui.menu_button("virtual drive", |ui| crate::ui::virtual_drive_menu(app, ui));
+        ui.menu_button("help", |ui| help_menu(app, ui));
+    });
     let loaded = app.loaded();
     stale_banner(app, ui);
     ui.horizontal_wrapped(|ui| {
@@ -109,6 +125,172 @@ fn emulator_ui(app: &mut App, ui: &mut Ui) {
     bottom_buttons(app, ui);
 }
 
+/// A menu item with a right-aligned shortcut.
+fn item(ui: &mut Ui, enabled: bool, text: &str, shortcut: &str) -> bool {
+    ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(shortcut)).clicked()
+}
+
+/// "file" menu of the emulator window (Emu8086).
+fn file_menu(app: &mut App, ui: &mut Ui) {
+    ui.set_min_width(250.0);
+    if item(ui, true, "load executable…", "") {
+        app.open_dialog();
+    }
+    if item(ui, app.loaded(), "reload", "") {
+        app.reload();
+    }
+    ui.separator();
+    ui.menu_button("examples", |ui| {
+        for (i, (name, _)) in crate::examples::EXAMPLES.iter().enumerate() {
+            if ui.button(*name).clicked() {
+                app.emulate_example(i);
+            }
+        }
+    });
+    ui.separator();
+    if item(ui, true, "reset emulator and ram", "") {
+        app.reset_emulator_and_ram();
+    }
+    ui.separator();
+    if item(ui, true, "set command line parameters", "") {
+        app.cmdline_dialog = Some(app.session.command_line.clone());
+    }
+    ui.separator();
+    if item(ui, app.loaded(), "save the emulator's state", "") {
+        app.save_emulator_state();
+    }
+    if item(ui, app.saved_state.is_some(), "load from previous state", "") {
+        app.load_emulator_state();
+    }
+    let recent: Vec<std::path::PathBuf> = app.settings.recent.iter().take(5).cloned().collect();
+    if !recent.is_empty() {
+        ui.separator();
+        for p in recent {
+            if ui.button(p.display().to_string()).clicked() {
+                app.emulate_file(&p);
+            }
+        }
+    }
+    ui.separator();
+    if item(ui, true, "close the emulator", "") {
+        app.close_emulator();
+    }
+}
+
+/// "view" menu of the emulator window (Emu8086).
+fn view_menu(app: &mut App, ui: &mut Ui) {
+    ui.set_min_width(260.0);
+    let w = &mut app.windows;
+    ui.checkbox(&mut w.console, "log and debug.exe emulation   F11");
+    ui.separator();
+    ui.checkbox(&mut w.value_viewer, "extended value viewer");
+    ui.separator();
+    ui.checkbox(&mut w.stack, "stack");
+    ui.separator();
+    ui.checkbox(&mut w.vars, "variables");
+    ui.checkbox(&mut w.memory, "memory");
+    ui.separator();
+    ui.checkbox(&mut w.symbols, "symbol table");
+    ui.checkbox(&mut w.listing, "listing");
+    ui.separator();
+    ui.checkbox(&mut w.source, "original source code");
+    ui.separator();
+    ui.checkbox(&mut app.options_open, "options");
+    ui.separator();
+    let w = &mut app.windows;
+    ui.checkbox(&mut w.alu, "arithmetic & logical unit");
+    ui.separator();
+    ui.checkbox(&mut w.flags, "flags");
+    ui.separator();
+    ui.checkbox(&mut w.flag_analyser, "lexical flag analyzer");
+    ui.separator();
+    ui.checkbox(&mut w.ascii, "ascii codes");
+    ui.separator();
+    ui.checkbox(&mut w.screen, "emulator screen");
+}
+
+/// "virtual devices" menu: the device programs of Emu8086, shown as tabs of the devices window.
+pub fn virtual_devices_menu(app: &mut App, ui: &mut Ui) {
+    for (d, name) in crate::devices_ui::Device::EXE {
+        if ui.button(name).clicked() {
+            app.device_tab = d;
+            app.windows.devices = true;
+        }
+    }
+}
+
+/// "help" menu of the emulator window (Emu8086).
+fn help_menu(app: &mut App, ui: &mut Ui) {
+    ui.set_min_width(240.0);
+    if item(ui, true, "documentation and tutorials", "F1") {
+        app.reference.open = true;
+    }
+    ui.separator();
+    if item(ui, true, "check for an update…", "") {
+        // The project page lists the releases; there is no automatic updater.
+        let _ = std::process::Command::new("open").arg(crate::app::RELEASES_URL).spawn();
+    }
+    ui.separator();
+    if item(ui, true, "about…", "") {
+        app.windows.about = true;
+    }
+}
+
+/// "debug" menu of the emulator window (Emu8086); shortcuts are RustEmu8086's.
+fn debug_menu(app: &mut App, ui: &mut Ui) {
+    ui.set_min_width(330.0);
+    let loaded = app.loaded();
+    let running = app.run != RunMode::Paused;
+    let sel = app.selected_addr();
+    let at = sel.map_or("(no selection)".to_string(), |a| format!("({a:05X}h)"));
+    let has_bp = sel.is_some_and(|a| app.session.machine.breakpoints.contains(&a));
+    if item(ui, loaded, "single step", "F8") {
+        app.single_step();
+    }
+    if item(ui, loaded, "step over", "F10") {
+        app.step_over();
+    }
+    if item(ui, loaded, "step out", "⇧F11") {
+        app.step_out();
+    }
+    ui.separator();
+    if item(ui, loaded && app.session.machine.history_len() > 0, "step back", "⇧F8 / F6") {
+        app.step_back();
+    }
+    ui.separator();
+    if item(ui, true, "stop on condition…", "") {
+        app.windows.stop_condition = true;
+    }
+    ui.separator();
+    if item(ui, loaded && sel.is_some(), &format!("run until {at}"), "⌃F8") {
+        app.run_until_selected();
+    }
+    if item(ui, loaded && !running, "run", "F5") {
+        app.start_run();
+    }
+    if item(ui, running, "stop", "F5") {
+        app.stop();
+    }
+    ui.separator();
+    if item(ui, sel.is_some() && !has_bp, &format!("set break point {at}"), "") {
+        app.toggle_breakpoint_at_addr(sel.unwrap());
+    }
+    if item(ui, has_bp, "clear break point", "") {
+        app.toggle_breakpoint_at_addr(sel.unwrap());
+    }
+    if item(ui, !app.session.machine.breakpoints.is_empty(), "show current break point", "") {
+        app.show_next_breakpoint();
+    }
+    ui.separator();
+    if item(ui, loaded, "show current instruction (at CS:IP)", "F7") {
+        app.show_current_instruction();
+    }
+    ui.separator();
+    if item(ui, sel.is_some(), &format!("set CS:IP to selected position {at}"), "⌃⇧F7") {
+        app.set_cs_ip_to_selected();
+    }
+}
+
 /// The row of buttons at the bottom of the emulator window, as in Emu8086.
 fn bottom_buttons(app: &mut App, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
@@ -151,9 +333,13 @@ fn bottom_buttons(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn reg_row(ui: &mut Ui, name: &str, v: &mut u16, prev: u16, split: bool) {
+/// One register row; returns true when its name was double-clicked (opens the value viewer).
+fn reg_row(ui: &mut Ui, name: &str, v: &mut u16, prev: u16, split: bool) -> bool {
     let color = if *v != prev { CHANGED } else { ui.visuals().text_color() };
-    let label = ui.label(RichText::new(name).monospace().strong()).id;
+    let name_resp = ui
+        .add(egui::Label::new(RichText::new(name).monospace().strong()).sense(egui::Sense::click()))
+        .on_hover_text("double-click: extended value viewer");
+    let label = name_resp.id;
     if split {
         let mut hi = (*v >> 8) as u8;
         let mut lo = *v as u8;
@@ -169,11 +355,13 @@ fn reg_row(ui: &mut Ui, name: &str, v: &mut u16, prev: u16, split: bool) {
         ui.label(RichText::new(format!("{:5}", *v)).monospace().color(color).weak());
     }
     ui.end_row();
+    name_resp.double_clicked()
 }
 
 fn registers(app: &mut App, ui: &mut Ui) {
     let prev = app.prev_cpu.clone();
     let c = &mut app.session.machine.cpu;
+    let mut view: Option<&str> = None;
     egui::Grid::new("regs").num_columns(4).spacing([6.0, 2.0]).striped(true).show(ui, |ui| {
         ui.label("");
         ui.label(RichText::new("H").weak());
@@ -181,17 +369,29 @@ fn registers(app: &mut App, ui: &mut Ui) {
         ui.label(RichText::new("dec").weak());
         ui.end_row();
         for i in [cpu::AX, cpu::BX, cpu::CX, cpu::DX] {
-            reg_row(ui, REG16_NAMES[i], &mut c.regs[i], prev.regs[i], true);
+            if reg_row(ui, REG16_NAMES[i], &mut c.regs[i], prev.regs[i], true) {
+                view = Some(REG16_NAMES[i]);
+            }
         }
         // Same order as in Emu8086: CS IP SS SP BP SI DI DS ES.
-        reg_row(ui, SREG_NAMES[cpu::CS], &mut c.sregs[cpu::CS], prev.sregs[cpu::CS], false);
-        reg_row(ui, "IP", &mut c.ip, prev.ip, false);
-        reg_row(ui, SREG_NAMES[cpu::SS], &mut c.sregs[cpu::SS], prev.sregs[cpu::SS], false);
+        if reg_row(ui, SREG_NAMES[cpu::CS], &mut c.sregs[cpu::CS], prev.sregs[cpu::CS], false) {
+            view = Some("CS");
+        }
+        if reg_row(ui, "IP", &mut c.ip, prev.ip, false) {
+            view = Some("IP");
+        }
+        if reg_row(ui, SREG_NAMES[cpu::SS], &mut c.sregs[cpu::SS], prev.sregs[cpu::SS], false) {
+            view = Some("SS");
+        }
         for i in [cpu::SP, cpu::BP, cpu::SI, cpu::DI] {
-            reg_row(ui, REG16_NAMES[i], &mut c.regs[i], prev.regs[i], false);
+            if reg_row(ui, REG16_NAMES[i], &mut c.regs[i], prev.regs[i], false) {
+                view = Some(REG16_NAMES[i]);
+            }
         }
         for i in [cpu::DS, cpu::ES] {
-            reg_row(ui, SREG_NAMES[i], &mut c.sregs[i], prev.sregs[i], false);
+            if reg_row(ui, SREG_NAMES[i], &mut c.sregs[i], prev.sregs[i], false) {
+                view = Some(SREG_NAMES[i]);
+            }
         }
     });
     ui.add_space(4.0);
@@ -213,6 +413,9 @@ fn registers(app: &mut App, ui: &mut Ui) {
     });
     ui.add_space(4.0);
     ui.label(RichText::new(format!("instructions: {}", c.instr_count)).weak().small());
+    if let Some(name) = view {
+        crate::debugger::view_register(app, name);
+    }
 }
 
 /// Near target offset of a disassembled `CALL`/`JMP`/`Jcc`/`LOOP`/`JCXZ` (`"CALL 0150h"` -> 0x150).
@@ -226,6 +429,9 @@ fn jump_target(text: &str) -> Option<u16> {
 
 /// Finds the address to start the disassembly at so that the list stays stable while stepping.
 fn disasm_start(app: &mut App, rows: usize) -> u32 {
+    if app.code_view_pinned {
+        return app.code_view_start;
+    }
     let m = &app.session.machine;
     let pc = m.cpu.pc();
     let mut a = app.code_view_start;
@@ -251,11 +457,17 @@ fn code_view(app: &mut App, ui: &mut Ui) {
     let start = disasm_start(app, rows);
     let m = &app.session.machine;
     let pc = m.cpu.pc();
-    let cs = m.cpu.cs();
-    let mut ip = m.cpu.ip.wrapping_sub(pc.wrapping_sub(start) as u16);
+    // Addresses are shown relative to CS, or to the segment of a shown breakpoint.
+    let (cs, mut ip) = match app.code_selected {
+        Some((s, o)) if app.code_view_pinned && rustemu_core::linear(s, o) == start => (s, o),
+        _ => (m.cpu.cs(), m.cpu.ip.wrapping_sub(pc.wrapping_sub(start) as u16)),
+    };
     let mut a = start;
     let font = FontId::monospace(12.5);
     let mut clicked_bp: Option<u32> = None;
+    let mut select: Option<(u16, u16)> = None;
+    let selected = app.selected_addr();
+    let sel_bg = ui.visuals().selection.bg_fill.gamma_multiply(0.45);
     let label_color =
         if ui.visuals().dark_mode { Color32::from_rgb(220, 220, 150) } else { Color32::from_rgb(120, 90, 20) };
     let session = &app.session;
@@ -278,12 +490,24 @@ fn code_view(app: &mut App, ui: &mut Ui) {
             }
             let hex: String = bytes[..ins.len.min(6)].iter().map(|b| format!("{b:02X}")).collect();
             let addr = format!("{cs:04X}:{ip:04X}");
+            let is_selected = selected == Some(a) && !current;
             let mk = |s: String| {
                 let t = RichText::new(s).font(font.clone());
-                if current { t.background_color(Color32::from_rgb(40, 90, 160)).color(Color32::WHITE) } else { t }
+                if current {
+                    t.background_color(Color32::from_rgb(40, 90, 160)).color(Color32::WHITE)
+                } else if is_selected {
+                    t.background_color(sel_bg)
+                } else {
+                    t
+                }
             };
-            ui.label(mk(addr).weak());
-            ui.label(mk(format!("{hex:<10}")));
+            let row_ip = ip;
+            if ui.add(egui::Label::new(mk(addr).weak()).sense(egui::Sense::click())).clicked() {
+                select = Some((cs, row_ip));
+            }
+            if ui.add(egui::Label::new(mk(format!("{hex:<10}"))).sense(egui::Sense::click())).clicked() {
+                select = Some((cs, row_ip));
+            }
             let text = match jump_target(&ins.text).and_then(|off| session.symbol_at(rustemu_core::linear(cs, off))) {
                 Some(name) => format!("{}  ; {name}", ins.text),
                 None => ins.text.clone(),
@@ -291,24 +515,20 @@ fn code_view(app: &mut App, ui: &mut Ui) {
             let r = ui.add(egui::Label::new(mk(text)).sense(egui::Sense::click()));
             if r.double_clicked() {
                 clicked_bp = Some(a);
+            } else if r.clicked() {
+                select = Some((cs, row_ip));
             }
             ui.end_row();
             a += ins.len as u32;
             ip = ip.wrapping_add(ins.len as u16);
         }
     });
-    ui.weak("double-click an instruction to toggle a breakpoint");
+    ui.weak("click: select (debug menu), double-click: toggle a breakpoint");
+    if let Some(s) = select {
+        app.code_selected = Some(s);
+    }
     if let Some(addr) = clicked_bp {
-        // Map to a source line when possible, so the breakpoint survives reloads.
-        // Macro code keeps an address breakpoint (its line may be expanded in many places).
-        if let Some(loc) = app.session.location_at_addr(addr).filter(|l| l.origin.is_none()) {
-            app.toggle_breakpoint_at_line(loc.file, loc.line);
-        } else {
-            let bps = &mut app.session.machine.breakpoints;
-            if !bps.remove(&addr) {
-                bps.insert(addr);
-            }
-        }
+        app.toggle_breakpoint_at_addr(addr);
     }
 }
 

@@ -44,6 +44,12 @@ enum Node {
         size: u8,
         index: Box<Node>,
     },
+    /// A NASM data label (evaluates to its offset).
+    Addr {
+        seg: u16,
+        off: u16,
+        size: u8,
+    },
     Unary(char, Box<Node>),
     Binary(&'static str, Box<Node>, Box<Node>),
 }
@@ -55,6 +61,8 @@ pub enum SymbolRef {
     Variable { seg: u16, off: u16, size: u8 },
     /// A label or constant: its value.
     Value(i64),
+    /// A NASM data label: its value is the address; `[name]` reads `size` bytes there.
+    Address { seg: u16, off: u16, size: u8 },
 }
 
 impl Expr {
@@ -125,6 +133,7 @@ fn eval(n: &Node, m: &Machine) -> i64 {
         Node::Indexed { seg, off, size, index } => {
             read(m, linear(*seg, off.wrapping_add(eval(index, m) as u16)), *size)
         }
+        Node::Addr { off, .. } => *off as i64,
         Node::Unary(op, a) => {
             let a = eval(a, m);
             match op {
@@ -379,16 +388,31 @@ impl Parser<'_> {
                 Ok(n)
             }
             Tok::Op("[") => {
+                // NASM style segment override inside the brackets: [es:di].
+                let mut seg = None;
+                if let Some(Tok::Name(n)) = self.peek()
+                    && let Some(r) = sreg(n)
+                    && self.t.get(self.pos + 1) == Some(&Tok::Op(":"))
+                {
+                    seg = Some(Box::new(Node::Sreg(r)));
+                    self.pos += 2;
+                }
                 let off = self.binary(0)?;
                 self.expect("]")?;
-                Ok(Node::Mem { size: 1, seg: None, off: Box::new(off) })
+                // [nasm_label] reads the label's data size.
+                if let (None, Node::Addr { seg: s, off: o, size }) = (&seg, &off) {
+                    return Ok(Node::Var { addr: linear(*s, *o), size: *size });
+                }
+                Ok(Node::Mem { size: 1, seg, off: Box::new(off) })
             }
             Tok::Op(o) => Err(format!("unexpected '{o}'")),
             Tok::Name(n) if n == "OFFSET" => match self.peek().cloned() {
                 Some(Tok::Name(v)) => {
                     self.pos += 1;
                     match (self.lookup)(&v) {
-                        Some(SymbolRef::Variable { off, .. }) => Ok(Node::Num(off as i64)),
+                        Some(SymbolRef::Variable { off, .. } | SymbolRef::Address { off, .. }) => {
+                            Ok(Node::Num(off as i64))
+                        }
                         Some(SymbolRef::Value(x)) => Ok(Node::Num(x)),
                         None => Err(format!("unknown name '{v}'")),
                     }
@@ -439,6 +463,7 @@ impl Parser<'_> {
                 }
             }
             Some(SymbolRef::Value(v)) => Ok(Node::Num(v)),
+            Some(SymbolRef::Address { seg, off, size }) => Ok(Node::Addr { seg, off, size }),
             None => Err(format!("unknown name '{n}'")),
         }
     }

@@ -72,6 +72,8 @@ pub enum Expr {
     Str(Vec<u8>),
     Sym(String),
     Here,
+    /// NASM `$$`: start of the current section.
+    SectionStart,
     Reg(Reg),
     Mem(Box<Expr>),
     Un(UnOp, Box<Expr>),
@@ -87,13 +89,15 @@ pub enum Expr {
 pub struct Parser<'a> {
     pub toks: &'a [Token],
     pub pos: usize,
+    /// NASM syntax: `byte [x]` without PTR, `$$`, C operators, little-endian character constants.
+    pub nasm: bool,
 }
 
 type PResult<T> = Result<T, (usize, String)>;
 
 impl<'a> Parser<'a> {
     pub fn new(toks: &'a [Token]) -> Self {
-        Parser { toks, pos: 0 }
+        Parser { toks, pos: 0, nasm: false }
     }
 
     pub fn peek(&self) -> Option<&Tok> {
@@ -162,9 +166,21 @@ impl<'a> Parser<'a> {
         self.or_expr()
     }
 
+    /// Consumes two adjacent punctuation characters `ab` (`==`, `!=`, `<=`, ...).
+    fn eat_two(&mut self, a: char, b: char) -> bool {
+        let adjacent = match (self.toks.get(self.pos), self.toks.get(self.pos + 1)) {
+            (Some(x), Some(y)) => x.tok == Tok::P(a) && y.tok == Tok::P(b) && y.col == x.col + 1,
+            _ => false,
+        };
+        if adjacent {
+            self.pos += 2;
+        }
+        adjacent
+    }
+
     fn or_expr(&mut self) -> PResult<Expr> {
         let mut l = self.xor_expr()?;
-        while self.eat_kw("OR") {
+        while self.eat_two('|', '|') || self.eat_kw("OR") || self.eat_p('|') {
             let r = self.xor_expr()?;
             l = Expr::Bin(BinOp::Or, Box::new(l), Box::new(r));
         }
@@ -173,7 +189,7 @@ impl<'a> Parser<'a> {
 
     fn xor_expr(&mut self) -> PResult<Expr> {
         let mut l = self.and_expr()?;
-        while self.eat_kw("XOR") {
+        while self.eat_kw("XOR") || self.eat_p('^') {
             let r = self.and_expr()?;
             l = Expr::Bin(BinOp::Xor, Box::new(l), Box::new(r));
         }
@@ -182,7 +198,7 @@ impl<'a> Parser<'a> {
 
     fn and_expr(&mut self) -> PResult<Expr> {
         let mut l = self.not_expr()?;
-        while self.eat_kw("AND") {
+        while self.eat_two('&', '&') || self.eat_kw("AND") || self.eat_p('&') {
             let r = self.not_expr()?;
             l = Expr::Bin(BinOp::And, Box::new(l), Box::new(r));
         }
@@ -199,6 +215,30 @@ impl<'a> Parser<'a> {
 
     fn cmp_expr(&mut self) -> PResult<Expr> {
         let l = self.shift_expr()?;
+        if self.nasm {
+            // NASM: == != <> <= >= < > =
+            let op = if self.eat_two('=', '=') {
+                Some(BinOp::Eq)
+            } else if self.eat_two('!', '=') || self.eat_two('<', '>') {
+                Some(BinOp::Ne)
+            } else if self.eat_two('<', '=') {
+                Some(BinOp::Le)
+            } else if self.eat_two('>', '=') {
+                Some(BinOp::Ge)
+            } else if self.eat_p('<') {
+                Some(BinOp::Lt)
+            } else if self.eat_p('>') {
+                Some(BinOp::Gt)
+            } else if self.eat_p('=') {
+                Some(BinOp::Eq)
+            } else {
+                None
+            };
+            if let Some(op) = op {
+                let r = self.shift_expr()?;
+                return Ok(Expr::Bin(op, Box::new(l), Box::new(r)));
+            }
+        }
         let op = match self.peek() {
             Some(t) if t.is_ident("EQ") => BinOp::Eq,
             Some(t) if t.is_ident("NE") => BinOp::Ne,
@@ -261,6 +301,19 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> PResult<Expr> {
+        if self.eat_p('~') {
+            let e = self.unary()?;
+            return Ok(Expr::Un(UnOp::Not, Box::new(e)));
+        }
+        if self.nasm && self.eat_p('!') {
+            // Logical not: 1 when the operand is zero.
+            let e = self.unary()?;
+            return Ok(Expr::Bin(
+                BinOp::And,
+                Box::new(Expr::Bin(BinOp::Eq, Box::new(e), Box::new(Expr::Num(0)))),
+                Box::new(Expr::Num(1)),
+            ));
+        }
         if self.eat_p('-') {
             let e = self.unary()?;
             return Ok(Expr::Un(UnOp::Neg, Box::new(e)));
@@ -299,6 +352,22 @@ impl<'a> Parser<'a> {
                 let e = self.add_expr()?;
                 return Ok(Expr::Ptr(sz, Box::new(e)));
             }
+            // NASM: `byte [x]`, `word 5`, `dword [bx]` (and `qword` / `tword`).
+            let nasm_size = match u.as_str() {
+                "QWORD" => Some(8),
+                "TWORD" => Some(10),
+                _ => size,
+            };
+            if self.nasm
+                && let Some(sz) = nasm_size
+                && self.peek_at(1).is_some()
+                && !matches!(self.peek_at(1), Some(Tok::P(',' | ')' | ']')))
+            {
+                self.pos += 1;
+                self.eat_kw("STRICT");
+                let e = self.unary()?;
+                return Ok(Expr::Ptr(sz, Box::new(e)));
+            }
             if u == "B." || u == "W." {
                 self.pos += 1;
                 let e = self.add_expr()?;
@@ -333,8 +402,19 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> PResult<Expr> {
         match self.advance() {
             Some(Tok::Num(n)) => Ok(Expr::Num(n)),
+            // NASM character constants are little-endian: 'ab' = 6261h.
+            Some(Tok::Str(s)) if self.nasm && !s.is_empty() && s.len() <= 8 => {
+                Ok(Expr::Num(s.iter().rev().fold(0i64, |a, &c| (a << 8) | c as i64)))
+            }
             Some(Tok::Str(s)) => Ok(Expr::Str(s)),
-            Some(Tok::P('$')) => Ok(Expr::Here),
+            Some(Tok::P('$')) => {
+                let col = self.toks[self.pos - 1].col;
+                if self.toks.get(self.pos).is_some_and(|t| t.tok == Tok::P('$') && t.col == col + 1) {
+                    self.pos += 1;
+                    return Ok(Expr::SectionStart);
+                }
+                Ok(Expr::Here)
+            }
             Some(Tok::P('?')) => Ok(Expr::Num(0)),
             Some(Tok::P('(')) => {
                 let e = self.expr()?;
@@ -410,6 +490,10 @@ pub trait Env {
     fn here(&self) -> (SegId, i64);
     /// Paragraph number of a segment relative to the program start (flat formats return 0).
     fn seg_paragraph(&self, seg: SegId) -> i64;
+    /// Start of the current section (NASM `$$`).
+    fn section_start(&self) -> (SegId, i64) {
+        (self.here().0, 0)
+    }
 }
 
 /// Information about symbols that are declared but not yet resolved in the current pass.
@@ -465,6 +549,10 @@ pub fn eval(e: &Expr, env: &dyn Env) -> Result<Val, String> {
         }
         Expr::Here => {
             let (seg, off) = env.here();
+            Val { num: off, label_seg: Some(seg), label_para: env.seg_paragraph(seg), ..Default::default() }
+        }
+        Expr::SectionStart => {
+            let (seg, off) = env.section_start();
             Val { num: off, label_seg: Some(seg), label_para: env.seg_paragraph(seg), ..Default::default() }
         }
         Expr::Sym(name) => match env.lookup(name) {
