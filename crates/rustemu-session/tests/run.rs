@@ -676,3 +676,43 @@ end start
     assert_eq!(s.compile("n").unwrap().eval(&s.machine), 77);
     assert_eq!(s.compile("ds == data").unwrap().eval(&s.machine), 1);
 }
+
+#[test]
+fn step_back_through_mixed_light_and_device_steps() {
+    // Plain instructions (light snapshots) mixed with port I/O and a BIOS call (full snapshots).
+    let src = "org 100h
+    mov ax, 1234h
+    out 199, ax
+    mov cx, 3
+next:
+    inc bx
+    mov [500h], bx
+    loop next
+    in al, 125
+    mov ah, 1
+    int 16h
+    mov ax, 5678h
+    out 199, ax
+    hlt
+";
+    let prog = rustemu_asm::assemble_str(src).unwrap();
+    let mut s = Session::new();
+    s.load_program(prog).unwrap();
+    let cpu0 = s.machine.cpu.clone();
+    let led0 = s.machine.sys.dev.led;
+    let mem0 = s.machine.sys.mem.read16(rustemu_core::linear(s.machine.cpu.sregs[3], 0x500));
+    let mut steps = 0;
+    while s.machine.step() == Event::Continue {
+        steps += 1;
+    }
+    assert_eq!(s.machine.sys.dev.led, 0x5678);
+    assert!(s.machine.history_len() > steps - 1);
+    while s.machine.step_back() {}
+    assert!(s.machine.cpu.same_state(&cpu0));
+    assert_eq!(s.machine.sys.dev.led, led0);
+    assert_eq!(s.machine.sys.mem.read16(rustemu_core::linear(s.machine.cpu.sregs[3], 0x500)), mem0);
+    // And forward again gives the same result.
+    while s.machine.step() == Event::Continue {}
+    assert_eq!(s.machine.sys.dev.led, 0x5678);
+    assert_eq!(s.machine.cpu.regs[3], 3);
+}

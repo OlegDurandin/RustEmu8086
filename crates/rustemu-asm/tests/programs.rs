@@ -102,6 +102,13 @@ fn emu8086_syntax_quirks() {
         [0x60, 0x61, 0x6A, 5, 0x68, 0x34, 0x12, 0x6B, 0xF3, 7, 0x69, 0xC0, 0x34, 0x12]
     );
     assert!(err("org 100h\nimul ax, 10000h\n").contains("out of word range"));
+    // Immediates use the same ranges as DB / DW data: -128..255 and -32768..65535.
+    assert!(err("org 100h\nadd ax, -65535\n").contains("out of word range"));
+    assert!(err("org 100h\nmov al, -200\n").contains("out of byte range"));
+    assert_eq!(
+        bytes("org 100h\nmov al, -128\nmov al, 255\nmov ax, -32768\nadd ax, 0FFFFh\n"),
+        [0xB0, 0x80, 0xB0, 0xFF, 0xB8, 0x00, 0x80, 0x83, 0xC0, 0xFF]
+    );
     // ORG 100h with .data/.code is a COM file with the code first.
     let p = assemble_str("org 100h\n.data\nm db 'hi$'\n.code\nmov ax, @data\nmov dx, offset m\nret\n").unwrap();
     assert_eq!(p.format, Format::Com);

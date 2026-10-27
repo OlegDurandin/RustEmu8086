@@ -152,8 +152,9 @@ fn modrm(reg: u8, op: &Op) -> R<(Option<u8>, Vec<u8>)> {
     }
 }
 
+/// Byte operand: -128..255 (signed or unsigned), as for DB data.
 fn check8(v: &Val) -> R<u8> {
-    if !v.unknown && !(-256..=255).contains(&v.num) {
+    if !v.unknown && !(-128..=255).contains(&v.num) {
         return Err(format!("value {} out of byte range", v.num));
     }
     if v.seg_base.is_some() {
@@ -162,8 +163,9 @@ fn check8(v: &Val) -> R<u8> {
     Ok(v.num as u8)
 }
 
+/// Word operand: -32768..65535 (signed or unsigned), as for DW data.
 fn check16(v: &Val) -> R<u16> {
-    if !v.unknown && !(-65536..=65535).contains(&v.num) {
+    if !v.unknown && !(-32768..=65535).contains(&v.num) {
         return Err(format!("value {} out of word range", v.num));
     }
     Ok(v.num as u16)
@@ -181,7 +183,7 @@ fn imm_w(e: &mut Enc, v: &Val) -> R<()> {
 fn fits_i8(v: &Val) -> bool {
     !v.unknown
         && v.seg_base.is_none()
-        && (-65_536..=65_535).contains(&v.num)
+        && (-32_768..=65_535).contains(&v.num)
         && (-128..=127).contains(&(v.num as u16 as i16))
 }
 

@@ -716,6 +716,7 @@ impl App {
             source_files.iter().map(|(_, lines)| rustemu_asm::library::index(&lines.join("\n"))).collect();
         let devices = p.emu.start.clone();
         let root = self.vdrive();
+        let same_image = self.session.program.as_ref().is_some_and(|old| old.file_bytes() == p.file_bytes());
         if let Err(e) = self.session.load_program(p) {
             self.build_failed = true;
             self.notice("Load", &e);
@@ -725,6 +726,9 @@ impl App {
         self.source_index = source_index;
         self.loaded_text = Some(self.text.clone());
         self.session.machine.set_dos_root(root);
+        if !same_image {
+            self.clear_address_breakpoints();
+        }
         self.after_load();
         if let Some(d) = devices.iter().find_map(|n| crate::devices_ui::Device::from_start_name(n)) {
             self.device_tab = d;
@@ -742,10 +746,18 @@ impl App {
 
     /// After loading code without debug information (binary file, boot from floppy).
     pub fn after_binary_load(&mut self) {
+        self.clear_address_breakpoints();
         self.loaded_text = None;
         self.source_files.clear();
         self.source_index.clear();
         self.after_load();
+    }
+
+    /// Removes breakpoints set by address in the disassembly: they belong to the previous image.
+    /// Line breakpoints are mapped again by [`App::sync_breakpoints`].
+    fn clear_address_breakpoints(&mut self) {
+        let lines = &self.bp_addr;
+        self.session.machine.breakpoints.retain(|a| lines.contains_key(a));
     }
 
     fn after_load(&mut self) {
@@ -799,7 +811,21 @@ impl App {
 
     // ---- execution -----------------------------------------------------------------------
 
+    /// Execution commands run the current build: after a failed build they try to build again
+    /// instead of running the old image (it stays loaded for inspection).
+    fn ensure_current_build(&mut self) -> bool {
+        if self.loaded() && !self.build_failed {
+            return true;
+        }
+        self.emulate();
+        // `emulate` leaves the assembly error in `status`.
+        self.loaded() && !self.build_failed
+    }
+
     pub fn single_step(&mut self) {
+        if !self.ensure_current_build() {
+            return;
+        }
         self.run = RunMode::Paused;
         self.begin_exec();
         let ev = self.session.machine.step();
@@ -819,6 +845,9 @@ impl App {
     /// Step Over: runs the current source line (including macros and called procedures).
     /// Without debug information: runs CALL / INT / LOOP / REP to the next instruction.
     pub fn step_over(&mut self) {
+        if !self.ensure_current_build() {
+            return;
+        }
         if self.session.program.is_some() {
             self.begin_exec();
             self.run = RunMode::Source(self.session.step_goal(StepKind::Over, self.show_macro_code));
@@ -842,19 +871,17 @@ impl App {
 
     /// Step Out: runs until the current macro or procedure returns to its caller.
     pub fn step_out(&mut self) {
+        if !self.ensure_current_build() {
+            return;
+        }
         self.begin_exec();
         self.run = RunMode::Source(self.session.step_goal(StepKind::Out, self.show_macro_code));
         self.status = "Stepping out...".into();
     }
 
     pub fn start_run(&mut self) {
-        if !self.loaded() || self.build_failed {
-            self.emulate();
-            // `emulate` leaves the assembly error in `status`. Do not turn a
-            // failed load into a seemingly successful run of the old image.
-            if !self.loaded() || self.build_failed {
-                return;
-            }
+        if !self.ensure_current_build() {
+            return;
         }
         if self.session.machine.terminated.is_some() {
             self.status = "Program has terminated - press Reload to run again".into();
@@ -872,11 +899,15 @@ impl App {
 
     /// Runs until execution reaches `line` of source file `file` (the next line with code).
     pub fn run_to_line(&mut self, file: usize, line: u32) {
-        if !self.loaded() || self.session.program.is_none() {
+        // A binary without source is (re)built from the editor text first.
+        let ok = if self.session.program.is_none() {
             self.emulate();
-            if !self.loaded() {
-                return;
-            }
+            self.loaded() && !self.build_failed
+        } else {
+            self.ensure_current_build()
+        };
+        if !ok || self.session.program.is_none() {
+            return;
         }
         if file == 0 && self.is_stale() {
             self.status = "The source was changed - reassemble (F9) before running to a line".into();

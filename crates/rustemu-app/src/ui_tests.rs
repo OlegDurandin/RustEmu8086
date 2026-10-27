@@ -495,3 +495,44 @@ fn screen_paste_and_copy() {
     let text = crate::screen::screen_text(&app.session.machine.sys.mem);
     assert!(text.contains("Hello"), "{text}");
 }
+
+#[test]
+fn no_execution_command_runs_the_old_image_after_a_failed_build() {
+    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    app.text = LOOP_SRC.into();
+    app.emulate();
+    let cpu = app.session.machine.cpu.clone();
+    app.text = "org 100h\nnot_an_instruction\n".into();
+    app.emulate();
+    assert_eq!(app.status, "Assembly failed");
+    app.single_step();
+    app.step_over();
+    app.step_out();
+    app.run_to_line(0, 2);
+    assert_eq!(app.run, crate::app::RunMode::Paused);
+    assert_eq!(app.session.machine.cpu, cpu, "the old image must not execute");
+    // Fixing the code makes stepping work again (on the new build).
+    app.text = LOOP_SRC.into();
+    app.single_step();
+    assert_eq!(app.session.machine.cpu.instr_count, 1);
+}
+
+#[test]
+fn address_breakpoints_belong_to_one_program() {
+    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    app.text = LOOP_SRC.into();
+    app.emulate();
+    app.toggle_breakpoint_at_line(0, 4);
+    let line_bp = *app.bp_addr.keys().next().unwrap();
+    let addr_bp = line_bp + 1; // as if set by double-clicking in the disassembly
+    app.session.machine.breakpoints.insert(addr_bp);
+    app.reload();
+    assert!(app.session.machine.breakpoints.contains(&addr_bp), "kept by Reload");
+    app.emulate();
+    assert!(app.session.machine.breakpoints.contains(&addr_bp), "kept when the same code is reassembled");
+    app.text = format!("{LOOP_SRC}\n    nop\n");
+    app.text = app.text.replacen("mov cx, 10", "mov cx, 11", 1);
+    app.emulate();
+    assert!(!app.session.machine.breakpoints.contains(&addr_bp), "dropped for a different program");
+    assert!(app.session.machine.breakpoints.contains(&line_bp), "line breakpoints stay");
+}

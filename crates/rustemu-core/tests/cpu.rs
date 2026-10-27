@@ -367,6 +367,11 @@ fn i80186_extensions() {
     assert_eq!(cpu.regs[SP], 0xFFFE);
     assert_eq!(disassemble(&[0x60], 0).text, "PUSHA");
     assert_eq!(disassemble(&[0xC1, 0xE3, 0x03], 0).text, "SHL BX, 03h");
+    // Byte immediates of 6B / 6A / 83 are sign-extended.
+    assert_eq!(disassemble(&[0x6B, 0xDB, 0xFF], 0).text, "IMUL BX, BX, -01h");
+    assert_eq!(disassemble(&[0x6B, 0xF3, 0x07], 0).text, "IMUL SI, BX, 07h");
+    assert_eq!(disassemble(&[0x6A, 0xFE], 0).text, "PUSH -02h");
+    assert_eq!(disassemble(&[0x83, 0xC0, 0x80], 0).text, "ADD AX, -80h");
 }
 
 #[test]
