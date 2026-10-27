@@ -225,12 +225,12 @@ impl Machine {
                     self.cpu.set_flag(flags::CF, true);
                 }
             },
-            0x08 => {
-                // 1.44M floppy geometry.
+            0x08 if (self.cpu.regs[DX] as u8 as usize) < self.floppies.len() => {
+                // 1.44M floppy geometry; DL = number of drives.
                 self.cpu.regs[AX] = 0;
                 self.cpu.regs[BX] = 0x0004;
                 self.cpu.regs[CX] = (79 << 8) | 18;
-                self.cpu.regs[DX] = (1 << 8) | 1;
+                self.cpu.regs[DX] = (1 << 8) | self.floppies.len() as u16;
                 self.cpu.set_flag(flags::CF, false);
             }
             _ => {
@@ -241,14 +241,16 @@ impl Machine {
         Svc::Ret
     }
 
-    /// Floppy sector transfer with the image in `self.floppy` (CHS 80/2/18).
+    /// Floppy sector transfer with the image of drive DL in `self.floppies` (CHS 80/2/18).
     fn disk_rw(&mut self, write: bool) -> Result<u8, u8> {
         let r = self.cpu.regs;
         let count = r[AX] as u8 as usize;
         let cyl = ((r[CX] >> 8) | ((r[CX] & 0xC0) << 2)) as usize;
         let sector = (r[CX] & 0x3F) as usize;
         let head = (r[DX] >> 8) as usize;
-        if r[DX] as u8 != 0 {
+        let drive = r[DX] as u8 as usize;
+        if drive >= self.floppies.len() {
+            // Timeout: no such drive.
             return Err(0x80);
         }
         if count == 0 || cyl >= 80 || head >= 2 || !(1..=18).contains(&sector) {
@@ -256,20 +258,20 @@ impl Machine {
         }
         let lba = (cyl * 2 + head) * 18 + sector - 1;
         let (es, bx) = (self.cpu.sregs[ES], r[BX]);
-        let floppy = &mut self.floppy;
+        let floppy = &mut self.floppies[drive];
         let need = (lba + count) * 512;
-        if need > 1_474_560 {
+        if need > crate::machine::FLOPPY_SIZE {
             return Err(0x04);
         }
         if floppy.len() < need {
-            floppy.resize(1_474_560, 0);
+            floppy.resize(crate::machine::FLOPPY_SIZE, 0);
         }
         for i in 0..count * 512 {
             let a = linear(es, bx.wrapping_add(i as u16));
             if write {
                 let at = lba * 512 + i;
                 if let Some(journal) = &mut self.floppy_journal {
-                    journal.push((at, floppy[at]));
+                    journal.push((drive as u8, at, floppy[at]));
                 }
                 floppy[at] = self.sys.mem.read8(a);
             } else {

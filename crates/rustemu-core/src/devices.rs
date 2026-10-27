@@ -160,6 +160,11 @@ impl Devices {
         }
     }
 
+    /// Current value of the vertical retrace bit read from port 3DAh (toggles on every read).
+    pub fn retrace(&self) -> u8 {
+        self.retrace
+    }
+
     pub(crate) fn begin_snapshot(&mut self) -> DevicesSnapshot {
         self.latch_journal = Some(Vec::new());
         self.palette_journal = Some(Vec::new());

@@ -1154,6 +1154,70 @@ pub const DIRECTIVES: &[Directive] = &[
         "REPT n ... ENDM repeats a block; IF expr / IFDEF name ... ELSE ... ENDIF assembles a block conditionally.",
         "rept 3\n    nop\nendm\nifdef DEBUG\n    int 3\nendif"
     ),
+    // ---- NASM syntax ---------------------------------------------------------------------
+    dir!(
+        "BITS",
+        ["USE16"],
+        "NASM: generate 16-bit code.",
+        "BITS 16 (or [bits 16]) starts most NASM programs for the 8086; it also makes RustEmu8086 use the NASM syntax. Only 16-bit code can run on the 8086. In NASM a plain name is an address (mov dx, msg) and [name] reads memory (mov ax, [count]); the size of memory with a number is written as BYTE / WORD without PTR.",
+        "bits 16\norg 100h\n    mov dx, msg\n    mov ax, [count]\n    mov byte [count], 5\n    ret\nmsg db 'hi$'\ncount dw 0"
+    ),
+    dir!(
+        "SECTION",
+        [".TEXT", ".BSS"],
+        "NASM: switch between the code, data and uninitialized data sections.",
+        "section .text, section .data and section .bss; in the output .data follows the code (aligned to 4 bytes) and .bss follows .data without taking space in the file (RESB / RESW reserve it).",
+        "bits 16\norg 100h\nsection .text\n    mov dx, msg\n    mov ah, 9\n    int 21h\n    ret\nsection .data\nmsg db 'hi$'\nsection .bss\nbuffer resb 16"
+    ),
+    dir!(
+        "TIMES",
+        [],
+        "NASM: repeat an instruction or data definition n times.",
+        "$ is the current address and $$ the start of the section, so TIMES 510-($-$$) DB 0 pads a boot sector to 510 bytes.",
+        "bits 16\norg 100h\ntimes 3 nop\ntable: times 8 dw 0\n    ret"
+    ),
+    dir!(
+        "RESB",
+        ["RESW", "RESD", "RESQ", "REST"],
+        "NASM: reserve uninitialized bytes / words / double words (usually in section .bss).",
+        "buffer resb 64 reserves 64 bytes; in .bss they are not stored in the file.",
+        "bits 16\norg 100h\n    mov si, buffer\n    ret\nsection .bss\nbuffer resb 64\nwords resw 4"
+    ),
+    dir!(
+        "%DEFINE",
+        ["%XDEFINE", "%UNDEF", "%ASSIGN"],
+        "NASM: define a text macro (%define) or a numeric variable (%assign).",
+        "%define NAME text replaces NAME by the text in the following lines; %assign NAME expr evaluates the expression (it can be redefined). %define with parameters is not supported - use %macro.",
+        "%define CR 13\n%assign COUNT 2\nbits 16\norg 100h\n    mov al, CR\n    mov cx, COUNT\n    ret"
+    ),
+    dir!(
+        "%MACRO",
+        ["%ENDMACRO"],
+        "NASM: define a macro with parameters %1, %2, ...",
+        "%macro name n ... %endmacro; %1..%9 are the arguments and %%label is a label local to each expansion.",
+        "%macro print 1\n    mov dx, %1\n    mov ah, 9\n    int 21h\n%endmacro\nbits 16\norg 100h\n    print msg\n    ret\nmsg db 'hi$'"
+    ),
+    dir!(
+        "%REP",
+        ["%ENDREP"],
+        "NASM: repeat a block of lines.",
+        "%rep n ... %endrep assembles the lines n times.",
+        "bits 16\norg 100h\n%rep 3\n    nop\n%endrep\n    ret"
+    ),
+    dir!(
+        "%IF",
+        ["%ELIF", "%ELSE", "%ENDIF", "%IFDEF", "%IFNDEF"],
+        "NASM: conditional assembly.",
+        "%if expr / %elif expr / %else / %endif, and %ifdef / %ifndef name; comparisons ==, !=, <, >, <=, >= and &&, || can be used.",
+        "%define DEBUG\nbits 16\norg 100h\n%ifdef DEBUG\n    int 3\n%endif\n%if 2 + 2 == 4\n    nop\n%else\n    hlt\n%endif\n    ret"
+    ),
+    dir!(
+        "%INCLUDE",
+        [],
+        "NASM: insert another source file.",
+        "The included file is also read as NASM.",
+        "%include \"macros.inc\""
+    ),
 ];
 
 /// A BIOS / DOS interrupt.
@@ -1732,6 +1796,10 @@ pub fn topic_at(text: &str, ci: usize) -> Option<Topic> {
     let line_no = chars[..a].iter().filter(|&&c| c == '\n').count();
     let (code, ignored) = code_part(&line, a - line_start);
     let word = chars[a..b].iter().collect::<String>().to_ascii_uppercase();
+    // NASM preprocessor directives: %define, %macro, ...
+    if a > 0 && chars[a - 1] == '%' {
+        return find_directive(&format!("%{word}")).map(Topic::Directive);
+    }
     // Emu8086 directives in #...#.
     if a > 0 && chars[a - 1] == '#' {
         let next = chars.get(b).copied().unwrap_or(' ');
@@ -1896,6 +1964,10 @@ mod tests {
             }
         };
         for (name, example) in all {
+            // An include of a user file cannot be assembled here.
+            if example.contains("%include") {
+                continue;
+            }
             // Directive examples with segments are complete programs.
             let src = if example.contains("\nends") || example.contains(".model") {
                 format!("{example}\n")

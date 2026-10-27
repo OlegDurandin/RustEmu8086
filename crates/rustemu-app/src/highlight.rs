@@ -77,7 +77,32 @@ const DIRECTIVES: &[&str] = &[
     "INCLUDE", "ASSUME", "NAME", "TITLE", "LABEL", "PTR", "BYTE", "WORD", "DWORD", "NEAR", "FAR", "SHORT", "OFFSET",
     "SEG", "DUP", "EVEN", "ALIGN", ".MODEL", ".STACK", ".DATA", ".CODE", ".DATA?", "SMALL", "TINY", "IF", "IFDEF",
     "IFNDEF", "ELSE", "ENDIF", "REPT", "TYPE", "LENGTH", "SIZE", "MOD", "SHL", "SHR", "AND", "OR", "XOR", "NOT",
-    "STACK", "PUBLIC", "LOW", "HIGH", "B.", "W.",
+    "STACK", "PUBLIC", "LOW", "HIGH", "B.", "W.", // NASM
+    "BITS", "USE16", "SECTION", "TIMES", "RESB", "RESW", "RESD", "RESQ", "REST", "ALIGNB", "CPU", "GLOBAL", "EXTERN",
+    "QWORD", "TWORD", "STRICT", ".TEXT", ".BSS", ".RODATA",
+];
+
+/// NASM preprocessor directives.
+const NASM_PP: &[&str] = &[
+    "%DEFINE",
+    "%XDEFINE",
+    "%UNDEF",
+    "%ASSIGN",
+    "%MACRO",
+    "%ENDMACRO",
+    "%REP",
+    "%ENDREP",
+    "%IF",
+    "%ELIF",
+    "%ELSE",
+    "%ENDIF",
+    "%IFDEF",
+    "%IFNDEF",
+    "%ELIFDEF",
+    "%ELIFNDEF",
+    "%INCLUDE",
+    "%ERROR",
+    "%WARNING",
 ];
 
 fn is_register(u: &str) -> bool {
@@ -146,7 +171,19 @@ pub fn highlight(text: &str, font: FontId, pal: &Palette) -> LayoutJob {
                 push(&line[i..], Kind::Comment);
                 break;
             }
-            if c == b'\'' || c == b'"' {
+            if c == b'%' && b.get(i + 1).is_some_and(|n| n.is_ascii_alphabetic()) {
+                i += 1;
+                while i < b.len() && b[i].is_ascii_alphanumeric() {
+                    i += 1;
+                }
+                let word = &line[start..i];
+                let k =
+                    if NASM_PP.contains(&word.to_ascii_uppercase().as_str()) { Kind::Directive } else { Kind::Plain };
+                first_word = false;
+                push(word, k);
+                continue;
+            }
+            if c == b'\'' || c == b'"' || c == b'`' {
                 i += 1;
                 while i < b.len() && b[i] != c && b[i] != b'\n' {
                     i += 1;
@@ -179,7 +216,8 @@ pub fn highlight(text: &str, font: FontId, pal: &Palette) -> LayoutJob {
             }
             // Run of other characters.
             while i < b.len()
-                && !(b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'@' | b'.' | b'?' | b';' | b'\'' | b'"'))
+                && !(b[i].is_ascii_alphanumeric()
+                    || matches!(b[i], b'_' | b'@' | b'.' | b'?' | b';' | b'\'' | b'"' | b'`' | b'%'))
             {
                 i += 1;
             }

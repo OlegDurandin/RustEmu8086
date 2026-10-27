@@ -38,6 +38,7 @@ pub fn debugger_windows(app: &mut App, ctx: &egui::Context) {
         .show(ctx, |ui| stop_condition_ui(app, ui));
     let w = &mut app.windows;
     (w.breakpoints, w.watch, w.call_stack, w.alu, w.stop_condition) = (bps, watch, calls, alu, cond);
+    value_viewer_window(app, ctx);
 }
 
 /// Colour of a breakpoint marker: red, orange with a condition, grey when disabled.
@@ -526,4 +527,159 @@ fn alu_ui(app: &mut App, ui: &mut Ui) {
             ui.label(if before != after { txt.strong().color(crate::colors::info(ui)) } else { txt.weak() });
         }
     });
+}
+
+// ---- extended value viewer ------------------------------------------------------------------
+
+/// Registers of the value viewer, in Emu8086's order.
+pub const VIEW_REGS: [&str; 14] =
+    ["AX", "BX", "CX", "DX", "CS", "IP", "SS", "SP", "BP", "SI", "DI", "DS", "ES", "FLAGS"];
+
+/// Emu8086's "extended value viewer": a register or a memory word in all bases, editable.
+pub struct ValueViewer {
+    /// Index into [`VIEW_REGS`], or None for the memory word at `addr`.
+    pub reg: Option<usize>,
+    pub addr: String,
+    pub set_text: String,
+    pub error: Option<String>,
+}
+
+impl Default for ValueViewer {
+    fn default() -> Self {
+        ValueViewer { reg: Some(0), addr: "DS:0000".into(), set_text: String::new(), error: None }
+    }
+}
+
+/// Opens the viewer on a register (double-click on a register in the emulator window).
+pub fn view_register(app: &mut App, name: &str) {
+    if let Some(i) = VIEW_REGS.iter().position(|r| r.eq_ignore_ascii_case(name)) {
+        app.value_viewer.reg = Some(i);
+        app.value_viewer.error = None;
+        app.windows.value_viewer = true;
+    }
+}
+
+fn read_view_reg(c: &rustemu_core::Cpu, i: usize) -> u16 {
+    use rustemu_core::cpu::*;
+    match VIEW_REGS[i] {
+        "AX" => c.regs[AX],
+        "BX" => c.regs[BX],
+        "CX" => c.regs[CX],
+        "DX" => c.regs[DX],
+        "SP" => c.regs[SP],
+        "BP" => c.regs[BP],
+        "SI" => c.regs[SI],
+        "DI" => c.regs[DI],
+        "CS" => c.sregs[CS],
+        "SS" => c.sregs[SS],
+        "DS" => c.sregs[DS],
+        "ES" => c.sregs[ES],
+        "IP" => c.ip,
+        _ => c.flags,
+    }
+}
+
+/// Parses `seg:off` (hex numbers or register names) or a linear hex address.
+pub fn parse_view_addr(c: &rustemu_core::Cpu, s: &str) -> Option<u32> {
+    let part = |t: &str| -> Option<u16> {
+        let t = t.trim();
+        match VIEW_REGS.iter().position(|r| r.eq_ignore_ascii_case(t)) {
+            Some(i) => Some(read_view_reg(c, i)),
+            None => u16::from_str_radix(t.trim_end_matches(['h', 'H']), 16).ok(),
+        }
+    };
+    match s.split_once(':') {
+        Some((a, b)) => Some(rustemu_core::linear(part(a)?, part(b)?)),
+        None => u32::from_str_radix(s.trim().trim_end_matches(['h', 'H']), 16).ok().filter(|a| *a < 0x10_0000),
+    }
+}
+
+pub fn value_viewer_window(app: &mut App, ctx: &egui::Context) {
+    let mut open = app.windows.value_viewer;
+    egui::Window::new("extended value viewer")
+        .open(&mut open)
+        .default_pos(pos2(420.0, 200.0))
+        .resizable(false)
+        .show(ctx, |ui| value_viewer_ui(app, ui));
+    app.windows.value_viewer = open;
+}
+
+fn value_viewer_ui(app: &mut App, ui: &mut Ui) {
+    let vv = &mut app.value_viewer;
+    ui.horizontal(|ui| {
+        let current = vv.reg.map_or("memory word", |i| VIEW_REGS[i]);
+        egui::ComboBox::from_label("value of").selected_text(current).show_ui(ui, |ui| {
+            for (i, r) in VIEW_REGS.iter().enumerate() {
+                ui.selectable_value(&mut vv.reg, Some(i), *r);
+            }
+            ui.selectable_value(&mut vv.reg, None, "memory word");
+        });
+        if vv.reg.is_none() {
+            ui.add(egui::TextEdit::singleline(&mut vv.addr).hint_text("DS:0100 or 07100").desired_width(110.0));
+        }
+    });
+    let cpu = &app.session.machine.cpu;
+    let addr = if vv.reg.is_none() { parse_view_addr(cpu, &vv.addr) } else { None };
+    let value = match (vv.reg, addr) {
+        (Some(i), _) => read_view_reg(cpu, i),
+        (None, Some(a)) => app.session.machine.sys.mem.read16(a),
+        (None, None) => {
+            ui.colored_label(crate::colors::error(ui), "bad address");
+            return;
+        }
+    };
+    if let Some(a) = addr {
+        ui.weak(format!("word at {a:05X}h: low byte at {a:05X}h, high byte at {:05X}h", a + 1));
+    }
+    let font = FontId::monospace(13.0);
+    let (hi, lo) = ((value >> 8) as u8, value as u8);
+    let ch = |b: u8| if b < 32 { '.' } else { rustemu_core::font::cp437_to_char(b) };
+    egui::Grid::new("value_viewer").num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
+        let row = |ui: &mut Ui, k: &str, v: String| {
+            ui.label(RichText::new(k).weak());
+            ui.label(RichText::new(v).font(font.clone()));
+            ui.end_row();
+        };
+        row(ui, "hex", format!("{value:04X}h   (H {hi:02X}h, L {lo:02X}h)"));
+        row(ui, "unsigned", format!("{value}   (H {hi}, L {lo})"));
+        row(ui, "signed", format!("{}   (H {}, L {})", value as i16, hi as i8, lo as i8));
+        row(ui, "octal", format!("{value:o}o"));
+        row(ui, "binary", format!("{}b", bin(value as u32, 16)));
+        row(ui, "ascii", format!("'{}' '{}'   (H, L)", ch(hi), ch(lo)));
+    });
+    ui.horizontal(|ui| {
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut app.value_viewer.set_text)
+                .hint_text("new value: 1234h, 4660, 1010b, 'A', -5, ax+1")
+                .font(egui::TextStyle::Monospace)
+                .desired_width(240.0),
+        );
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if ui.button("set").clicked() || enter {
+            let text = app.value_viewer.set_text.clone();
+            app.value_viewer.error = set_viewed_value(app, &text).err();
+        }
+    });
+    if let Some(e) = &app.value_viewer.error {
+        ui.colored_label(crate::colors::error(ui), e);
+    }
+}
+
+/// Writes the value of expression `text` to the register or memory word shown in the viewer.
+pub fn set_viewed_value(app: &mut App, text: &str) -> Result<(), String> {
+    let v = app.session.compile(text)?.eval(&app.session.machine);
+    if !(-32768..=65535).contains(&v) {
+        return Err(format!("{v} does not fit in a word"));
+    }
+    let m = &mut app.session.machine;
+    match app.value_viewer.reg {
+        Some(i) => {
+            m.set_register(VIEW_REGS[i], v as u16);
+        }
+        None => {
+            let a = parse_view_addr(&m.cpu, &app.value_viewer.addr).ok_or("bad address")?;
+            m.sys.mem.write16(a, v as u16);
+        }
+    }
+    Ok(())
 }

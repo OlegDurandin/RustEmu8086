@@ -10,7 +10,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | Крейт | Назначение |
 |---|---|
 | `crates/rustemu-core` | Эмулятор: CPU 8086 (`cpu.rs`), шина/память 1 MiB с журналом (`bus.rs`), `Machine` (загрузчики, шаг/run/шаг назад, точки останова — `machine.rs`), BIOS (`bios.rs`: INT 10h/13h/15h/16h/1Ah/33h), DOS (`dos.rs`: INT 21h, файлы в песочнице), видео (`video.rs`), порты и виртуальные устройства (`devices.rs`), шрифт/CP437 (`font.rs`), скан-коды (`keyboard.rs`), дизассемблер (`disasm.rs`). Без зависимостей от GUI. |
-| `crates/rustemu-asm` | Ассемблер диалекта Emu8086/MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
+| `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
 | `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
 | `crates/rustemu-app` | GUI-бинарь `RustEmu8086` на `eframe/egui` 0.37 (см. этап 5). |
@@ -55,7 +55,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 
 ## Тестирование
 - `cargo test --workspace` — юнит-тесты CPU, ассемблера (в т.ч. `nasm_compare`: ~18 000 кодировок
-  сверяются с NASM, если он установлен), сквозные тесты `rustemu-session/tests/run.rs` на `examples/`.
+  сверяются с NASM, если он установлен; `nasm_dialect`: NASM-программы целиком против `nasm -f bin`), сквозные тесты `rustemu-session/tests/run.rs` на `examples/`.
 - **Корпус Emu8086**: `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` — собирает и
   прогоняет все 84 примера из установки Emu8086 (`$EMU8086_DIR` или путь CrossOver; без установки — пропуск),
   плюс загрузка micro-os с виртуальной дискеты. Сейчас: всё собирается и выполняется без ошибок
@@ -105,6 +105,9 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
 - [x] 2.5 Директивы Emu8086: `#make_com/exe/bin/boot#`, `#load_segment/offset=#`, `#AX=..#`, `#start=..#`
 - [x] 2.6 Вывод COM/EXE(MZ)/BIN/BOOT, листинг, таблица символов, карта адрес → строка
 - [~] 2.7 Сообщения об ошибках: строка есть, колонка — только для синтаксических ошибок
+- [x] 2.9 Диалект NASM (`-f bin`): автоопределение / `#nasm#` / `.nasm` / настройка; COM / BOOT / BIN по ORG;
+      тест `nasm_dialect` сверяет программы с настоящим `nasm -f bin` байт в байт. Нет: EXE, `%define` с
+      параметрами, `%0`/`%rotate`/greedy-параметры, `incbin`, `struc`, контекстные макросы; дальний Jcc — пара 8086
 - [ ] 2.8 Недостающее: `STRUC`, `IRP/IRPC`, `ASSUME`-автопрефиксы, `.binf`-файл — проверить,
       что поддерживает Emu8086
 
@@ -112,7 +115,8 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
 - [x] 3.1 IVT + ROM-заглушки (BOP), BIOS Data Area
 - [x] 3.2 Загрузчики COM/EXE/BIN/BOOT, PSP
 - [x] 3.3 INT 10h: 00,01,02,03,05,06,07,08,09,0A,0C,0D,0E,0F,10h(DAC),13h; режимы 0-3, 13h
-- [x] 3.4 INT 16h, 1Ah, 15h, 11h, 12h, 13h (образ дискеты в `Machine::floppy`)
+- [x] 3.4 INT 16h, 1Ah, 15h, 11h, 12h, 13h (дискеты FLOPPY_0..3 в `Machine::floppies`, DL = номер дисковода; INT 11h и INT 13h/08h сообщают их число;
+      «create new floppy drive» — `Machine::add_floppy`; образы в памяти, загружаются/сохраняются явно)
 - [x] 3.5 INT 21h: консоль, 0Ah, векторы, дата/время, файлы (3Ch-42h, 39h-3Bh, 41h, 43h, 47h, 4Eh/4Fh, 56h),
       память 48h-4Ah, 4Ch; INT 20h; INT 33h (базово)
 - [x] 3.6 Таймер: счётчик тиков BIOS 0040:006C идёт по часам хоста 18.2 Гц (или `instructions_per_tick` —
@@ -169,6 +173,15 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
       reset / aux (memory, ALU, FPU — нет, stop on condition, symbol table, listing + наши окна) / vars (с константами) /
       debug (журнал состояния в стиле DEBUG.EXE после каждой остановки) / stack (от SS:FFFE, SP выделен) /
       flags (0/1, кнопка analyse → «lexical flag analyser»); подсказки кнопок — тексты оригинала
+- [x] 5.16 Меню окна эмулятора (Emu8086): file (load executable, reload, examples, reset emulator and ram —
+      `Session::unload`, command line, save/load the emulator's state — `Machine/Session::save_state` в памяти, без
+      открытых файлов хоста, недавние файлы, close), math, debug (шаги, stop on condition, run until / set break point /
+      set CS:IP по выделенной строке дизассемблера, show current break point / instruction). Клавиши — наши; из Emu8086
+      добавлены не конфликтующие F6 (step back), F7 (current instruction), ⌃F8 (run until), ⌃⇧F7 (set CS:IP)
+      Далее: view (окна; extended value viewer — регистр/слово памяти во всех системах, правка выражением,
+      двойной клик по имени регистра; F11 — журнал), virtual devices (имена exe Emu8086 + вкладка VGA state:
+      порт 3DAh и палитра DAC), virtual drive (общий с главным меню; запись .bin с цилиндра/головки/сектора —
+      `Session::write_floppy`), help (справочник, страница релизов, about). Меню external не делаем
 
 ### Этап 6. Полировка
 - [x] 6.1 Сравнение с Emu8086: корпус из 84 оригинальных примеров (сборка + выполнение), устройства по

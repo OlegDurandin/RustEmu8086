@@ -4,9 +4,11 @@ use std::collections::HashMap;
 
 use crate::encode::{Ctx, encode};
 use crate::expr::{Env, Expr, ForwardKind, SegId, SymVal, Val, eval};
-use crate::parse::{DataItem, DotSeg, Stmt, StmtKind, parse_line};
+use crate::parse::{DataItem, DotSeg, Operand, Stmt, StmtKind, parse_line, parse_line_nasm};
 use crate::source::{FileLoader, Line, Preprocessor};
-use crate::{AsmError, EmuDirectives, Format, LineInfo, ListingLine, Program, SegmentInfo, Symbol, SymbolKind};
+use crate::{
+    AsmError, Dialect, EmuDirectives, Format, LineInfo, ListingLine, Program, SegmentInfo, Symbol, SymbolKind,
+};
 
 const MAX_PASSES: usize = 40;
 /// From this pass on instructions may only grow (shrinking is padded with NOPs) to force convergence.
@@ -20,11 +22,13 @@ struct Seg {
     max: i64,
     min: i64,
     written: bool,
+    /// NASM `.bss`: takes address space but is not stored in the output file.
+    nobits: bool,
 }
 
 impl Seg {
     fn new(name: &str, stack: bool) -> Self {
-        Seg { name: name.into(), stack, data: Vec::new(), loc: 0, max: 0, min: i64::MAX, written: false }
+        Seg { name: name.into(), stack, data: Vec::new(), loc: 0, max: 0, min: i64::MAX, written: false, nobits: false }
     }
 }
 
@@ -62,6 +66,12 @@ struct Assembler {
     sym_kinds: HashMap<String, SymbolKind>,
     data_seg: Option<SegId>,
     code_seg: Option<SegId>,
+    /// NASM dialect (flat `-f bin` output, `.data` / `.bss` sections aligned to 4).
+    nasm: bool,
+    /// Element size of NASM data labels (shown as variables in the debugger).
+    data_sizes: HashMap<String, u8>,
+    /// ORG of the program (start of the NASM `.text` section).
+    org: Option<i64>,
 }
 
 impl Env for Assembler {
@@ -77,6 +87,17 @@ impl Env for Assembler {
     fn seg_paragraph(&self, seg: SegId) -> i64 {
         if self.flat { 0 } else { self.layout.get(seg).copied().unwrap_or(0) }
     }
+    fn section_start(&self) -> (SegId, i64) {
+        let s = self.cur_seg;
+        let start = if s == 0 && self.flat {
+            self.org.unwrap_or_else(|| self.initial_loc())
+        } else if self.flat {
+            self.flat_bases.get(s).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        (s, start)
+    }
 }
 
 /// Assembles `source` (named `name`); INCLUDE files are resolved through `loader`.
@@ -84,8 +105,11 @@ pub fn assemble(
     name: &str,
     source: &str,
     loader: &mut dyn FileLoader,
+    dialect: Dialect,
 ) -> Result<Program, (Vec<AsmError>, Vec<String>)> {
+    let nasm = dialect == Dialect::Nasm;
     let mut pp = Preprocessor::new(loader);
+    pp.nasm = nasm;
     pp.add_file(name, source);
     let files = pp.files.clone();
     let mut errors = std::mem::take(&mut pp.errors);
@@ -93,7 +117,8 @@ pub fn assemble(
 
     let mut stmts = Vec::new();
     for (i, l) in lines.iter().enumerate() {
-        match parse_line(&l.text) {
+        let parsed = if nasm { parse_line_nasm(&l.text) } else { parse_line(&l.text) };
+        match parsed {
             Ok(stmt) => stmts.push(StmtInfo { stmt, line: i }),
             Err((col, msg)) => errors.push(AsmError { file: l.file, line: l.line, col: Some(col), msg }),
         }
@@ -126,7 +151,14 @@ pub fn assemble(
         sym_kinds: HashMap::new(),
         data_seg: None,
         code_seg: None,
+        nasm,
+        data_sizes: HashMap::new(),
+        org: None,
     };
+    if nasm {
+        rename_local_labels(&mut a.stmts);
+    }
+    crate::encode::set_strict_size(nasm);
     a.prescan();
     a.sizes = vec![0; a.stmts.len()];
     for pass in 1..=MAX_PASSES {
@@ -153,6 +185,7 @@ pub fn assemble(
             msg: "FASM syntax (#fasm#) is not supported; remove the directive to use the Emu8086/MASM syntax".into(),
         });
     }
+    crate::encode::set_strict_size(false);
     errors.append(&mut a.errors);
     if !errors.is_empty() {
         return Err((errors, files));
@@ -184,11 +217,17 @@ impl Assembler {
         let (n, stack) = match d {
             DotSeg::Code => ("CODE", false),
             DotSeg::Data => ("DATA", false),
+            DotSeg::Bss => ("BSS", false),
             DotSeg::Stack(_) => ("STACK", true),
         };
         if self.flat {
             return match d {
                 DotSeg::Data => self.named_seg(n, false),
+                DotSeg::Bss => {
+                    let id = self.named_seg(n, false);
+                    self.segs[id].nobits = true;
+                    id
+                }
                 _ => 0,
             };
         }
@@ -237,10 +276,33 @@ impl Assembler {
         self.fasm = fasm;
         // Emu8086: COM when ORG 100h is found, EXE when segments are used, COM otherwise.
         self.format = explicit.unwrap_or(if org_100h || !has_segments { Format::Com } else { Format::Exe });
+        if self.nasm {
+            // NASM -f bin: ORG 100h is a COM program, ORG 7C00h a boot sector, anything else BIN.
+            let org = self.stmts.iter().find_map(|s| match &s.stmt.kind {
+                StmtKind::Org(Expr::Num(n)) => Some(*n),
+                _ => None,
+            });
+            self.format = match org {
+                Some(0x100) => Format::Com,
+                Some(0x7C00) => Format::Boot,
+                _ => Format::Bin,
+            };
+        }
         self.flat = self.format != Format::Exe;
         self.segs.clear();
         if self.flat {
             self.segs.push(Seg::new("", false));
+        }
+        if self.nasm {
+            // Sections in NASM's output order: .text, .data, .bss.
+            let has = |d: DotSeg| self.stmts.iter().any(|s| s.stmt.kind == StmtKind::DotSeg(d.clone()));
+            let (data, bss) = (has(DotSeg::Data), has(DotSeg::Bss));
+            if data {
+                self.dot_seg_id(&DotSeg::Data);
+            }
+            if bss {
+                self.dot_seg_id(&DotSeg::Bss);
+            }
         }
 
         for i in 0..self.stmts.len() {
@@ -252,6 +314,21 @@ impl Assembler {
                 };
                 self.forward.insert(l.clone(), ForwardKind::Label { size, far: false });
                 self.sym_kinds.insert(l.clone(), if size.is_some() { SymbolKind::Variable } else { SymbolKind::Label });
+                // NASM data labels are addresses for the assembler but variables for the debugger.
+                let data = match &st.kind {
+                    StmtKind::Data { size, .. } => Some(*size),
+                    StmtKind::Times(_, inner) => match inner.as_ref() {
+                        StmtKind::Data { size, .. } => Some(*size),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if self.nasm
+                    && let Some(size) = data
+                {
+                    self.sym_kinds.insert(l.clone(), SymbolKind::Variable);
+                    self.data_sizes.insert(l.clone(), size);
+                }
             }
             match &st.kind {
                 StmtKind::Segment { name, stack } => {
@@ -322,7 +399,11 @@ impl Assembler {
     fn new_flat_bases(&self) -> Vec<i64> {
         let mut out = Vec::with_capacity(self.segs.len());
         let mut at = self.initial_loc();
-        for s in &self.segs {
+        for (i, s) in self.segs.iter().enumerate() {
+            if self.nasm && i > 0 {
+                // NASM -f bin aligns .data and .bss to 4 bytes.
+                at = (at + 3) & !3;
+            }
             out.push(at);
             at = s.max.max(at);
         }
@@ -354,6 +435,7 @@ impl Assembler {
         self.seg_stack.clear();
         self.procs.clear();
         self.entry = None;
+        self.org = None;
         self.emu = EmuDirectives::default();
         if let Some(d) = self.data_seg {
             self.syms.insert("@DATA".into(), SymVal::Segment(d));
@@ -453,38 +535,24 @@ impl Assembler {
         match &st.kind {
             StmtKind::Empty | StmtKind::Ignored | StmtKind::Model => {}
             StmtKind::Emu(d) => self.emu_directive(d),
-            StmtKind::Instr { prefixes, mnem, ops } => {
-                let ctx = Ctx {
-                    loc: start_loc,
-                    seg: self.cur_seg,
-                    flat: self.flat,
-                    in_far_proc: self.procs.last().is_some_and(|p| p.1),
-                };
-                match encode(prefixes, mnem, ops, self, &ctx) {
-                    Ok(mut enc) => {
-                        if self.pass >= GROW_ONLY_PASS && enc.bytes.len() < self.sizes[idx] {
-                            enc.bytes.resize(self.sizes[idx], 0x90);
-                        }
-                        self.sizes[idx] = enc.bytes.len();
-                        for r in enc.relocs {
-                            self.relocs.push((self.cur_seg, start_loc + r as i64));
-                        }
-                        self.emit(&enc.bytes);
+            StmtKind::Instr { prefixes, mnem, ops } => self.instruction(idx, prefixes, mnem, ops),
+            StmtKind::Data { size, items } => self.data(idx, *size, items),
+            StmtKind::Times(count, inner) => {
+                if let Some(n) = self.eval_plain(idx, count) {
+                    if !(0..=0x10000).contains(&n) {
+                        self.err(idx, format!("TIMES count {n} is out of range"));
                     }
-                    Err(m) => {
-                        self.err(idx, m);
-                        // Keep layout stable: reserve the previous size.
-                        let n = self.sizes[idx];
-                        self.emit(&vec![0x90; n]);
+                    for _ in 0..n.clamp(0, 0x10000) {
+                        match inner.as_ref() {
+                            StmtKind::Instr { prefixes, mnem, ops } => self.instruction(idx, prefixes, mnem, ops),
+                            StmtKind::Data { size, items } => self.data(idx, *size, items),
+                            _ => {
+                                self.err(idx, "TIMES can repeat an instruction or data only");
+                                break;
+                            }
+                        }
                     }
                 }
-            }
-            StmtKind::Data { size, items } => {
-                let mut out = Vec::new();
-                for it in items {
-                    self.data_item(idx, *size, it, &mut out);
-                }
-                self.emit(&out);
             }
             StmtKind::Equ(name, e) => match eval(e, self) {
                 Ok(v) => {
@@ -505,6 +573,7 @@ impl Assembler {
                     if !(0..=0xFFFF).contains(&v) {
                         self.err(idx, "ORG value out of range");
                     } else {
+                        self.org.get_or_insert(v);
                         self.segs[self.cur_seg].loc = v;
                         let s = &mut self.segs[self.cur_seg];
                         s.max = s.max.max(v);
@@ -589,6 +658,42 @@ impl Assembler {
         }
     }
 
+    fn instruction(&mut self, idx: usize, prefixes: &[String], mnem: &str, ops: &[Operand]) {
+        let start_loc = self.loc();
+        let ctx = Ctx {
+            loc: start_loc,
+            seg: self.cur_seg,
+            flat: self.flat,
+            in_far_proc: self.procs.last().is_some_and(|p| p.1),
+        };
+        match encode(prefixes, mnem, ops, self, &ctx) {
+            Ok(mut enc) => {
+                if self.pass >= GROW_ONLY_PASS && enc.bytes.len() < self.sizes[idx] {
+                    enc.bytes.resize(self.sizes[idx], 0x90);
+                }
+                self.sizes[idx] = enc.bytes.len();
+                for r in enc.relocs {
+                    self.relocs.push((self.cur_seg, start_loc + r as i64));
+                }
+                self.emit(&enc.bytes);
+            }
+            Err(m) => {
+                self.err(idx, m);
+                // Keep layout stable: reserve the previous size.
+                let n = self.sizes[idx];
+                self.emit(&vec![0x90; n]);
+            }
+        }
+    }
+
+    fn data(&mut self, idx: usize, size: u8, items: &[DataItem]) {
+        let mut out = Vec::new();
+        for it in items {
+            self.data_item(idx, size, it, &mut out);
+        }
+        self.emit(&out);
+    }
+
     fn count_items(&self, items: &[DataItem]) -> i64 {
         items
             .iter()
@@ -609,6 +714,11 @@ impl Assembler {
             DataItem::Str(s) => {
                 if size == 1 {
                     out.extend_from_slice(s);
+                } else if self.nasm {
+                    // NASM: the characters in order, padded with zeros to a whole element.
+                    out.extend_from_slice(s);
+                    let n = size as usize;
+                    out.extend(std::iter::repeat_n(0, (n - s.len() % n) % n));
                 } else {
                     self.err(idx, "string too long for this data size");
                 }
@@ -727,7 +837,7 @@ impl Assembler {
     fn build(mut self, files: Vec<String>) -> Result<Program, Vec<AsmError>> {
         let mut errors = Vec::new();
         let layout = if self.flat { vec![0; self.segs.len()] } else { self.layout.clone() };
-        let flat_min = self.segs.iter().filter(|s| s.written).map(|s| s.min).min();
+        let flat_min = self.segs.iter().filter(|s| s.written && !s.nobits).map(|s| s.min).min();
         let origin: i64 = match self.format {
             Format::Com => 0x100,
             _ if self.flat => flat_min.unwrap_or(self.initial_loc()),
@@ -745,9 +855,9 @@ impl Assembler {
         let image_off = |seg: SegId, off: i64| -> i64 { if self.flat { off - origin } else { layout[seg] * 16 + off } };
         let mut image = Vec::new();
         if self.flat {
-            let end = self.segs.iter().map(|s| s.max).max().unwrap_or(origin).max(origin);
+            let end = self.segs.iter().filter(|s| !s.nobits).map(|s| s.max).max().unwrap_or(origin).max(origin);
             image.resize((end - origin) as usize, 0);
-            for s in &self.segs {
+            for s in self.segs.iter().filter(|s| !s.nobits) {
                 for (o, &b) in s.data.iter().enumerate().skip(origin as usize) {
                     if (o as i64) < s.max && b != 0 {
                         image[o - origin as usize] = b;
@@ -844,7 +954,9 @@ impl Assembler {
                 let kind = self.sym_kinds.get(n).copied().unwrap_or(SymbolKind::Constant);
                 let (segment, value, size) = match v {
                     SymVal::Const(c) => (None, *c, None),
-                    SymVal::Label { seg, off, size, .. } => (Some(layout[*seg] as u16), *off, *size),
+                    SymVal::Label { seg, off, size, .. } => {
+                        (Some(layout[*seg] as u16), *off, size.or_else(|| self.data_sizes.get(n).copied()))
+                    }
                     SymVal::Segment(s) => (None, layout[*s], None),
                 };
                 Symbol { name: n.clone(), kind, segment, value, size }
@@ -875,7 +987,67 @@ impl Assembler {
             segments,
             files,
             emu: self.emu,
+            dialect: if self.nasm { Dialect::Nasm } else { Dialect::Masm },
         })
+    }
+}
+
+/// NASM local labels: `.next` belongs to the last label without a dot, so it becomes `START.NEXT`
+/// both where it is defined and where it is used.
+fn rename_local_labels(stmts: &mut [StmtInfo]) {
+    fn expr(e: &mut Expr, base: &str) {
+        match e {
+            Expr::Sym(n) if n.starts_with('.') && !n.starts_with("..") => *n = format!("{base}{n}"),
+            Expr::Mem(x) | Expr::Un(_, x) | Expr::Ptr(_, x) | Expr::Dist(_, x) | Expr::SegOv(_, x) => expr(x, base),
+            Expr::Bin(_, a, b) => {
+                expr(a, base);
+                expr(b, base);
+            }
+            _ => {}
+        }
+    }
+    fn item(it: &mut DataItem, base: &str) {
+        match it {
+            DataItem::Expr(e) => expr(e, base),
+            DataItem::Dup(n, inner) => {
+                expr(n, base);
+                inner.iter_mut().for_each(|i| item(i, base));
+            }
+            _ => {}
+        }
+    }
+    fn kind(k: &mut StmtKind, base: &str) {
+        match k {
+            StmtKind::Instr { ops, .. } => {
+                for op in ops {
+                    match op {
+                        Operand::Expr(e) => expr(e, base),
+                        Operand::Far(a, b) => {
+                            expr(a, base);
+                            expr(b, base);
+                        }
+                    }
+                }
+            }
+            StmtKind::Data { items, .. } => items.iter_mut().for_each(|i| item(i, base)),
+            StmtKind::Equ(_, e) | StmtKind::Assign(_, e) | StmtKind::Org(e) | StmtKind::Align(e) => expr(e, base),
+            StmtKind::Times(n, inner) => {
+                expr(n, base);
+                kind(inner, base);
+            }
+            _ => {}
+        }
+    }
+    let mut base = String::new();
+    for s in stmts {
+        if let Some(l) = &mut s.stmt.label {
+            if l.starts_with('.') && !l.starts_with("..") {
+                *l = format!("{base}{l}");
+            } else {
+                base = l.clone();
+            }
+        }
+        kind(&mut s.stmt.kind, &base);
     }
 }
 

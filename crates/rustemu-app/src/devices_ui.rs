@@ -14,10 +14,11 @@ pub enum Device {
     Printer,
     Robot,
     SimpleIo,
+    VgaState,
 }
 
 impl Device {
-    pub const ALL: [(Device, &'static str); 7] = [
+    pub const ALL: [(Device, &'static str); 8] = [
         (Device::TrafficLights, "traffic lights"),
         (Device::Stepper, "stepper motor"),
         (Device::Led, "LED display"),
@@ -25,6 +26,19 @@ impl Device {
         (Device::Printer, "printer"),
         (Device::Robot, "robot"),
         (Device::SimpleIo, "simple I/O"),
+        (Device::VgaState, "VGA state"),
+    ];
+
+    /// The device programs of Emu8086 (its "virtual devices" menu).
+    pub const EXE: [(Device, &'static str); 8] = [
+        (Device::Led, "LED_Display.exe"),
+        (Device::Printer, "Printer.exe"),
+        (Device::Robot, "Robot.exe"),
+        (Device::SimpleIo, "Simple.exe"),
+        (Device::Stepper, "Stepper_motor.exe"),
+        (Device::Thermometer, "Thermometer.exe"),
+        (Device::TrafficLights, "Traffic_Lights.exe"),
+        (Device::VgaState, "VGA_STATE.exe"),
     ];
 
     /// Maps an Emu8086 `#start=xxx.exe#` name to a device.
@@ -39,6 +53,7 @@ impl Device {
             "printer" => Device::Printer,
             "robot" => Device::Robot,
             "simple" => Device::SimpleIo,
+            "vga_state" => Device::VgaState,
             _ => return None,
         })
     }
@@ -86,6 +101,12 @@ pub fn devices_window(app: &mut App, ctx: &egui::Context) {
                 Device::SimpleIo => {
                     ui.label(RichText::new("Simple I/O — port 110 (byte), port 112 (word)").strong());
                     simple_io(app, ui);
+                }
+                Device::VgaState => {
+                    ui.label(
+                        RichText::new("VGA state — port 3DAh (vertical retrace), DAC palette 3C8h / 3C9h").strong(),
+                    );
+                    vga_state(app, ui);
                 }
             }
         });
@@ -301,6 +322,39 @@ fn robot(app: &mut App, ui: &mut Ui) {
     });
     if edited {
         app.session.machine.clear_history();
+    }
+}
+
+/// Emu8086's VGA_STATE.exe toggles bit 3 of port 3DAh for programs that wait for the vertical
+/// retrace; RustEmu8086 always does it. The tab shows that bit, the video mode and the palette.
+fn vga_state(app: &App, ui: &mut Ui) {
+    let m = &app.session.machine;
+    let mode = rustemu_core::video::Video::mode(&m.sys.mem);
+    let retrace = m.sys.dev.retrace();
+    ui.horizontal(|ui| {
+        ui.label(format!("video mode {mode:02X}h"));
+        ui.separator();
+        ui.label(RichText::new(format!("port 3DAh = {retrace:02X}h")).monospace());
+        ui.weak(if retrace & 8 != 0 { "(in vertical retrace)" } else { "(drawing)" });
+    });
+    ui.weak("The retrace bit toggles on every IN AL, DX from port 3DAh, so wait loops always finish.");
+    ui.add_space(4.0);
+    ui.label(RichText::new("DAC palette (256 colours, set with ports 3C8h / 3C9h or INT 10h AX=1010h)").weak());
+    let cell = 14.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(16.0 * cell, 16.0 * cell), Sense::hover());
+    let p = ui.painter_at(rect);
+    let pal = &m.sys.dev.palette;
+    let rgb = |c: [u8; 3]| Color32::from_rgb(c[0] << 2 | c[0] >> 4, c[1] << 2 | c[1] >> 4, c[2] << 2 | c[2] >> 4);
+    for (i, c) in pal.iter().enumerate() {
+        let (x, y) = ((i % 16) as f32, (i / 16) as f32);
+        let r = egui::Rect::from_min_size(rect.min + vec2(x * cell, y * cell), vec2(cell - 1.0, cell - 1.0));
+        p.rect_filled(r, 0.0, rgb(*c));
+    }
+    if let Some(pos) = resp.hover_pos() {
+        let rel = pos - rect.min;
+        let i = ((rel.y / cell) as usize).min(15) * 16 + ((rel.x / cell) as usize).min(15);
+        let c = pal[i];
+        resp.on_hover_text(format!("colour {i} ({i:02X}h): R={} G={} B={} (0..63)", c[0], c[1], c[2]));
     }
 }
 

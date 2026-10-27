@@ -9,6 +9,11 @@ use crate::devices::{Devices, DevicesSnapshot};
 use crate::dos::{DosSnapshot, DosState};
 use crate::video::{self, Video};
 
+/// Number of floppy drives Emu8086 supports (FLOPPY_0..FLOPPY_3).
+pub const MAX_FLOPPIES: usize = 4;
+/// Size of a 1.44 MB floppy image: 80 cylinders, 2 heads, 18 sectors of 512 bytes.
+pub const FLOPPY_SIZE: usize = 1_474_560;
+
 /// Segment of the ROM area that holds interrupt stubs.
 pub const ROM_SEG: u16 = 0xF000;
 /// Offset of the first interrupt stub (`0F FF nn CF`, 4 bytes per vector).
@@ -200,8 +205,27 @@ struct SystemSnapshot {
     mouse: (u16, u16, u16),
     mouse_visible: bool,
     wait_until: Option<std::time::Instant>,
-    floppy_len: usize,
-    floppy_undo: Vec<(usize, u8)>,
+    floppy_lens: Vec<usize>,
+    floppy_undo: Vec<(u8, usize, u8)>,
+}
+
+/// A saved copy of the whole machine ("save the emulator's state" in Emu8086). Files the program
+/// has open on the host are not part of it; they stay as they are.
+#[derive(Clone)]
+pub struct MachineState {
+    cpu: Cpu,
+    mem: Vec<u8>,
+    dev: Devices,
+    keys: VecDeque<u16>,
+    irq: VecDeque<u8>,
+    output: Vec<u8>,
+    log: Vec<String>,
+    terminated: Option<u8>,
+    loaded: Option<LoadInfo>,
+    dos: DosSnapshot,
+    mouse: (u16, u16, u16),
+    mouse_visible: bool,
+    floppies: Vec<Vec<u8>>,
 }
 
 pub struct Machine {
@@ -218,15 +242,17 @@ pub struct Machine {
     pub history_enabled: bool,
     history: VecDeque<Snapshot>,
     history_barrier: bool,
-    pub(crate) floppy_journal: Option<Vec<(usize, u8)>>,
+    /// Bytes overwritten on the floppies during a step: (drive, offset, old value).
+    pub(crate) floppy_journal: Option<Vec<(u8, usize, u8)>>,
     pub(crate) dos: DosState,
     /// Fixed date/time for INT 21h/1Ah (tests); `None` = host clock.
     pub fixed_time: Option<crate::dos::DateTime>,
     /// Mouse state for INT 33h: x, y (in pixels of a 640x200 virtual screen), buttons.
     pub mouse: (u16, u16, u16),
     pub mouse_visible: bool,
-    /// Floppy disk image for INT 13h (drive A:), 1.44 MB geometry.
-    pub floppy: Vec<u8>,
+    /// Floppy disk images FLOPPY_0..FLOPPY_3 for INT 13h (drives A:, B:, ...; DL = 0..3), 1.44 MB
+    /// geometry. There is always at least one drive; an empty image reads as unformatted.
+    pub floppies: Vec<Vec<u8>>,
     /// Deliver IRQ0 (INT 08h -> INT 1Ch) on timer ticks. When off, the BIOS tick count at
     /// 0040:006C is still advanced.
     pub timer_irq: bool,
@@ -274,7 +300,7 @@ impl Machine {
             fixed_time: None,
             mouse: (0, 0, 0),
             mouse_visible: false,
-            floppy: Vec::new(),
+            floppies: vec![Vec::new()],
             timer_irq: false,
             instructions_per_tick: None,
             tick_instr: 0,
@@ -345,7 +371,9 @@ impl Machine {
         mem.load(0xFFFF0, &[0xEA, 0x5B, 0xE0, 0x00, 0xF0]);
         mem.load(linear(ROM_SEG, 0xE05B), &[0xF4, 0xEB, 0xFD]);
         // BIOS data area.
-        mem.write16(video::BDA + 0x10, 0x0021); // equipment: video 80x25 color, 1 floppy
+        // Equipment: video 80x25 colour, floppy drives (bits 7-6 = drives - 1).
+        let drives = self.floppies.len().clamp(1, MAX_FLOPPIES) as u16;
+        mem.write16(video::BDA + 0x10, 0x0021 | ((drives - 1) << 6));
         mem.write16(video::BDA + 0x13, 640);
         mem.write16(video::BDA + 0x1A, 0x1E);
         mem.write16(video::BDA + 0x1C, 0x1E);
@@ -715,7 +743,7 @@ impl Machine {
             mouse: self.mouse,
             mouse_visible: self.mouse_visible,
             wait_until: self.wait_until,
-            floppy_len: self.floppy.len(),
+            floppy_lens: self.floppies.iter().map(Vec::len).collect(),
             floppy_undo: Vec::new(),
         }
     }
@@ -808,10 +836,12 @@ impl Machine {
                     self.mouse = sys.mouse;
                     self.mouse_visible = sys.mouse_visible;
                     self.wait_until = sys.wait_until;
-                    for (i, value) in sys.floppy_undo.into_iter().rev() {
-                        self.floppy[i] = value;
+                    for (d, i, value) in sys.floppy_undo.into_iter().rev() {
+                        self.floppies[d as usize][i] = value;
                     }
-                    self.floppy.truncate(sys.floppy_len);
+                    for (f, len) in self.floppies.iter_mut().zip(sys.floppy_lens) {
+                        f.truncate(len);
+                    }
                 }
                 true
             }
@@ -825,6 +855,68 @@ impl Machine {
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+    }
+
+    /// Copies the complete machine state.
+    pub fn save_state(&self) -> MachineState {
+        MachineState {
+            cpu: self.cpu.clone(),
+            mem: self.sys.mem.slice(0, crate::bus::MEM_SIZE).to_vec(),
+            dev: self.sys.dev.clone(),
+            keys: self.sys.keys.clone(),
+            irq: self.sys.irq.clone(),
+            output: self.output.clone(),
+            log: self.log.clone(),
+            terminated: self.terminated,
+            loaded: self.loaded.clone(),
+            dos: self.dos.snapshot(),
+            mouse: self.mouse,
+            mouse_visible: self.mouse_visible,
+            floppies: self.floppies.clone(),
+        }
+    }
+
+    /// Returns to a state saved with [`Machine::save_state`]. The step-back history is cleared.
+    pub fn restore_state(&mut self, s: MachineState) {
+        self.sys.mem.set_journaling(false);
+        self.sys.mem.load(0, &s.mem);
+        self.cpu = s.cpu;
+        self.sys.dev = s.dev;
+        self.sys.dev.cancel_snapshot();
+        self.sys.keys = s.keys;
+        self.sys.irq = s.irq;
+        self.output = s.output;
+        self.log = s.log;
+        self.terminated = s.terminated;
+        self.loaded = s.loaded;
+        self.dos.restore(s.dos);
+        self.mouse = s.mouse;
+        self.mouse_visible = s.mouse_visible;
+        self.floppies = s.floppies;
+        self.update_equipment();
+        self.wait_until = None;
+        self.history.clear();
+        self.history_barrier = false;
+        self.floppy_journal = None;
+    }
+
+    /// Adds a floppy drive with an empty 1.44 MB disk (Emu8086's "create new floppy drive").
+    /// Returns its number, or None when there are already four drives.
+    pub fn add_floppy(&mut self) -> Option<usize> {
+        if self.floppies.len() >= MAX_FLOPPIES {
+            return None;
+        }
+        self.floppies.push(vec![0; FLOPPY_SIZE]);
+        self.update_equipment();
+        Some(self.floppies.len() - 1)
+    }
+
+    /// Keeps the number of floppy drives in the BIOS equipment word (0040:0010, bits 7-6).
+    fn update_equipment(&mut self) {
+        let drives = self.floppies.len().clamp(1, MAX_FLOPPIES) as u16;
+        let a = video::BDA + 0x10;
+        let w = self.sys.mem.read16(a);
+        self.sys.mem.write16(a, (w & !0x00C0) | 0x0001 | ((drives - 1) << 6));
     }
 
     pub(crate) fn mark_history_barrier(&mut self) {

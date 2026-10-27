@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rustemu_asm::{Format, LineInfo, Program, SymbolKind};
-use rustemu_core::machine::{PROGRAM_SEG, ROM_SEG};
+use rustemu_core::machine::{FLOPPY_SIZE, PROGRAM_SEG, ROM_SEG};
 use rustemu_core::{Event, Machine, cpu, linear};
 
 /// A loaded program together with its debug information.
@@ -182,29 +182,60 @@ impl Session {
                 self.machine.set_dos_root(root);
             }
             if let Some(floppy) = floppy {
-                self.machine.floppy = floppy;
+                self.machine.floppies[0] = floppy;
             }
         }
         result
     }
 
-    /// Boots from the virtual floppy: sector 1 is loaded at 0000:7C00 (like the BIOS does).
-    pub fn boot_from_floppy(&mut self) -> Result<(), String> {
-        if self.machine.floppy.len() < 512 {
-            return Err("the virtual floppy is empty".into());
+    /// Image of floppy drive `drive` (FLOPPY_n), resized to a full 1.44 MB disk.
+    fn floppy_mut(&mut self, drive: usize) -> Result<&mut Vec<u8>, String> {
+        let fl = self.machine.floppies.get_mut(drive).ok_or(format!("there is no FLOPPY_{drive}"))?;
+        if fl.len() < FLOPPY_SIZE {
+            fl.resize(FLOPPY_SIZE, 0);
         }
-        let sector = self.machine.floppy[..512].to_vec();
-        self.load_bytes(Loadable::Boot, sector)
+        Ok(fl)
     }
 
-    /// Copies the 512 bytes at 0000:7C00 to the boot sector of the virtual floppy.
-    pub fn write_boot_sector(&mut self) {
-        let fl = &mut self.machine.floppy;
-        if fl.len() < 1_474_560 {
-            fl.resize(1_474_560, 0);
+    /// Boots from a virtual floppy: its sector 1 is loaded at 0000:7C00 (like the BIOS does) and
+    /// DL holds the drive number.
+    pub fn boot_from_floppy(&mut self, drive: usize) -> Result<(), String> {
+        let fl = self.machine.floppies.get(drive).ok_or(format!("there is no FLOPPY_{drive}"))?;
+        if fl.len() < 512 {
+            return Err(format!("FLOPPY_{drive} is empty"));
         }
+        let sector = fl[..512].to_vec();
+        self.load_bytes(Loadable::Boot, sector)?;
+        self.machine.cpu.regs[rustemu_core::cpu::DX] = drive as u16;
+        Ok(())
+    }
+
+    /// Copies the 512 bytes at 0000:7C00 to the boot sector of a virtual floppy.
+    pub fn write_boot_sector(&mut self, drive: usize) -> Result<(), String> {
         let data = self.machine.sys.mem.slice(0x7C00, 512).to_vec();
-        self.machine.floppy[..512].copy_from_slice(&data);
+        self.floppy_mut(drive)?[..512].copy_from_slice(&data);
+        Ok(())
+    }
+
+    /// Writes `data` to a virtual floppy from cylinder / head / sector (sector numbers start at
+    /// 1; 80 cylinders, 2 heads, 18 sectors). Returns the number of sectors written.
+    pub fn write_floppy(
+        &mut self,
+        drive: usize,
+        cyl: usize,
+        head: usize,
+        sector: usize,
+        data: &[u8],
+    ) -> Result<usize, String> {
+        if cyl >= 80 || head >= 2 || !(1..=18).contains(&sector) {
+            return Err("cylinder 0..79, head 0..1, sector 1..18".into());
+        }
+        let start = ((cyl * 2 + head) * 18 + sector - 1) * 512;
+        if start + data.len() > FLOPPY_SIZE {
+            return Err(format!("{} bytes do not fit on the floppy from this sector", data.len()));
+        }
+        self.floppy_mut(drive)?[start..start + data.len()].copy_from_slice(data);
+        Ok(data.len().div_ceil(512))
     }
 
     /// Reloads the last program (fresh machine state, same breakpoints).
@@ -215,6 +246,29 @@ impl Session {
         self.load_bytes_with_program(kind, bytes, program)?;
         self.machine.breakpoints = bps;
         Ok(())
+    }
+
+    /// Saves the machine together with the program and its debug information.
+    pub fn save_state(&self) -> SessionState {
+        SessionState { machine: self.machine.save_state(), program: self.program.clone(), loaded: self.loaded.clone() }
+    }
+
+    /// Returns to a state saved with [`Session::save_state`] (breakpoints are kept).
+    pub fn restore_state(&mut self, s: SessionState) {
+        self.machine.restore_state(s.machine);
+        self.program = s.program;
+        self.loaded = s.loaded;
+        self.index_symbols();
+        self.index_lines();
+    }
+
+    /// "Reset emulator and RAM": a powered-on machine with nothing loaded.
+    pub fn unload(&mut self) {
+        self.machine.reset();
+        self.program = None;
+        self.loaded = None;
+        self.index_symbols();
+        self.index_lines();
     }
 
     /// Physical address of the first byte of the load image.
@@ -384,7 +438,13 @@ impl Session {
         Some(match s.kind {
             SymbolKind::Variable => {
                 let (seg, off) = self.symbol_seg_off(s)?;
-                expr::SymbolRef::Variable { seg, off, size: s.size.unwrap_or(1).clamp(1, 8) }
+                let size = s.size.unwrap_or(1).clamp(1, 8);
+                // NASM: the name is the address, [name] the value.
+                if p.dialect == rustemu_asm::Dialect::Nasm {
+                    expr::SymbolRef::Address { seg, off, size }
+                } else {
+                    expr::SymbolRef::Variable { seg, off, size }
+                }
             }
             SymbolKind::Segment => {
                 let base = self.machine.loaded.as_ref().map_or(0, |l| l.load_segment);
@@ -483,6 +543,14 @@ pub struct Frame {
 pub enum FrameKind {
     Call,
     Interrupt(u8),
+}
+
+/// A saved session (see [`Session::save_state`]).
+#[derive(Clone)]
+pub struct SessionState {
+    machine: rustemu_core::MachineState,
+    program: Option<Program>,
+    loaded: Option<(Loadable, Vec<u8>)>,
 }
 
 /// Default load segment used for COM/EXE programs (PSP).

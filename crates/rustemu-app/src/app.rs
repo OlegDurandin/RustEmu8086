@@ -11,6 +11,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::examples::EXAMPLES;
 
+/// Assembler syntax (options window).
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum SyntaxChoice {
+    /// Detected from the source (`bits 16`, `section`, `%define`, ...).
+    #[default]
+    Auto,
+    Masm,
+    Nasm,
+}
+
+impl SyntaxChoice {
+    pub fn dialect(self) -> Option<rustemu_asm::Dialect> {
+        match self {
+            SyntaxChoice::Auto => None,
+            SyntaxChoice::Masm => Some(rustemu_asm::Dialect::Masm),
+            SyntaxChoice::Nasm => Some(rustemu_asm::Dialect::Nasm),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeChoice {
     #[default]
@@ -18,6 +38,9 @@ pub enum ThemeChoice {
     Dark,
     System,
 }
+
+/// Releases of RustEmu8086 (help -> check for an update).
+pub const RELEASES_URL: &str = "https://github.com/OlegDurandin/RustEmu8086/releases";
 
 /// Settings persisted between runs.
 #[derive(Serialize, Deserialize, Clone)]
@@ -35,6 +58,8 @@ pub struct Settings {
     pub show_macro_code: bool,
     pub follow_source: bool,
     pub vars_format: crate::debug::NumFormat,
+    /// Assembler syntax: detected, Emu8086/MASM or NASM.
+    pub syntax: SyntaxChoice,
     /// Debugging session of recently used files, most recent first.
     pub sessions: Vec<(String, FileSession)>,
 }
@@ -79,6 +104,7 @@ impl Default for Settings {
             show_macro_code: true,
             follow_source: true,
             vars_format: Default::default(),
+            syntax: SyntaxChoice::Auto,
             sessions: Vec::new(),
         }
     }
@@ -108,6 +134,7 @@ pub struct Windows {
     pub alu: bool,
     pub stop_condition: bool,
     pub flag_analyser: bool,
+    pub value_viewer: bool,
 }
 
 pub struct Message {
@@ -166,6 +193,24 @@ pub struct Watch {
     pub before: Option<i64>,
 }
 
+/// State of the 'write .bin file to floppy' dialog.
+pub struct BinToFloppy {
+    pub path: String,
+    pub drive: usize,
+    pub cyl: usize,
+    pub head: usize,
+    pub sector: usize,
+}
+
+/// The emulator with the sources it was loaded from.
+#[derive(Clone)]
+pub struct SavedState {
+    session: rustemu_session::SessionState,
+    source_files: Vec<(String, Vec<String>)>,
+    source_index: Vec<Vec<rustemu_asm::library::Entry>>,
+    loaded_text: Option<String>,
+}
+
 pub struct App {
     pub settings: Settings,
     // ---- editor
@@ -221,6 +266,17 @@ pub struct App {
     pub example_key: Option<String>,
     /// First address of the disassembly list.
     pub code_view_start: u32,
+    /// The disassembly shows `code_view_start` instead of following CS:IP ("show current break
+    /// point"); released by the next execution command or "show current instruction".
+    pub code_view_pinned: bool,
+    /// Instruction selected in the disassembly (segment, offset) for the Debug menu.
+    pub code_selected: Option<(u16, u16)>,
+    /// "Save the emulator's state" (File menu of the emulator).
+    pub saved_state: Option<SavedState>,
+    pub bin_to_floppy: Option<BinToFloppy>,
+    /// "use NASM syntax" in the choose code template dialog.
+    pub new_nasm: bool,
+    pub value_viewer: crate::debugger::ValueViewer,
     pub last_source_pos: Option<(usize, u32)>,
     pub source_scroll_pending: Option<(u32, u8)>,
     pub vars_format: crate::debug::NumFormat,
@@ -306,6 +362,12 @@ impl App {
             session_started: false,
             example_key: None,
             code_view_start: 0,
+            code_view_pinned: false,
+            code_selected: None,
+            saved_state: None,
+            bin_to_floppy: None,
+            new_nasm: false,
+            value_viewer: Default::default(),
             last_source_pos: None,
             source_scroll_pending: None,
             vars_format: Default::default(),
@@ -366,12 +428,27 @@ impl App {
     // ---- files ------------------------------------------------------------------
 
     pub fn new_from_template(&mut self, i: usize) {
+        self.new_from(crate::examples::TEMPLATES.get(i).map(|t| t.1).unwrap_or(""));
+    }
+
+    /// File -> New with "NASM syntax": COM (0), BIN (2) or boot sector (3) template in NASM.
+    pub fn new_from_nasm_template(&mut self, i: usize) {
+        let t = match i {
+            0 => crate::examples::NASM_TEMPLATES[0].1,
+            2 => crate::examples::NASM_TEMPLATES[1].1,
+            3 => crate::examples::NASM_TEMPLATES[2].1,
+            _ => "bits 16\n",
+        };
+        self.new_from(t);
+    }
+
+    fn new_from(&mut self, template: &str) {
         self.store_session();
         self.path = None;
         self.example_key = None;
         self.clear_session();
         self.bookmarks.clear();
-        self.text = crate::examples::TEMPLATES.get(i).map(|t| t.1).unwrap_or("").to_string();
+        self.text = template.to_string();
         self.saved_text = self.text.clone();
         self.messages.clear();
         self.error_lines.clear();
@@ -615,12 +692,13 @@ impl App {
         let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
         self.messages.clear();
         self.error_lines.clear();
-        match rustemu_asm::assemble(&name, &self.text, &mut loader) {
+        match rustemu_asm::assemble_dialect(&name, &self.text, &mut loader, self.settings.syntax.dialect()) {
             Ok(p) => {
                 self.messages.push(Message {
                     text: format!(
-                        "{}: assembled successfully - {} format, {} bytes",
+                        "{}: assembled successfully - {} syntax, {} format, {} bytes",
                         self.file_name(),
+                        p.dialect.name(),
                         p.format.name(),
                         p.file_bytes().len()
                     ),
@@ -929,6 +1007,7 @@ impl App {
     /// Remembers the state before an execution command (changed registers and watches are highlighted).
     pub fn begin_exec(&mut self) {
         self.prev_cpu = self.session.machine.cpu.clone();
+        self.code_view_pinned = false;
         for i in 0..self.watches.len() {
             self.watches[i].before = self.watch_value(i).ok();
         }
@@ -1212,6 +1291,150 @@ impl App {
     }
 
     /// Breakpoint on the editor line with the text cursor.
+    /// Breakpoint at an instruction of the disassembly: a line breakpoint when the address maps to a
+    /// program line (it survives reloads); macro code keeps an address breakpoint (its line may be
+    /// expanded in many places).
+    pub fn toggle_breakpoint_at_addr(&mut self, addr: u32) {
+        if let Some(loc) = self.session.location_at_addr(addr).filter(|l| l.origin.is_none())
+            && self.session.addr_of_line(loc.file, loc.line) == Some(addr)
+        {
+            self.toggle_breakpoint_at_line(loc.file, loc.line);
+        } else {
+            let bps = &mut self.session.machine.breakpoints;
+            if !bps.remove(&addr) {
+                bps.insert(addr);
+            }
+        }
+    }
+
+    // ---- emulator window menus (Emu8086) ---------------------------------------------------
+
+    /// Linear address of the instruction selected in the disassembly.
+    pub fn selected_addr(&self) -> Option<u32> {
+        self.code_selected.map(|(s, o)| rustemu_core::linear(s, o))
+    }
+
+    /// Debug -> run until: runs to the selected instruction (or a breakpoint).
+    pub fn run_until_selected(&mut self) {
+        let Some(addr) = self.selected_addr() else { return };
+        if !self.ensure_current_build() {
+            return;
+        }
+        if self.session.machine.terminated.is_some() {
+            self.status = "Program has terminated - press Reload to run again".into();
+            return;
+        }
+        self.begin_exec();
+        self.run = RunMode::RunTo(vec![addr]);
+        self.status = format!("Running until {addr:05X}h...");
+    }
+
+    /// Debug -> set CS:IP to selected position.
+    pub fn set_cs_ip_to_selected(&mut self) {
+        let Some((seg, off)) = self.code_selected else { return };
+        self.stop();
+        let c = &mut self.session.machine.cpu;
+        c.sregs[rustemu_core::cpu::CS] = seg;
+        c.ip = off;
+        c.halted = false;
+        self.code_view_pinned = false;
+        self.status = format!("CS:IP = {seg:04X}:{off:04X}");
+    }
+
+    /// Debug -> show current instruction: the disassembly follows CS:IP again.
+    pub fn show_current_instruction(&mut self) {
+        self.code_view_pinned = false;
+        self.code_view_start = self.session.machine.cpu.pc();
+    }
+
+    /// Debug -> show current break point: shows the next breakpoint after the shown one.
+    pub fn show_next_breakpoint(&mut self) {
+        let mut bps: Vec<u32> = self.session.machine.breakpoints.iter().copied().collect();
+        bps.sort_unstable();
+        let from = if self.code_view_pinned { self.code_view_start + 1 } else { 0 };
+        let Some(&a) = bps.iter().find(|&&a| a >= from).or(bps.first()) else { return };
+        self.code_view_start = a;
+        self.code_view_pinned = true;
+        let cs = self.session.machine.cpu.cs();
+        let off = a.wrapping_sub(rustemu_core::linear(cs, 0));
+        self.code_selected = Some(if off <= 0xFFFF { (cs, off as u16) } else { ((a >> 4) as u16, (a & 15) as u16) });
+    }
+
+    /// File -> save the emulator's state (kept until the application is closed).
+    pub fn save_emulator_state(&mut self) {
+        self.saved_state = Some(SavedState {
+            session: self.session.save_state(),
+            source_files: self.source_files.clone(),
+            source_index: self.source_index.clone(),
+            loaded_text: self.loaded_text.clone(),
+        });
+        let c = &self.session.machine.cpu;
+        self.status = format!("Emulator state saved at {:04X}:{:04X}", c.cs(), c.ip);
+    }
+
+    /// File -> load from previous state.
+    pub fn load_emulator_state(&mut self) {
+        let Some(s) = self.saved_state.clone() else { return };
+        self.stop();
+        self.session.restore_state(s.session);
+        self.source_files = s.source_files;
+        self.source_index = s.source_index;
+        self.loaded_text = s.loaded_text;
+        self.build_failed = false;
+        self.load_gen += 1;
+        for w in &mut self.watches {
+            w.compiled = None;
+        }
+        self.stop_condition.compiled = None;
+        self.sync_breakpoints();
+        self.prev_cpu = self.session.machine.cpu.clone();
+        self.code_view_pinned = false;
+        let c = &self.session.machine.cpu;
+        self.status = format!("Emulator state restored - CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
+    }
+
+    /// File -> reset emulator and RAM: nothing loaded, memory cleared.
+    pub fn reset_emulator_and_ram(&mut self) {
+        self.run = RunMode::Paused;
+        self.session.unload();
+        self.source_files.clear();
+        self.source_index.clear();
+        self.loaded_text = None;
+        self.bp_addr.clear();
+        self.prev_cpu = self.session.machine.cpu.clone();
+        self.code_selected = None;
+        self.code_view_pinned = false;
+        self.status = "Emulator and RAM reset".into();
+    }
+
+    /// File -> examples / recent files: opens the source and loads it into the emulator.
+    pub fn emulate_example(&mut self, i: usize) {
+        if self.dirty() {
+            self.guarded(PendingAction::Example(i));
+        } else {
+            self.load_example(i);
+            self.emulate();
+        }
+    }
+
+    pub fn emulate_file(&mut self, p: &Path) {
+        let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if matches!(ext.as_str(), "com" | "exe" | "bin" | "boot") {
+            self.load_binary(p);
+        } else if self.dirty() {
+            self.guarded(PendingAction::Open(Some(p.to_path_buf())));
+        } else {
+            self.open_path(p);
+            self.emulate();
+        }
+    }
+
+    /// File -> close the emulator.
+    pub fn close_emulator(&mut self) {
+        self.stop();
+        self.windows.emulator = false;
+    }
+
     pub fn toggle_breakpoint_at_cursor(&mut self) {
         self.toggle_breakpoint_at_line(0, self.cursor_line);
     }
@@ -1303,6 +1526,21 @@ impl App {
         // F1: reference article for the word at the text cursor.
         if fire(sc(Modifiers::NONE, Key::F1)) {
             self.help_at_cursor();
+        }
+        // Emu8086 emulator keys that do not clash with ours.
+        if fire(sc(Modifiers::NONE, Key::F11)) {
+            self.windows.console = !self.windows.console;
+        }
+        if fire(sc(Modifiers::NONE, Key::F6)) && self.loaded() {
+            self.step_back();
+        }
+        if fire(sc(ctrl | Modifiers::SHIFT, Key::F7)) {
+            self.set_cs_ip_to_selected();
+        } else if fire(sc(Modifiers::NONE, Key::F7)) {
+            self.show_current_instruction();
+        }
+        if fire(sc(ctrl, Key::F8)) {
+            self.run_until_selected();
         }
         if fire(sc(Modifiers::NONE, Key::F4)) {
             self.run_to_cursor();
