@@ -228,7 +228,7 @@ fn help_menu(app: &mut App, ui: &mut Ui) {
     ui.separator();
     if item(ui, true, "check for an update…", "") {
         // The project page lists the releases; there is no automatic updater.
-        let _ = std::process::Command::new("open").arg(crate::app::RELEASES_URL).spawn();
+        crate::platform::open_url(crate::app::RELEASES_URL);
     }
     ui.separator();
     if item(ui, true, "about…", "") {

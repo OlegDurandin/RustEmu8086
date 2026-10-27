@@ -263,8 +263,8 @@ pub fn paste_keys(m: &mut rustemu_core::Machine, text: &str) {
 
 /// Paste from the menu or the button (egui only delivers the clipboard with ⌘V events).
 fn paste_from_clipboard(app: &mut App) {
-    if let Ok(out) = std::process::Command::new("pbpaste").output() {
-        paste_keys(&mut app.session.machine, &String::from_utf8_lossy(&out.stdout));
+    if let Some(text) = crate::platform::read_clipboard() {
+        paste_keys(&mut app.session.machine, &text);
     }
 }
 

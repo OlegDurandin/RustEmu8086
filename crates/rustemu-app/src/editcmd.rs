@@ -104,10 +104,9 @@ pub fn cut(app: &mut App, ctx: &egui::Context) {
     app.pending_select = Some((a, a));
 }
 
-/// Pastes the macOS clipboard (egui cannot read the clipboard on demand).
+/// Pastes the system clipboard (egui cannot read the clipboard on demand; see `platform`).
 pub fn paste(app: &mut App) {
-    let Ok(out) = std::process::Command::new("pbpaste").output() else { return };
-    let text = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+    let Some(text) = crate::platform::read_clipboard() else { return };
     let (a, b) = app.selection;
     let (ba, bb) = (char_to_byte(&app.text, a), char_to_byte(&app.text, b));
     app.text.replace_range(ba..bb, &text);

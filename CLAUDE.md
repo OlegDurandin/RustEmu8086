@@ -13,7 +13,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
 | `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
-| `crates/rustemu-app` | GUI-бинарь `RustEmu8086` на `eframe/egui` 0.37 (см. этап 5). |
+| `crates/rustemu-app` | GUI на `eframe/egui` 0.37 (рендерер wgpu): библиотека `rustemu_app` (`lib.rs`) + бинарь `RustEmu8086` (`main.rs`) + `android_main` (Android, cdylib); сервисы ОС — `platform.rs` (см. этап 5 и 6.7). |
 
 ### Ключевые решения
 - **Прерывания — «настоящие».** IVT в 0000:0000 указывает на заглушки `F000:1000+4*n`, заглушка —
@@ -186,6 +186,10 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
 ### Этап 6. Полировка
 - [x] 6.1 Сравнение с Emu8086: корпус из 84 оригинальных примеров (сборка + выполнение), устройства по
       исходникам оригинала, параметры командной строки, виртуальная дискета, шаблоны New
+- [~] 6.7 Планшеты (iPadOS, Android) — заготовка: wgpu везде, `Cargo.toml` по платформам (`rfd` и clipboard —
+      только desktop; android-native-activity), `platform.rs` (диалоги/буфер/URL/папка данных; на мобильных —
+      заглушки), lib + точки входа. `cargo check --target aarch64-apple-ios` проходит. Не сделано: файлы и буфер
+      на планшетах, сенсорный ввод экрана, раскладка UI, упаковка (Xcode / NDK)
 - [ ] 6.6 Синтаксис FASM (`#fasm#`) — не поддерживается
 - [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, масштаб экрана, задержка,
       открытые окна (положения хранит egui), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —
