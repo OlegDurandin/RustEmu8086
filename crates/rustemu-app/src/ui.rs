@@ -524,7 +524,7 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
     ui.menu_button("load floppy image", |ui| {
         for d in 0..drives {
             if ui.button(format!("into FLOPPY_{d}…")).clicked()
-                && let Some(p) = rfd::FileDialog::new().pick_file()
+                && let Some(p) = crate::platform::pick_file(&[], None)
             {
                 match std::fs::read(&p) {
                     Ok(mut b) => {
@@ -540,7 +540,7 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
     ui.menu_button("save floppy image", |ui| {
         for d in 0..drives {
             if ui.button(format!("FLOPPY_{d}…")).clicked()
-                && let Some(p) = rfd::FileDialog::new().set_file_name(format!("FLOPPY_{d}")).save_file()
+                && let Some(p) = crate::platform::save_file(&[], None, &format!("FLOPPY_{d}"))
                 && let Err(e) = std::fs::write(&p, &app.session.machine.floppies[d])
             {
                 app.notice("Virtual drive", &e.to_string());
@@ -562,7 +562,7 @@ fn bin_to_floppy_dialog(app: &mut App, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut d.path).hint_text("file.bin").desired_width(300.0));
                 if ui.button("browse…").clicked()
-                    && let Some(p) = rfd::FileDialog::new().add_filter("binary", &["bin", "com", "img"]).pick_file()
+                    && let Some(p) = crate::platform::pick_file(&[("binary", &["bin", "com", "img"])], None)
                 {
                     d.path = p.display().to_string();
                 }

@@ -66,6 +66,27 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
+## Планшеты: iPadOS и Android (заготовка)
+
+Сейчас RustEmu8086 — приложение для macOS. Проект подготовлен к тому, чтобы позже собрать его для iPad и
+Android-планшетов:
+
+- **Рендерер wgpu на всех платформах** (Metal на macOS и iPadOS, Vulkan / GLES на Android): eframe на iOS
+  работает только с wgpu, поэтому и macOS-версия уже использует его.
+- **Приложение — библиотека** (`crates/rustemu-app/src/lib.rs`) с отдельной точкой входа для каждой платформы:
+  исполняемый файл `RustEmu8086` для macOS и iPadOS, функция `android_main` для Android.
+- **Платформенный слой** `crates/rustemu-app/src/platform.rs` — файловые диалоги, чтение буфера обмена,
+  открытие ссылок, папка для данных. Сейчас реализован для настольных систем (`rfd`); на iPadOS и Android это
+  заглушки, в комментариях описано, чем их заменить (`UIDocumentPickerViewController` / `UIPasteboard`,
+  Storage Access Framework / `ClipboardManager`).
+- **`crates/rustemu-app/Cargo.toml`** разделён по платформам: общие зависимости; `rfd` и системный буфер
+  обмена — только для настольных систем; секции для iPadOS и Android (NativeActivity).
+
+Код компилируется для `aarch64-apple-ios` (`cargo check`). Для настоящей сборки нужны Xcode с iOS SDK
+(упаковка в `.app` через Xcode или `cargo bundle`) и Android NDK (`cargo ndk … --crate-type cdylib`, см.
+комментарии в `Cargo.toml`). Не сделаны: файлы и буфер обмена на планшетах, сенсорный ввод для экрана
+эмулятора и раскладка интерфейса под планшет.
+
 ## Работа в приложении
 
 1. Создайте файл (**new**, ⌘N — окно выбора шаблона COM / EXE / BIN / BOOT, как в Emu8086),

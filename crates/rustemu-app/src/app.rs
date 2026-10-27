@@ -456,12 +456,10 @@ impl App {
     }
 
     pub fn open_dialog(&mut self) {
-        let mut dlg =
-            rfd::FileDialog::new().add_filter("Assembly", &["asm", "inc", "txt"]).add_filter("All files", &["*"]);
-        if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
-            dlg = dlg.set_directory(dir);
-        }
-        if let Some(p) = dlg.pick_file() {
+        let dir = self.path.as_ref().and_then(|p| p.parent());
+        let filters: [crate::platform::Filter; 2] =
+            [("Assembly", &["asm", "nasm", "inc", "txt"]), ("All files", &["*"])];
+        if let Some(p) = crate::platform::pick_file(&filters, dir) {
             let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
             if matches!(ext.as_str(), "com" | "exe" | "bin" | "boot") {
                 self.load_binary(&p);
@@ -504,11 +502,8 @@ impl App {
     }
 
     pub fn save_as(&mut self) -> bool {
-        let mut dlg = rfd::FileDialog::new().add_filter("Assembly", &["asm"]).set_file_name(self.file_name());
-        if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
-            dlg = dlg.set_directory(dir);
-        }
-        match dlg.save_file() {
+        let dir = self.path.as_ref().and_then(|p| p.parent());
+        match crate::platform::save_file(&[("Assembly", &["asm"])], dir, &self.file_name()) {
             Some(p) => self.save_to(&p),
             None => false,
         }
@@ -741,13 +736,10 @@ impl App {
         let Some(p) = self.assemble() else { return };
         let out = match &self.path {
             Some(src) => src.with_extension(p.format.extension()),
-            None => {
-                let dlg = rfd::FileDialog::new().set_file_name(format!("program.{}", p.format.extension()));
-                match dlg.save_file() {
-                    Some(f) => f,
-                    None => return,
-                }
-            }
+            None => match crate::platform::save_file(&[], None, &format!("program.{}", p.format.extension())) {
+                Some(f) => f,
+                None => return,
+            },
         };
         let mut written = vec![];
         let res = std::fs::write(&out, p.file_bytes()).and_then(|_| {
@@ -865,8 +857,7 @@ impl App {
         if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
             return dir.to_path_buf();
         }
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        let d = home.join("Documents").join("RustEmu8086").join("vdrive");
+        let d = crate::platform::data_dir().join("vdrive");
         std::fs::create_dir_all(&d).ok();
         d
     }
