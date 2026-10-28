@@ -1,4 +1,4 @@
-//! RustEmu8086 for iPadOS (and the Mac, for development): the tablet layout.
+//! The tablet layout in a desktop window, for development (the web version uses it on tablets).
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {

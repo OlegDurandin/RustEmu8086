@@ -3,7 +3,7 @@
 //! services ([`platform`]).
 //!
 //! The front ends draw their own main window around it: `rustemu-desktop` - the Emu8086-style
-//! windows for macOS, `rustemu-tablet` - the tabbed touch layout for iPadOS and Android.
+//! windows, `rustemu-tablet` - the tabbed touch layout (the web version on tablets).
 
 pub mod app;
 pub mod calc;
@@ -29,7 +29,7 @@ pub mod screen;
 pub mod testing;
 pub mod windows;
 
-/// Window options shared by all native platforms (on tablets the window is the whole screen).
+/// Window options of the desktop applications.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
@@ -38,16 +38,12 @@ pub fn native_options() -> eframe::NativeOptions {
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([800.0, 500.0]),
         wgpu_options: wgpu_options(),
-        // eframe finds no settings folder on iPadOS / Android; desktop uses its own default.
-        persistence_path: cfg!(any(target_os = "ios", target_os = "android"))
-            .then(|| platform::data_dir().join("app.ron")),
         ..Default::default()
     }
 }
 
 /// egui's default wgpu setup asks for the WebGPU default limits, which some GPUs do not reach
-/// (the iPad simulator has 15 inter-stage shader variables, not 16): ask for no more than the
-/// adapter offers. egui itself needs far less.
+/// (e.g. 15 inter-stage shader variables, not 16): ask for no more than the adapter offers. egui itself needs far less.
 pub fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
     use eframe::egui_wgpu::{self, WgpuSetup, wgpu};
     let WgpuSetup::CreateNew(mut setup) = egui_wgpu::WgpuConfiguration::default().wgpu_setup else {

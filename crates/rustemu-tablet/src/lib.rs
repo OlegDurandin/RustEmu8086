@@ -1,11 +1,10 @@
-//! RustEmu8086 for tablets (iPadOS, Android): a top bar with the run controls, Editor / Debugger /
-//! Memory tabs of fixed cards and a status bar, in a dark theme sized for touch, plus an on-screen
-//! PC keyboard. Dialogs and tool windows are the shared ones of `rustemu_ui`.
+//! The tablet layout of RustEmu8086 (used by the web version on iPads and touch screens): a top
+//! bar with the run controls, Editor / Debugger / Memory tabs of fixed cards and a status bar, in a
+//! dark theme sized for touch, plus an on-screen PC keyboard. Dialogs and tool windows are the
+//! shared ones of `rustemu_ui`.
 
 mod bars;
 mod cards;
-#[cfg(target_os = "ios")]
-mod ios;
 mod keypad;
 mod memory;
 mod tabs;
@@ -41,21 +40,6 @@ impl TabletApp {
 }
 
 impl eframe::App for TabletApp {
-    #[cfg(target_os = "ios")]
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        for _ in 0..ios::take_return_keys() {
-            for pressed in [true, false] {
-                raw_input.events.push(egui::Event::Key {
-                    key: egui::Key::Enter,
-                    physical_key: None,
-                    pressed,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                });
-            }
-        }
-    }
-
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.app.persist(storage);
     }
@@ -69,34 +53,19 @@ impl eframe::App for TabletApp {
     }
 }
 
-/// Runs the application (iPadOS and the Mac: `main.rs`; Android: [`android_main`]). The web
-/// version starts [`TabletApp`] itself.
+/// Shows the layout in a desktop window (`main.rs`, for development). The web version starts
+/// [`TabletApp`] itself.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run(options: eframe::NativeOptions) -> eframe::Result {
     eframe::run_native(
         "RustEmu8086",
         options,
         Box::new(|cc| {
-            #[cfg(target_os = "ios")]
-            {
-                ios::attach_to_scene(cc);
-                ios::catch_return_key();
-            }
             let t = TabletApp::new(App::new(cc));
             t.app.apply_theme(&cc.egui_ctx);
             Ok(Box::new(t))
         }),
     )
-}
-
-/// Android entry point, called by the NativeActivity glue (the library is built as a `cdylib`).
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-fn android_main(app: winit::platform::android::activity::AndroidApp) {
-    let options = eframe::NativeOptions { android_app: Some(app), ..rustemu_ui::native_options() };
-    if let Err(e) = run(options) {
-        eprintln!("RustEmu8086: {e}");
-    }
 }
 
 /// State of the tablet layout.
@@ -137,10 +106,8 @@ fn tablet_ui(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     egui::Panel::top("tablet_top")
         .frame(egui::Frame::new().fill(pal::BAR).inner_margin(egui::Margin::symmetric(16, 10)))
         .show(ui, |ui| top_bar(app, ui));
-    // On iPadOS the bottom edge belongs to the home indicator.
-    let bottom = if cfg!(target_os = "ios") { 22 } else { 8 };
     egui::Panel::bottom("tablet_status")
-        .frame(egui::Frame::new().fill(pal::BAR).inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom }))
+        .frame(egui::Frame::new().fill(pal::BAR).inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }))
         .show(ui, |ui| status_bar(app, t, ui));
     if t.keypad.open {
         egui::Panel::bottom("tablet_keys")
