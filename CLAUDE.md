@@ -16,7 +16,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, окна отладки/инструментов и диалоги (`windows::shared_windows`), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
 | `crates/rustemu-desktop` | Интерфейс Emu8086: библиотека (`DesktopApp`, главное окно с меню/тулбаром — `ui.rs`, окно эмулятора и исходника — `emulator.rs`; UI-тесты `ui_tests.rs`) + бинарь `RustEmu8086` (macOS). |
 | `crates/rustemu-tablet` | Интерфейс планшета (см. 6.7) — для веб-версии на iPad и сенсорных экранах: `TabletApp` + `TabletState`; бинарь `rustemu-tablet` — окно на Mac для разработки. Нативных сборок iPadOS/Android нет. |
-| `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`); `layout.rs` — `WebApp` с `DesktopApp` или `TabletApp`, переключение на лету (`App::switch_layout`, выбор в localStorage); раскладка по умолчанию — iPad (`MacIntel` + касания), `pointer: coarse` или узкое окно; `?ui=`, `?example=…&run`. |
+| `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`); `layout.rs` — `WebApp` с `DesktopApp` или `TabletApp`, переключение на лету (`App::switch_layout`, выбор в localStorage); раскладка по умолчанию — iPad (`MacIntel` + касания), `pointer: coarse` или узкое окно; `?ui=`, `?example=…&run`, ссылки с программой `#name=…&code=…` (`rustemu_ui::share`). |
 
 ### Ключевые решения
 - **Прерывания — «настоящие».** IVT в 0000:0000 указывает на заглушки `F000:1000+4*n`, заглушка —
@@ -109,7 +109,11 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       .MODEL/.STACK/.DATA/.CODE, INCLUDE, MACRO/ENDM/LOCAL/EXITM, REPT, IF/IFE/IFDEF/IFNDEF/ELSE/ENDIF, EVEN/ALIGN
 - [x] 2.5 Директивы Emu8086: `#make_com/exe/bin/boot#`, `#load_segment/offset=#`, `#AX=..#`, `#start=..#`
 - [x] 2.6 Вывод COM/EXE(MZ)/BIN/BOOT, листинг, таблица символов, карта адрес → строка
-- [~] 2.7 Сообщения об ошибках: строка есть, колонка — только для синтаксических ошибок
+- [x] 2.7 Сообщения об ошибках: строка и место в ней (`AsmError::col`/`len`, символы). `errpos.rs`: по сообщению и
+      исходной строке (`Preprocessor::sources`) — имя в кавычках, первый/последний/все операнды, иначе оператор;
+      в развёртке макроса — вызов целиком; синтаксические — токен из лексера, если строка не изменена препроцессором.
+      GUI: `(строка:колонка)` в сообщениях, волнистое подчёркивание (`App::error_spans`), клик выделяет
+      (`App::jump_to_message`)
 - [x] 2.9 Диалект NASM (`-f bin`): автоопределение / `#nasm#` / `.nasm` / настройка; COM / BOOT / BIN по ORG;
       тест `nasm_dialect` сверяет программы с настоящим `nasm -f bin` байт в байт. Нет: EXE, `%define` с
       параметрами, `%0`/`%rotate`/greedy-параметры, `incbin`, `struc`, контекстные макросы; дальний Jcc — пара 8086
@@ -218,7 +222,10 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       через `WebRunner::app_mut` (eframe 0.37 слушает несуществующее `onbeforeunload`); без localStorage — notice и
       вопрос перед закрытием. Экран текстового режима — растровый шрифт 8×16 (`font::glyph8x16`, Unscii 16, public
       domain; 4 глифа нарисованы) через атлас с «sharp bilinear» (`screen.rs`). Не сделано: PWA/офлайн, ☻☼⌂ⁿ в
-      окнах с текстом (таблица ASCII, дамп памяти)
+      окнах с текстом (таблица ASCII, дамп памяти). Ссылки «поделиться» — `share.rs`: `#name=…&code=<deflate
+      (miniz_oxide), base64url>[&run]`, окно *share link* (File → Share link…, и на Mac — ведёт на `WEB_URL`);
+      веб открывает ссылку при запуске и на `hashchange` (`App::open_link` → `PendingAction::Shared`, спрашивает про
+      несохранённое) и убирает её из адреса (`history.replaceState`)
 - [ ] 6.6 Синтаксис FASM (`#fasm#`) — не поддерживается
 - [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, масштаб экрана, задержка,
       открытые окна (положения хранит egui), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —

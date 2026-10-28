@@ -26,6 +26,7 @@ pub mod programs;
 pub mod reference;
 pub mod reference_ui;
 pub mod screen;
+pub mod share;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod windows;

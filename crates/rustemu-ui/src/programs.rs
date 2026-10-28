@@ -77,7 +77,7 @@ impl App {
         self.text = text;
         self.saved_text = self.text.clone();
         self.messages.clear();
-        self.error_lines.clear();
+        self.clear_errors();
         self.restore_session();
         self.status = format!("Opened {name}");
     }
@@ -147,7 +147,7 @@ impl App {
         self.saved_text = d.saved.unwrap_or_else(|| d.text.clone());
         self.text = d.text;
         self.messages.clear();
-        self.error_lines.clear();
+        self.clear_errors();
         self.restore_session();
         self.status = if self.dirty() {
             format!("{} with the unsaved changes of the last visit", self.file_name())

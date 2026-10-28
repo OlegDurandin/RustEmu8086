@@ -159,6 +159,10 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
         app.download_source();
         ui.close();
     }
+    if ui.button("Share link…").clicked() {
+        app.share = Some(rustemu_ui::share::ShareDialog { run: false });
+        ui.close();
+    }
     ui.separator();
     if ui.button("Assemble and load").clicked() {
         app.emulate();

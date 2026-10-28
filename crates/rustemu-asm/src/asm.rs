@@ -38,6 +38,8 @@ struct StmtInfo {
 }
 
 struct Assembler {
+    /// Source text of each file (to locate errors in their lines).
+    sources: Vec<String>,
     lines: Vec<Line>,
     stmts: Vec<StmtInfo>,
     format: Format,
@@ -120,11 +122,29 @@ pub fn assemble(
         let parsed = if nasm { parse_line_nasm(&l.text) } else { parse_line(&l.text) };
         match parsed {
             Ok(stmt) => stmts.push(StmtInfo { stmt, line: i }),
-            Err((col, msg)) => errors.push(AsmError { file: l.file, line: l.line, col: Some(col), msg }),
+            Err((at, msg)) => {
+                // The position is in the line as preprocessed; it holds in the source line when
+                // that is the same text.
+                let source = source_line(&pp.sources, l.file, l.line);
+                let span = if l.chain.is_empty() && source == Some(l.text.as_str()) {
+                    crate::errpos::token_at(&l.text, at)
+                } else {
+                    source.and_then(|s| crate::errpos::locate(&msg, s, !l.chain.is_empty()))
+                };
+                errors.push(AsmError {
+                    file: l.file,
+                    line: l.line,
+                    col: span.map(|s| s.0),
+                    len: span.map_or(0, |s| s.1),
+                    msg,
+                })
+            }
         }
     }
 
+    let sources = std::mem::take(&mut pp.sources);
     let mut a = Assembler {
+        sources,
         lines,
         stmts,
         format: Format::Com,
@@ -174,7 +194,7 @@ pub fn assemble(
         }
         if pass == MAX_PASSES {
             a.syms = a.prev.clone();
-            a.errors.push(AsmError { file: 0, line: 0, col: None, msg: "assembly did not converge".into() });
+            a.errors.push(AsmError { file: 0, line: 0, col: None, len: 0, msg: "assembly did not converge".into() });
         }
     }
     if a.fasm {
@@ -182,15 +202,37 @@ pub fn assemble(
             file: 0,
             line: 0,
             col: None,
+            len: 0,
             msg: "FASM syntax (#fasm#) is not supported; remove the directive to use the Emu8086/MASM syntax".into(),
         });
     }
     crate::encode::set_strict_size(false);
     errors.append(&mut a.errors);
     if !errors.is_empty() {
+        locate_errors(&mut errors, &a.sources);
         return Err((errors, files));
     }
-    a.build(files).map_err(|e| (e, Vec::new()))
+    let sources = std::mem::take(&mut a.sources);
+    a.build(files).map_err(|mut e| {
+        locate_errors(&mut e, &sources);
+        (e, Vec::new())
+    })
+}
+
+/// Line `line` (1-based) of file `file`.
+fn source_line(sources: &[String], file: usize, line: u32) -> Option<&str> {
+    sources.get(file)?.lines().nth(line.checked_sub(1)? as usize)
+}
+
+/// Finds the part of the line of errors that have no position yet (from the message).
+fn locate_errors(errors: &mut [AsmError], sources: &[String]) {
+    for e in errors.iter_mut().filter(|e| e.col.is_none()) {
+        if let Some((col, len)) =
+            source_line(sources, e.file, e.line).and_then(|s| crate::errpos::locate(&e.msg, s, false))
+        {
+            (e.col, e.len) = (Some(col), len);
+        }
+    }
 }
 
 impl Assembler {
@@ -200,7 +242,11 @@ impl Assembler {
 
     fn err(&mut self, idx: usize, msg: impl Into<String>) {
         let l = self.line_of(idx);
-        let e = AsmError { file: l.file, line: l.line, col: None, msg: msg.into() };
+        let msg = msg.into();
+        // In a macro expansion the error is shown at the macro call.
+        let span = source_line(&self.sources, l.file, l.line)
+            .and_then(|s| crate::errpos::locate(&msg, s, !l.chain.is_empty()));
+        let e = AsmError { file: l.file, line: l.line, col: span.map(|s| s.0), len: span.map_or(0, |s| s.1), msg };
         self.errors.push(e);
     }
 
@@ -848,6 +894,7 @@ impl Assembler {
                 file: 0,
                 line: 0,
                 col: None,
+                len: 0,
                 msg: "COM program has code below offset 100h (missing ORG 100h?)".into(),
             });
         }
@@ -876,7 +923,7 @@ impl Assembler {
         // Flat formats keep their segment fixups too: the emulator adds the load segment
         // (segment references in a .com/.bin file on disk assume a load segment of 0).
         if self.format == Format::Boot && image.len() > 512 {
-            errors.push(AsmError { file: 0, line: 0, col: None, msg: "boot sector exceeds 512 bytes".into() });
+            errors.push(AsmError { file: 0, line: 0, col: None, len: 0, msg: "boot sector exceeds 512 bytes".into() });
         }
         if !errors.is_empty() {
             return Err(errors);
