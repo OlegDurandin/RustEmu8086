@@ -50,6 +50,8 @@ struct Macro {
 pub struct Preprocessor<'a> {
     loader: &'a mut dyn FileLoader,
     pub files: Vec<String>,
+    /// Text of each file (to locate errors in their lines).
+    pub sources: Vec<String>,
     macros: HashMap<String, Macro>,
     consts: HashMap<String, i64>,
     /// Text equates (`name EQU a, b, c`), substituted in the lines that follow.
@@ -234,6 +236,7 @@ impl<'a> Preprocessor<'a> {
         Preprocessor {
             loader,
             files: Vec::new(),
+            sources: Vec::new(),
             macros: HashMap::new(),
             consts: HashMap::new(),
             text_equs: HashMap::new(),
@@ -246,12 +249,13 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn error(&mut self, l: &Line, msg: impl Into<String>) {
-        self.errors.push(AsmError { file: l.file, line: l.line, col: None, msg: msg.into() });
+        self.errors.push(AsmError { file: l.file, line: l.line, col: None, len: 0, msg: msg.into() });
     }
 
     pub fn add_file(&mut self, name: &str, text: &str) {
         let idx = self.files.len();
         self.files.push(name.to_string());
+        self.sources.push(text.to_string());
         let lines = self.file_lines(idx, text, 0);
         self.process(lines, 0);
     }
@@ -279,7 +283,7 @@ impl<'a> Preprocessor<'a> {
         for (i, raw) in text.lines().enumerate() {
             let n = i as u32 + 1;
             let code = strip_comment(raw).trim();
-            let err = |s: &mut Self, msg: String| s.errors.push(AsmError { file, line: n, col: None, msg });
+            let err = |s: &mut Self, msg: String| s.errors.push(AsmError { file, line: n, col: None, len: 0, msg });
             if let Some(directive) = code.strip_prefix('%').filter(|d| d.starts_with(|c: char| c.is_ascii_alphabetic()))
             {
                 let word: String = directive.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
@@ -528,6 +532,7 @@ impl<'a> Preprocessor<'a> {
                         Some((resolved, text)) => {
                             let idx = self.files.len();
                             self.files.push(resolved);
+                            self.sources.push(text.clone());
                             let inc = self.file_lines(idx, &text, depth);
                             self.process(inc, depth);
                         }

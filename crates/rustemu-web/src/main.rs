@@ -98,6 +98,34 @@ mod web {
         on_key.forget();
     }
 
+    /// The program of a share link in the address (`#name=…&code=…`, see `rustemu_ui::share`). It
+    /// is taken out of the address, so reloading the page keeps what was done with it since.
+    fn take_link(window: &web_sys::Window) -> Option<rustemu_ui::share::Shared> {
+        let location = window.location();
+        let shared = rustemu_ui::share::parse(&location.hash().ok()?)?;
+        let rest = format!("{}{}", location.pathname().unwrap_or_default(), location.search().unwrap_or_default());
+        if let Ok(history) = window.history() {
+            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&rest));
+        }
+        Some(shared)
+    }
+
+    /// A share link opened in a tab that already shows the app only changes `#…`.
+    fn open_links(window: &web_sys::Window, runner: &eframe::WebRunner) {
+        use wasm_bindgen::JsCast;
+        let runner = runner.clone();
+        let w = window.clone();
+        let on_hash = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
+            if let Some(shared) = take_link(&w)
+                && let Some(mut app) = runner.app_mut::<WebApp>()
+            {
+                app.app_mut().open_link(shared);
+            }
+        });
+        let _ = window.add_event_listener_with_callback("hashchange", on_hash.as_ref().unchecked_ref());
+        on_hash.forget();
+    }
+
     /// The tablet layout for iPads, touch screens and narrow windows.
     fn auto_tablet(window: &web_sys::Window) -> bool {
         let media = |q: &str| window.match_media(q).ok().flatten().is_some_and(|m| m.matches());
@@ -131,18 +159,27 @@ mod web {
         // ?example=hello.asm opens a built-in example, &run also runs it.
         let example = param("example").and_then(|n| rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == n));
         let run = param("run").is_some();
+        let link = take_link(&window);
+        let location = window.location();
+        let share_base =
+            format!("{}{}", location.origin().unwrap_or_default(), location.pathname().unwrap_or_default());
         let options = eframe::WebOptions { wgpu_options: rustemu_ui::wgpu_options(), ..Default::default() };
         let storage_ok = storage_works();
         wasm_bindgen_futures::spawn_local(async move {
             let runner = eframe::WebRunner::new();
             save_on_leave(&window, &runner, storage_ok);
+            open_links(&window, &runner);
             let started = runner
                 .start(
                     canvas,
                     options,
                     Box::new(move |cc| {
                         let mut app = App::new(cc);
-                        if let Some(i) = example {
+                        app.share_base = Some(share_base);
+                        if let Some(shared) = link {
+                            // A share link (asks first about unsaved changes of the last visit).
+                            app.open_link(shared);
+                        } else if let Some(i) = example {
                             if app.dirty() {
                                 // Unsaved changes of the last visit: ask before replacing them.
                                 app.guarded(PendingAction::Example(i));

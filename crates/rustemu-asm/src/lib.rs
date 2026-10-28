@@ -7,6 +7,7 @@
 
 mod asm;
 pub mod encode;
+mod errpos;
 pub mod expr;
 pub mod lexer;
 pub mod library;
@@ -144,13 +145,19 @@ pub struct AsmError {
     pub file: usize,
     /// 1-based line number (0 = not tied to a line).
     pub line: u32,
+    /// The part of the line the error is about: 0-based column and length, in characters.
     pub col: Option<usize>,
+    pub len: usize,
     pub msg: String,
 }
 
 impl std::fmt::Display for AsmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.line > 0 { write!(f, "({}) {}", self.line, self.msg) } else { write!(f, "{}", self.msg) }
+        match (self.line, self.col) {
+            (0, _) => write!(f, "{}", self.msg),
+            (line, Some(col)) => write!(f, "({line}:{}) {}", col + 1, self.msg),
+            (line, None) => write!(f, "({line}) {}", self.msg),
+        }
     }
 }
 
