@@ -14,12 +14,45 @@ use crate::widgets::{GAP, HEAD_H, split_x, split_y};
 /// Height of the registers card.
 const REGS_H: f32 = HEAD_H + 7.0 * 34.0 + 22.0;
 
-/// Width of the registers + flags cards.
 /// Width of the left column (editor, disassembly) beside the registers; None when the window is
 /// too narrow for two columns (iPadOS windows, Split View) and the cards are stacked.
 fn left_width(w: f32) -> Option<f32> {
     let right = (w * 0.42).clamp(400.0, 560.0);
     (w - right - GAP >= 380.0).then_some(w - right - GAP)
+}
+
+/// Shares of three full-height columns in a landscape window: the middle and right columns take a
+/// fraction of the width within limits, the left one the rest (at least `left_min`).
+struct Columns {
+    mid: (f32, f32, f32),
+    right: (f32, f32, f32),
+    left_min: f32,
+}
+
+/// Editor | registers + disassembly | output + memory. The limits let three columns fit an 11-inch
+/// iPad in landscape (1144 points for the tabs).
+const EDITOR_COLUMNS: Columns = Columns { mid: (0.33, 372.0, 470.0), right: (0.29, 365.0, 460.0), left_min: 370.0 };
+/// Disassembly | registers, watch, breakpoints | call stack + trace.
+const DEBUGGER_COLUMNS: Columns = Columns { mid: (0.28, 370.0, 420.0), right: (0.34, 370.0, 520.0), left_min: 350.0 };
+
+/// Widths of three full-height columns in a landscape window (left, middle, right): height is
+/// short there and width plentiful, so nothing goes into a bottom row. None in portrait and in
+/// windows too narrow for three columns.
+fn three_columns(w: f32, h: f32, c: &Columns) -> Option<(f32, f32, f32)> {
+    if w < h * 1.15 {
+        return None;
+    }
+    let share = |(f, min, max): (f32, f32, f32)| (w * f).clamp(min, max);
+    let (mid, right) = (share(c.mid), share(c.right));
+    let left = w - mid - right - 2.0 * GAP;
+    (left >= c.left_min).then_some((left, mid, right))
+}
+
+/// Splits `r` into three columns of the given widths.
+fn columns(r: Rect, (left, mid, _): (f32, f32, f32)) -> (Rect, Rect, Rect) {
+    let (a, rest) = split_x(r, left);
+    let (b, c) = split_x(rest, mid);
+    (a, b, c)
 }
 
 fn regs_and_flags(app: &mut App, ui: &mut Ui, rect: Rect) {
@@ -40,6 +73,25 @@ fn bottom_row(t: &TabletState, rect: Rect, h: f32) -> (Rect, Option<Rect>) {
 }
 
 pub(crate) fn editor_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
+    if let Some(cols) = three_columns(rect.width(), rect.height(), &EDITOR_COLUMNS) {
+        // Landscape: editor | registers, disassembly | output, memory.
+        let (editor, mid, right) = columns(rect, cols);
+        editor_card(app, ui, editor);
+        let (regs, code) = split_y(mid, REGS_H.min(mid.height() * 0.6));
+        regs_and_flags(app, ui, regs);
+        disasm_card(app, ui, code, false);
+        if t.keypad.open {
+            // The keyboard sheet shows the screen.
+            memory_card(app, &mut t.mem, ui, right);
+        } else {
+            // Room for an 80x25 screen (16:10) above its hint line.
+            let out_h = (right.width() * 0.625 + HEAD_H + 50.0).min(right.height() * 0.6);
+            let (out, mem) = split_y(right, out_h);
+            output_card(app, t, ui, out);
+            memory_card(app, &mut t.mem, ui, mem);
+        }
+        return;
+    }
     let (top, bottom) = bottom_row(t, rect, (rect.height() * 0.3).clamp(200.0, 300.0));
     let Some(left_w) = left_width(top.width()) else {
         // Narrow window: editor, registers and output (the disassembly is on the Debugger tab).
@@ -64,6 +116,20 @@ pub(crate) fn editor_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: 
 }
 
 pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
+    if let Some(cols) = three_columns(rect.width(), rect.height(), &DEBUGGER_COLUMNS) {
+        // Landscape: disassembly | registers, watch, breakpoints | call stack, trace.
+        let (code, mid, right) = columns(rect, cols);
+        disasm_card(app, ui, code, true);
+        let (regs, rest) = split_y(mid, REGS_H.min(mid.height() * 0.5));
+        regs_and_flags(app, ui, regs);
+        let (watch, bps) = split_y(rest, (rest.height() - GAP) * 0.5);
+        watch_card(app, ui, watch);
+        breakpoints_card(app, t, ui, bps);
+        let (calls, trace) = split_y(right, (right.height() * 0.35).max(HEAD_H + 60.0));
+        call_stack_card(app, ui, calls);
+        trace_card(app, ui, trace);
+        return;
+    }
     let (top, bottom) = bottom_row(t, rect, (rect.height() * 0.32).clamp(220.0, 320.0));
     match left_width(top.width()) {
         Some(w) => {

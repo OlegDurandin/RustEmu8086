@@ -200,7 +200,8 @@ cargo test -p rustemu-desktop -p rustemu-tablet  # UI-тесты + PNG-сним�
       адаптера в `rustemu_ui::native_options`). Android — только `cargo check`. Модули: `lib.rs` (`TabletApp`,
       `TabletState`, `tablet_ui`), `theme.rs` (тёмная тема через `App::fixed_theme`), `widgets.rs` (иконки,
       кнопки, карточки), `bars.rs` (верхняя панель Run/Pause/Step/Reset, вкладки, меню ⋮, статус), `tabs.rs`
-      (раскладка Editor / Debugger / Memory; узкое окно — стопкой, `left_width`), `cards.rs`, `memory.rs`
+      (раскладка Editor / Debugger / Memory: альбомная — три колонки на всю высоту, `three_columns`; портретная —
+      две колонки и нижний ряд; узкое окно — стопкой, `left_width`), `cards.rs`, `memory.rs`
       (`MemoryView`: hex-редактор, инспектор, сегменты, стек, карта), `keypad.rs` (экранная клавиатура: US +
       Esc/Tab/Ctrl/стрелки/F1–F10/Ins…PgDn, Shift/Ctrl на одну клавишу, открывается при `is_waiting_input`;
       рядом экран `screen::Fit::Cursor`), `tests.rs` (снимки `30_tablet_*`, `31_tablet_keyboard*`). Трасса —

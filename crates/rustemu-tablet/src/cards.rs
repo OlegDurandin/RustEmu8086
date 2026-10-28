@@ -149,12 +149,18 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
     let width = b.available_width();
     let x_addr = 28.0;
     let x_bytes = x_addr + char_w * 6.0 + 14.0;
-    let x_mnem = x_bytes + char_w * 12.0 + 14.0;
+    // A narrow card (three columns on an 11-inch iPad) leaves the bytes out for the operands.
+    let show_bytes = width >= x_bytes + char_w * (12.0 + 6.0 + 20.0) + 20.0;
+    let x_mnem = if show_bytes { x_bytes + char_w * 12.0 + 14.0 } else { x_bytes };
     let x_ops = x_mnem + char_w * 6.0 + 6.0;
     if full {
         let (r, _) = b.allocate_exact_size(vec2(width, ROW_H), Sense::hover());
         let p = b.painter();
-        for (x, t) in [(x_addr, "Addr"), (x_bytes, "Bytes"), (x_mnem, "Instruction")] {
+        let mut titles = vec![(x_addr, "Addr"), (x_mnem, "Instruction")];
+        if show_bytes {
+            titles.push((x_bytes, "Bytes"));
+        }
+        for (x, t) in titles {
             p.text(pos2(r.left() + x, r.center().y), Align2::LEFT_CENTER, t, FontId::monospace(14.0), pal::WEAK);
         }
     }
@@ -206,8 +212,10 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
         }
         let addr_color = if current { pal::AMBER } else { pal::WEAK };
         p.text(pos2(r.left() + x_addr, y), Align2::LEFT_CENTER, format!("{ip:04X}:"), font.clone(), addr_color);
-        let hex: String = bytes[..ins.len.min(6)].iter().map(|b| format!("{b:02X} ")).collect();
-        p.text(pos2(r.left() + x_bytes, y), Align2::LEFT_CENTER, hex.trim_end(), font.clone(), pal::TEXT);
+        if show_bytes {
+            let hex: String = bytes[..ins.len.min(6)].iter().map(|b| format!("{b:02X} ")).collect();
+            p.text(pos2(r.left() + x_bytes, y), Align2::LEFT_CENTER, hex.trim_end(), font.clone(), pal::TEXT);
+        }
         let (mnem, ops) = ins.text.split_once(' ').unwrap_or((&ins.text, ""));
         p.text(pos2(r.left() + x_mnem, y), Align2::LEFT_CENTER, mnem, font.clone(), pal::LINK);
         let ops = match rustemu_ui::debug::jump_target(&ins.text).and_then(|off| app.session.symbol_at(linear(cs, off)))
@@ -510,8 +518,17 @@ pub(crate) fn trace_card(app: &mut App, ui: &mut Ui, rect: Rect) {
     head.label(RichText::new(format!("{} steps back", m.history_len())).color(pal::WEAK));
     let font = FontId::monospace(14.0);
     let cw = b.fonts_mut(|f| f.glyph_width(&font, '0'));
-    let (x_cs, x_bytes, x_ins) = (cw * 8.0, cw * 19.0, cw * 31.0);
-    table_header(&mut b, &[(0.0, "#"), (x_cs, "CS:IP"), (x_bytes, "Bytes"), (x_ins, "Instruction")]);
+    // Columns: step number, CS:IP, bytes (left out when the card is narrow), instruction.
+    let digits = m.cpu.instr_count.max(1).ilog10() as f32 + 1.0;
+    let x_cs = cw * (digits.max(2.0) + 2.0);
+    let x_bytes = x_cs + cw * 11.0;
+    let show_bytes = b.available_width() >= x_bytes + cw * (12.0 + 6.0 + 18.0);
+    let x_ins = if show_bytes { x_bytes + cw * 12.0 } else { x_bytes };
+    let mut cols = vec![(0.0, "#"), (x_cs, "CS:IP"), (x_ins, "Instruction")];
+    if show_bytes {
+        cols.push((x_bytes, "Bytes"));
+    }
+    table_header(&mut b, &cols);
     if !app.loaded() {
         return;
     }
@@ -531,7 +548,6 @@ pub(crate) fn trace_card(app: &mut App, ui: &mut Ui, rect: Rect) {
         let color = if now { pal::AMBER } else { pal::TEXT };
         let bytes = m.sys.mem.slice(c.pc(), 8);
         let ins = disassemble(bytes, c.ip);
-        let hex: String = bytes[..ins.len.min(4)].iter().map(|b| format!("{b:02X} ")).collect();
         let (mnem, ops) = ins.text.split_once(' ').unwrap_or((&ins.text, ""));
         p.text(pos2(r.left(), y), Align2::LEFT_CENTER, c.instr_count.to_string(), font.clone(), color);
         p.text(
@@ -541,7 +557,10 @@ pub(crate) fn trace_card(app: &mut App, ui: &mut Ui, rect: Rect) {
             font.clone(),
             color,
         );
-        p.text(pos2(r.left() + x_bytes, y), Align2::LEFT_CENTER, hex.trim_end(), font.clone(), pal::TEXT);
+        if show_bytes {
+            let hex: String = bytes[..ins.len.min(4)].iter().map(|b| format!("{b:02X} ")).collect();
+            p.text(pos2(r.left() + x_bytes, y), Align2::LEFT_CENTER, hex.trim_end(), font.clone(), pal::TEXT);
+        }
         p.text(pos2(r.left() + x_ins, y), Align2::LEFT_CENTER, mnem, font.clone(), pal::LINK);
         p.text(pos2(r.left() + x_ins + cw * 6.0, y), Align2::LEFT_CENTER, ops, font.clone(), pal::TEXT);
     }
