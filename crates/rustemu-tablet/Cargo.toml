@@ -4,14 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# The tablet application (iPadOS, Android): a top bar with the run controls, Editor / Debugger /
-# Memory tabs of fixed cards, an on-screen PC keyboard, in a dark theme sized for touch; drawn
-# around the shared GUI of rustemu-ui. On the Mac, `cargo run -p rustemu-tablet` shows it in a
-# window (for development).
-#   iPadOS  - the `rustemu-tablet` executable (src/main.rs), packaged by scripts/run_ios_sim.sh
-#             (simulator) or Xcode;
-#   Android - `android_main` in src/lib.rs, built as a cdylib:
-#             cargo ndk -t arm64-v8a rustc -p rustemu-tablet --lib --release --crate-type cdylib
+# The tablet layout: a top bar with the run controls, Editor / Debugger / Memory tabs of fixed
+# cards, an on-screen PC keyboard, in a dark theme sized for touch; drawn around the shared GUI of
+# rustemu-ui. The web version (rustemu-web) uses it on iPads and touch screens;
+# `cargo run -p rustemu-tablet` shows it in a desktop window (for development).
 [lib]
 name = "rustemu_tablet"
 path = "src/lib.rs"
@@ -20,27 +16,12 @@ path = "src/lib.rs"
 name = "rustemu-tablet"
 path = "src/main.rs"
 
-# ---- all platforms --------------------------------------------------------------------------------
 [dependencies]
 rustemu-core.workspace = true
 rustemu-session.workspace = true
 rustemu-ui.workspace = true
 eframe = { workspace = true }
 egui = { workspace = true }
-
-# ---- iPadOS --------------------------------------------------------------------------------------------
-# objc2 attaches winit's window to the UIScene and catches the Return key (src/ios.rs). To do:
-# UIDocumentPickerViewController for files, UIPasteboard for the clipboard.
-[target.'cfg(target_os = "ios")'.dependencies]
-objc2 = "0.6"
-raw-window-handle = "0.6"
-
-# ---- Android (future) -------------------------------------------------------------------------------
-# NativeActivity: `android_main` receives the AndroidApp handle. To do in rustemu-ui's platform.rs:
-# Storage Access Framework for files and ClipboardManager through JNI (`jni` crate).
-[target.'cfg(target_os = "android")'.dependencies]
-eframe = { workspace = true, features = ["android-native-activity"] }
-winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
 
 [dev-dependencies]
 egui_kittest = { workspace = true }

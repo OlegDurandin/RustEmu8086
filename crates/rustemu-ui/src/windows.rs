@@ -439,10 +439,6 @@ pub fn bullet(ui: &mut Ui, text: &str) {
 fn platform_name() -> &'static str {
     if cfg!(target_arch = "wasm32") {
         "web version"
-    } else if cfg!(target_os = "ios") {
-        "iPadOS"
-    } else if cfg!(target_os = "android") {
-        "Android"
     } else if cfg!(target_os = "macos") {
         "macOS"
     } else if cfg!(target_os = "windows") {
