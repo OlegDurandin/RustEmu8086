@@ -39,7 +39,8 @@ INT 21h (DOS)
   AH=07/08 read char (no echo)    AH=09 print DS:DX '$'  AH=0A buffered input DS:DX
   AH=0B input status              AH=0C flush + call AL  AH=25/35 set/get vector AL
   AH=2A date  AH=2C time          AH=30 version          AH=4C exit (AL = code)
-  files (virtual drive C: = folder of the source file):
+  files (drive C: = the folder of the source file; in the web version a drive in the browser,
+  see Emulator -> Virtual drive -> drive C: files):
   AH=3C create 3D open 3E close 3F read 40 write 41 delete 42 seek 43 attributes
   AH=39 mkdir 3A rmdir 3B chdir 47 getcwd 4E/4F find first/next 56 rename
 
@@ -58,6 +59,13 @@ VIRTUAL DEVICES (ports)
   7    stepper motor (half-step coil pattern; IN bit 7 = ready)
   125  thermometer (IN, degrees)     127  heater (OUT 1 = on)
   130  printer (OUT a character)     199  LED display (OUT word)
+
+NASM SYNTAX (see the "NASM syntax" tab)
+  chosen by bits 16, section, times, resb, %define, %macro, byte [..]  or #nasm# / .nasm / options
+  a name is its address, memory is in brackets:  mov ax, msg   mov ax, [count]   inc word [count]
+  org 100h -> COM   org 7C00h -> boot sector   other -> BIN    section .text / .data / .bss
+  times n db 0   resb/resw/resd   $ $$   .local labels   0x1F 1Fh 0b101   `escapes\n`
+  %define %assign %macro..%endmacro (%1, %%label) %rep %if/%ifdef %include
 
 FLAGS   CF carry  ZF zero  SF sign  OF overflow  PF parity  AF aux  IF int  DF dir  TF trap
 JUMPS   unsigned: JA JAE JB JBE   signed: JG JGE JL JLE   JE/JZ JNE/JNZ JC JNC JS JO JP JCXZ

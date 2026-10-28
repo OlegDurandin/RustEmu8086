@@ -236,6 +236,27 @@ fn reference_window_and_editor_lookup() {
     h.state_mut().reference.show(Topic::Instr(mov));
     h.run_steps(5);
     save(&mut h, "14_reference_instruction");
+    // The NASM tab opens at the overview; its sections and the NASM directives are listed.
+    h.state_mut().reference.show_tab(rustemu_ui::reference_ui::Tab::Nasm);
+    h.run_steps(5);
+    assert!(h.query_by_label("Hello from NASM!").is_none(), "the example is shown highlighted, not as a label");
+    h.get_by_label("Names, memory and sizes").click();
+    h.run_steps(5);
+    assert!(matches!(h.state().reference.topic, Some(Topic::Nasm(_))));
+    assert!(h.query_by_label("loads the address of value").is_some());
+    assert!(h.query_by_label("%MACRO").is_some(), "NASM directives are listed");
+    save(&mut h, "15_reference_nasm");
+}
+
+#[test]
+fn about_window() {
+    let mut app = app_with_example(0);
+    app.windows.about = true;
+    let mut h = harness(app);
+    h.run_steps(4);
+    assert!(h.query_by_label("source code (GitHub)").is_some());
+    assert!(h.query_by_label_contains("NASM").is_some());
+    save(&mut h, "16_about");
 }
 
 /// Runs the emulation loop until execution pauses.

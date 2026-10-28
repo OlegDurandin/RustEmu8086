@@ -1,9 +1,10 @@
-//! Reference window (Help menu, F1): instructions, interrupts, directives and the quick reference.
+//! Reference window (Help menu, F1): instructions, interrupts, directives, the NASM syntax guide
+//! and the quick reference.
 
 use egui::{Align, FontId, RichText, Ui};
 
 use crate::highlight::{Palette, highlight};
-use crate::reference::{self as r, DIRECTIVES, Group, INSTRUCTIONS, INTERRUPTS, Topic};
+use crate::reference::{self as r, DIRECTIVES, Group, INSTRUCTIONS, INTERRUPTS, NASM_GUIDE, Topic};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum Tab {
@@ -11,6 +12,7 @@ pub enum Tab {
     Instructions,
     Interrupts,
     Directives,
+    Nasm,
     Quick,
 }
 
@@ -32,6 +34,7 @@ impl RefState {
             Topic::Instr(_) => Tab::Instructions,
             Topic::Directive(_) => Tab::Directives,
             Topic::Int(..) => Tab::Interrupts,
+            Topic::Nasm(_) => Tab::Nasm,
         };
         self.topic = Some(t);
         self.search.clear();
@@ -63,6 +66,7 @@ fn reference_ui(st: &mut RefState, ui: &mut Ui) {
             (Tab::Instructions, "instructions"),
             (Tab::Interrupts, "interrupts"),
             (Tab::Directives, "directives"),
+            (Tab::Nasm, "NASM syntax"),
             (Tab::Quick, "quick reference"),
         ] {
             ui.selectable_value(&mut st.tab, t, n);
@@ -90,6 +94,7 @@ fn reference_ui(st: &mut RefState, ui: &mut Ui) {
                 .show(ui, |ui| match st.tab {
                     Tab::Instructions => instruction_list(st, ui, scroll),
                     Tab::Interrupts => interrupt_list(st, ui, scroll),
+                    Tab::Nasm => nasm_list(st, ui, scroll),
                     _ => directive_list(st, ui, scroll),
                 });
         });
@@ -99,8 +104,9 @@ fn reference_ui(st: &mut RefState, ui: &mut Ui) {
                 matches!(
                     (t, st.tab),
                     (Topic::Instr(_), Tab::Instructions)
-                        | (Topic::Directive(_), Tab::Directives)
+                        | (Topic::Directive(_), Tab::Directives | Tab::Nasm)
                         | (Topic::Int(..), Tab::Interrupts)
+                        | (Topic::Nasm(_), Tab::Nasm)
                 )
             });
             let salt = match topic {
@@ -112,6 +118,9 @@ fn reference_ui(st: &mut RefState, ui: &mut Ui) {
                     Some(Topic::Instr(i)) => instruction_article(ui, i),
                     Some(Topic::Directive(i)) => directive_article(ui, i),
                     Some(Topic::Int(i, f)) => interrupt_article(ui, i, f, scroll),
+                    Some(Topic::Nasm(i)) => nasm_article(ui, i),
+                    // The guide opens at its overview.
+                    None if st.tab == Tab::Nasm => nasm_article(ui, 0),
                     None => intro(ui, st.tab),
                 }
             });
@@ -201,6 +210,65 @@ fn directive_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
         if matches(&st.search, &texts) {
             list_item(st, ui, Topic::Directive(i), RichText::new(d.name).monospace(), scroll);
         }
+    }
+}
+
+/// The sections of the NASM guide and the NASM directives.
+fn nasm_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
+    for (i, s) in NASM_GUIDE.iter().enumerate() {
+        if matches(&st.search, &[s.title, s.text, s.example]) {
+            list_item(st, ui, Topic::Nasm(i), RichText::new(s.title), scroll);
+        }
+    }
+    ui.add_space(6.0);
+    ui.label(RichText::new("NASM directives").strong());
+    for (i, d) in DIRECTIVES.iter().enumerate() {
+        let mut texts = vec![d.name, d.summary];
+        texts.extend(d.aliases);
+        if d.summary.starts_with("NASM:") && matches(&st.search, &texts) {
+            list_item(st, ui, Topic::Directive(i), RichText::new(d.name).monospace(), scroll);
+        }
+    }
+}
+
+fn nasm_article(ui: &mut Ui, i: usize) {
+    let s = &NASM_GUIDE[i];
+    ui.weak("NASM syntax");
+    ui.heading(s.title);
+    for paragraph in s.text.split("\n\n") {
+        ui.add_space(6.0);
+        for line in paragraph.lines() {
+            match line.strip_prefix("- ") {
+                Some(item) => crate::windows::bullet(ui, item),
+                None => {
+                    ui.label(line);
+                }
+            }
+        }
+    }
+    if let Some((head, rows)) = s.table.split_first() {
+        ui.add_space(8.0);
+        egui::Grid::new(("nasm_table", i)).striped(true).spacing([18.0, 4.0]).show(ui, |ui| {
+            for h in *head {
+                ui.label(RichText::new(*h).strong());
+            }
+            ui.end_row();
+            for row in rows {
+                for (c, cell) in row.iter().enumerate() {
+                    // The first column is code.
+                    if c == 0 {
+                        ui.monospace(*cell)
+                    } else {
+                        ui.label(*cell)
+                    };
+                }
+                ui.end_row();
+            }
+        });
+    }
+    if !s.example.is_empty() {
+        section(ui, "Example");
+        code_block(ui, s.example);
     }
 }
 

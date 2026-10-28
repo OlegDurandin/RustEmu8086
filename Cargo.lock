@@ -2563,11 +2563,11 @@ dependencies = [
 
 [[package]]
 name = "rustemu-asm"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rustemu-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rustemu-asm",
  "rustemu-core",
@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "rustemu-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "js-sys",
@@ -2586,7 +2586,7 @@ dependencies = [
 
 [[package]]
 name = "rustemu-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2599,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "rustemu-session"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rustemu-asm",
  "rustemu-core",
@@ -2607,7 +2607,7 @@ dependencies = [
 
 [[package]]
 name = "rustemu-tablet"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2622,7 +2622,7 @@ dependencies = [
 
 [[package]]
 name = "rustemu-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "eframe",
@@ -2643,7 +2643,7 @@ dependencies = [
 
 [[package]]
 name = "rustemu-web"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",

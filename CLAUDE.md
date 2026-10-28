@@ -153,7 +153,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 5.5 Устройства (вкладки, выбор по `#start=..#`): светофор, шаговый двигатель, LED, термометр, принтер,
       робот (карта редактируется кликом)
 - [x] 5.6 Примеры (15 шт.) и справочник (`reference.rs` — данные, `reference_ui.rs` — окно): все инструкции
-      (синтаксис, флаги ODITSZAPC, пример), директивы, прерывания BIOS/DOS по функциям; из редактора —
+      (синтаксис, флаги ODITSZAPC, пример), директивы, прерывания BIOS/DOS по функциям, обзор синтаксиса NASM
+      (`NASM_GUIDE`, вкладка *NASM syntax*, `Topic::Nasm`; примеры распознаются как NASM — тест); из редактора —
       подсказка при наведении, F1/⌘-клик открывает статью (для `INT nn` функция берётся из `mov ah, ..` выше).
       Тест: все примеры справочника собираются, все мнемоники ассемблера описаны
 - [x] 5.7 `scripts/bundle_macos.sh` → `target/release/bundle/RustEmu8086.app` + `RustEmu8086-<версия>-macos.zip`,
@@ -228,4 +229,4 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 6.4 `.startup`/`.exit` (MASM 6), корпус примеров Emu8086
 - [x] 6.5 Git: ветка `main`, CI — `.github/workflows/ci.yml` (macOS: fmt, clippy -D warnings, тесты с NASM; задание
       `bundle` на `main` — универсальный .app в артефактах). `release.yml`: тег `vX.Y.Z` (= версии в Cargo.toml) →
-      GitHub Release с zip. Без Developer ID и нотаризации (в README — как открыть при первом запуске)
+      GitHub Release с zip, описание — `release-notes/vX.Y.Z.md` (если есть). Без Developer ID и нотаризации (в README — как открыть при первом запуске)

@@ -1,4 +1,5 @@
-//! Built-in reference: 8086/80186 instructions, assembler directives, BIOS and DOS interrupts.
+//! Built-in reference: 8086/80186 instructions, assembler directives, BIOS and DOS interrupts and
+//! a guide to the NASM syntax.
 
 /// One instruction (or a family sharing one entry, e.g. JE/JZ).
 pub struct Instr {
@@ -1220,6 +1221,81 @@ pub const DIRECTIVES: &[Directive] = &[
     ),
 ];
 
+/// A section of the NASM syntax guide (the reference's "NASM syntax" tab).
+pub struct NasmSection {
+    pub title: &'static str,
+    /// Paragraphs separated by blank lines; a line starting with "- " is a list item.
+    pub text: &'static str,
+    /// A table: the first row is the header (may be empty).
+    pub table: &'static [&'static [&'static str]],
+    pub example: &'static str,
+}
+
+pub const NASM_GUIDE: &[NasmSection] = &[
+    NasmSection {
+        title: "Overview",
+        text: "Besides the Emu8086 (MASM) syntax, RustEmu8086 assembles NASM programs the way `nasm -f bin` does: COM programs, boot sectors and flat binaries. The output is checked byte for byte against the real NASM.\n\nThe emulator, the debugger and the virtual devices work the same for both syntaxes. The message after assembling tells which syntax was used.",
+        table: &[],
+        example: "bits 16\norg 100h\n\nsection .text\n    mov dx, msg          ; msg is an address\n    mov ah, 9\n    int 21h\n    mov ax, 4C00h\n    int 21h\n\nsection .data\nmsg db 'Hello from NASM!', 13, 10, '$'",
+    },
+    NasmSection {
+        title: "Choosing the syntax",
+        text: "By default the syntax is detected. NASM is chosen when the source has any of:\n- bits 16 / [bits 16], [org ...], section .text, cpu, global\n- preprocessor directives %define, %macro, %include, %assign, %rep, %if\n- times, resb / resw / resd, $$\n- a size without PTR: byte [..], word [..]\n\nA .nasm file extension or a line #nasm# also selects NASM. Otherwise the source is Emu8086 (MASM).\n\nThe syntax can be set explicitly: options window -> assembler syntax (auto / Emu8086 / NASM); on the command line: rustemu asm file --syntax nasm. File -> New offers NASM templates (\"use NASM syntax\").",
+        table: &[],
+        example: "#nasm#\norg 100h\n    mov ax, [value]\n    ret\nvalue dw 1234h",
+    },
+    NasmSection {
+        title: "Names, memory and sizes",
+        text: "The main difference from Emu8086: in NASM a name is its address, and memory is read only through square brackets. A size is written before the operand, without PTR.",
+        table: &[
+            &["Code", "Emu8086 (MASM)", "NASM"],
+            &["mov ax, value", "reads the variable", "loads the address of value"],
+            &["mov ax, [value]", "reads the variable", "reads the variable"],
+            &["mov byte [bx], 5", "error (needs byte ptr)", "the way to write it"],
+            &["mov [bx], 5", "a byte if the number fits", "error: no size"],
+            &["mov ax, 'ab'", "AH = 'a', AL = 'b'", "AL = 'a', AH = 'b'"],
+            &["mov ax, offset msg", "address of msg", "error: write mov ax, msg"],
+        ],
+        example: "bits 16\norg 100h\n    mov ax, count        ; AX = address of count\n    mov bx, [count]      ; BX = 5, the value\n    mov byte [buf], 'A'  ; the size comes first, no PTR\n    mov word [buf+1], 0\n    inc word [count]\n    mov al, [es:di]      ; segment override inside the brackets\n    ret\ncount dw 5\nbuf   times 4 db 0",
+    },
+    NasmSection {
+        title: "Program formats and sections",
+        text: "The format follows ORG:\n- org 100h - a COM program\n- org 7C00h - a boot sector (512 bytes)\n- anything else - a flat binary (BIN)\n\nSections work as in nasm -f bin: .text comes first, .data follows the code aligned to 4 bytes, and .bss takes the addresses after .data but is not stored in the file. Code without a section is in .text.\n\nEXE programs need an object format and a linker in NASM; RustEmu8086 does not do that - use the Emu8086 syntax for EXE.",
+        table: &[],
+        example: "bits 16\norg 7C00h\nstart:\n    xor ax, ax\n    mov ds, ax\n    mov si, msg\n.next:\n    lodsb\n    or al, al\n    jz .done\n    mov ah, 0Eh\n    int 10h\n    jmp .next\n.done:\n    hlt\n    jmp .done\nmsg db 'Booted!', 0\ntimes 510 - ($ - $$) db 0\ndw 0AA55h",
+    },
+    NasmSection {
+        title: "Labels, numbers and strings",
+        text: "- Labels may have a colon or not (msg db ...).\n- Local labels start with a dot: .loop belongs to the label before it and is named PREVIOUS.LOOP inside the program (that name is shown in the debugger too).\n- Numbers: 0x1F, 1Fh, $1F, 0b1010, 1010b, 0o17, 17q, 0d99.\n- Strings: '...', \"...\" and `...`; backquoted strings understand \\n, \\t, \\r, \\0, \\xHH.\n- $ is the current address, $$ the start of the section.\n- Operators: | ^ & << >> + - * / % ~ !, comparisons == != < > <= >= && ||.",
+        table: &[],
+        example: "bits 16\norg 100h\nstart:\n    mov cx, 0x10\n    mov al, 1010b\n    mov bl, 0o17\n    mov ax, 'ab'         ; AL = 'a', AH = 'b'\n.again:\n    loop .again          ; the label is start.again\n    ret\ntext db `Tab\\there\\n`, 0",
+    },
+    NasmSection {
+        title: "Data and reservations",
+        text: "- db / dw / dd / dq / dt define data; strings in dw / dd are padded with zeros to whole elements.\n- times n ... repeats an instruction or data.\n- resb / resw / resd / resq / rest reserve uninitialized space (usually in section .bss).\n- align n / alignb n pad to a multiple of n.\n- equ defines a constant.",
+        table: &[],
+        example: "bits 16\norg 100h\nsection .text\n    mov si, table\n    mov cx, SIZE\n    ret\nsection .data\ntable   dw 1, 2, 3, 4\nSIZE    equ ($ - table) / 2\n        align 4\nbig     dd 12345678h\nsection .bss\nbuffer  resb 64\ncounts  resw 8",
+    },
+    NasmSection {
+        title: "Preprocessor",
+        text: "- %define / %undef - text macros; %assign - numeric variables.\n- %macro name n ... %endmacro - macros with parameters %1 ... %9 and local labels %%label.\n- %rep n ... %endrep - repeat a block.\n- %if / %elif / %else / %endif, %ifdef / %ifndef - conditional assembly.\n- %include \"file\" - insert a file (read as NASM); %error stops with a message.",
+        table: &[],
+        example: "bits 16\norg 100h\n%define NEWLINE 13, 10\n%assign COUNT 3\n%macro print 1\n    mov dx, %1\n    mov ah, 9\n    int 21h\n%endmacro\n%macro wait_key 0\n%%again:\n    mov ah, 1\n    int 16h\n    jz %%again\n%endmacro\n    print hello\n%rep COUNT\n    nop\n%endrep\n    ret\nhello db 'Hi', NEWLINE, '$'",
+    },
+    NasmSection {
+        title: "Debugging NASM programs",
+        text: "The debugger follows the NASM meaning of names. In watch expressions, breakpoint conditions and the hover in the editor, count is the address and [count] the value (its size comes from dw / db). The vars window shows variables as usual.\n\nLocal labels appear with their full names (main.loop) in the disassembly and the symbol table.",
+        table: &[],
+        example: "bits 16\norg 100h\nmain:\n    mov cx, [count]      ; watch [count]: 3, 2, 1...\n.loop:\n    dec word [count]\n    loop .loop\n    ret\ncount dw 3",
+    },
+    NasmSection {
+        title: "Not supported",
+        text: "- Output formats other than -f bin (no EXE, no object files).\n- %define with parameters, a greedy last macro parameter (%macro m 1+), %0, %rotate.\n- incbin, struc, section names other than .text / .data / .bss, context macros (%push, %$label).\n- Far conditional jumps: without cpu 8086 NASM emits the 80386 form (0F 8x), which the 8086 does not have; RustEmu8086, like Emu8086, uses a short jump with the opposite condition over a near JMP, so these bytes differ from NASM.",
+        table: &[],
+        example: "",
+    },
+];
+
 /// A BIOS / DOS interrupt.
 pub struct Interrupt {
     pub number: u8,
@@ -1714,6 +1790,8 @@ pub fn flags_summary(flags: &str) -> String {
 pub enum Topic {
     Instr(usize),
     Directive(usize),
+    /// A section of [`NASM_GUIDE`].
+    Nasm(usize),
     /// Interrupt index and the function code, if known.
     Int(usize, Option<u16>),
 }
@@ -1727,6 +1805,7 @@ impl Topic {
                 (format!("{}  {}", e.name, e.summary), flags_summary(e.flags))
             }
             Topic::Directive(i) => (DIRECTIVES[i].name.to_string(), DIRECTIVES[i].summary.to_string()),
+            Topic::Nasm(i) => ("NASM syntax".to_string(), NASM_GUIDE[i].title.to_string()),
             Topic::Int(i, f) => {
                 let int = &INTERRUPTS[i];
                 let head = format!("INT {:02X}h  {}", int.number, int.title);
@@ -1872,6 +1951,7 @@ mod tests {
             Some(Topic::Instr(i)) => INSTRUCTIONS[i].name.to_string(),
             Some(Topic::Directive(i)) => DIRECTIVES[i].name.to_string(),
             Some(Topic::Int(i, f)) => format!("INT {:X} {f:?}", INTERRUPTS[i].number),
+            Some(Topic::Nasm(i)) => NASM_GUIDE[i].title.to_string(),
             None => "-".into(),
         };
         assert_eq!(name(at("mov ah")), "MOV");
@@ -1937,6 +2017,15 @@ mod tests {
         }
     }
 
+    /// The examples of the NASM guide are recognized as NASM.
+    #[test]
+    fn nasm_guide_examples_are_nasm() {
+        for s in NASM_GUIDE.iter().filter(|s| !s.example.is_empty()) {
+            let d = rustemu_asm::detect_dialect("example.asm", s.example);
+            assert_eq!(d, rustemu_asm::Dialect::Nasm, "{}", s.title);
+        }
+    }
+
     /// Every example assembles once the names it only refers to are defined (as a label, a
     /// byte or a word variable — whichever fits).
     #[test]
@@ -1944,6 +2033,7 @@ mod tests {
         let mut all: Vec<(String, &str)> = Vec::new();
         all.extend(INSTRUCTIONS.iter().map(|i| (i.name.to_string(), i.example)));
         all.extend(DIRECTIVES.iter().map(|d| (d.name.to_string(), d.example)));
+        all.extend(NASM_GUIDE.iter().filter(|s| !s.example.is_empty()).map(|s| (s.title.to_string(), s.example)));
         for int in INTERRUPTS {
             all.extend(int.functions.iter().map(|f| (format!("INT {:X}h/{:X}h", int.number, f.code), f.example)));
         }
@@ -1968,8 +2058,9 @@ mod tests {
             if example.contains("%include") {
                 continue;
             }
-            // Directive examples with segments are complete programs.
-            let src = if example.contains("\nends") || example.contains(".model") {
+            // Examples with segments or their own ORG are complete programs.
+            let own_org = example.lines().any(|l| l.trim_start().to_ascii_lowercase().starts_with("org "));
+            let src = if example.contains("\nends") || example.contains(".model") || own_org {
                 format!("{example}\n")
             } else {
                 format!("org 100h\n{example}\n")
