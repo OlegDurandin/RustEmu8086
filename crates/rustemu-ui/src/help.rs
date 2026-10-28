@@ -3,6 +3,7 @@
 pub const HELP: &str = r#"KEYBOARD
   F9 / ⌘E    assemble and load into the emulator
   ⌘B         compile to an executable file (.com/.exe/.bin) + .lst + .symbol
+  ⌘S / ⌘O    save / open; the web version keeps programs in the browser ("my programs")
   F5 / ⌘R    run / stop          F8   single step      ⇧F8  step back
   F10        step over: run the current source line (macro, CALL, INT) to completion
   ⇧F11       step out: leave the current macro / procedure (back to the caller)

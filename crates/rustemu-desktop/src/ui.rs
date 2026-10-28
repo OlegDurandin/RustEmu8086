@@ -36,6 +36,19 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             }
             ui.menu_button("Examples", |ui| examples_menu(app, ui));
             ui.menu_button("Recent files", |ui| {
+                if app.browser {
+                    // The browser: the programs saved in it.
+                    let names = app.recent_programs();
+                    if names.is_empty() {
+                        ui.weak("(empty)");
+                    }
+                    for name in names.into_iter().take(10) {
+                        if ui.button(&name).clicked() {
+                            app.guarded(PendingAction::Program(name));
+                        }
+                    }
+                    return;
+                }
                 if app.settings.recent.is_empty() {
                     ui.weak("(empty)");
                 }
@@ -51,6 +64,11 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             }
             if ui.button("Save as…             ⇧⌘S").clicked() {
                 app.save_as();
+            }
+            if app.browser
+                && ui.button("Download").on_hover_text("Save the program as a file on the computer").clicked()
+            {
+                app.download_source();
             }
             if ui.button("Save compiled file   ⌘B").clicked() {
                 app.compile();

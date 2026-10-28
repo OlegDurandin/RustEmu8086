@@ -4,7 +4,7 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
-use rustemu_ui::app::{App, Settings};
+use rustemu_ui::app::{App, PendingAction, Settings};
 use rustemu_ui::testing::{app_with_example, save};
 
 fn harness(app: App) -> Harness<'static, App> {
@@ -15,6 +15,27 @@ fn harness(app: App) -> Harness<'static, App> {
     rustemu_ui::fonts::install(&h.ctx);
     h.state().apply_theme(&h.ctx);
     h
+}
+
+/// eframe storage in memory; counts the values written.
+#[derive(Default)]
+struct MemStorage {
+    values: std::collections::HashMap<String, String>,
+    writes: usize,
+}
+
+impl eframe::Storage for MemStorage {
+    fn get_string(&self, key: &str) -> Option<String> {
+        self.values.get(key).cloned()
+    }
+    fn set_string(&mut self, key: &str, value: String) {
+        self.writes += 1;
+        self.values.insert(key.to_string(), value);
+    }
+    fn remove_string(&mut self, key: &str) {
+        self.values.remove(key);
+    }
+    fn flush(&mut self) {}
 }
 
 #[test]
@@ -689,19 +710,6 @@ fn nasm_editor_snapshot() {
 fn memory_drive_window_and_storage() {
     // The browser's drive C:: a program writes a file next to an uploaded one, the "drive C:"
     // window lists both and previews one, and the drive survives a restart through storage.
-    struct Storage(std::collections::HashMap<String, String>);
-    impl eframe::Storage for Storage {
-        fn get_string(&self, key: &str) -> Option<String> {
-            self.0.get(key).cloned()
-        }
-        fn set_string(&mut self, key: &str, value: String) {
-            self.0.insert(key.to_string(), value);
-        }
-        fn remove_string(&mut self, key: &str) {
-            self.0.remove(key);
-        }
-        fn flush(&mut self) {}
-    }
     let mut app = app_with_example(0);
     app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     app.add_drive_file("data/in.txt", b"first line\r\nsecond line\r\n".to_vec());
@@ -728,7 +736,7 @@ text  db 'done'
     let drive = app.session.machine.dos_memory_drive().unwrap().clone();
     assert_eq!(drive.read("out.txt"), Some(&b"done"[..]), "{}", app.status);
 
-    let mut storage = Storage(Default::default());
+    let mut storage = MemStorage::default();
     app.persist(&mut storage);
     let mut restarted = app_with_example(0);
     restarted.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
@@ -745,4 +753,127 @@ text  db 'done'
     h.get_by_label("C:\\OUT.TXT").click();
     h.run_steps(2);
     assert_eq!(h.state().drive_preview.as_deref(), Some("OUT.TXT"));
+}
+
+/// Every CP437 character, grey and then in the colours of its own code.
+const CP437_SRC: &str = "org 100h
+    mov ax, 0B800h
+    mov es, ax
+    xor di, di
+    xor al, al
+    mov ah, 07h
+grey:
+    mov cx, 32
+grey_cells:
+    stosw
+    inc al
+    loop grey_cells
+    add di, 160 - 64
+    or al, al
+    jnz grey
+    add di, 160
+coloured:
+    mov cx, 32
+coloured_cells:
+    mov ah, al
+    stosw
+    inc al
+    loop coloured_cells
+    add di, 160 - 64
+    or al, al
+    jnz coloured
+    ret
+";
+
+#[test]
+fn screen_draws_every_cp437_glyph() {
+    let mut app = App::with_settings(Settings { last_file: None, ..Default::default() });
+    app.text = CP437_SRC.into();
+    app.windows = Default::default();
+    let mut h = harness(app);
+    let app = h.state_mut();
+    app.emulate();
+    app.windows.emulator = false;
+    app.windows.screen = true;
+    app.start_run();
+    run_until_paused(app);
+    let mem = &app.session.machine.sys.mem;
+    assert_eq!(rustemu_core::video::Video::read_cell(mem, 0, 2, 0), (2, 7), "☻ in row 0");
+    h.run_steps(3);
+    save(&mut h, "24_screen_cp437");
+}
+
+/// An app with files in browser storage (the web version).
+fn browser_app() -> App {
+    let mut app = app_with_example(0);
+    app.browser = true;
+    app
+}
+
+#[test]
+fn programs_are_kept_in_the_browser() {
+    // A new program: Save asks for its name, then it is in "my programs".
+    let mut app = browser_app();
+    app.new_from_template(0);
+    app.text.push_str("; mine\n");
+    assert!(!app.save());
+    app.save_name.as_mut().unwrap().text = "first".into();
+    let mut h = harness(app);
+    h.run_steps(2);
+    save(&mut h, "25_save_in_browser");
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    let app = h.state_mut();
+    assert_eq!(app.program.as_deref(), Some("first.asm"));
+    assert!(!app.dirty() && app.save_name.is_none());
+
+    // The open program and its unsaved changes come back on the next visit.
+    app.text.push_str("nop\n");
+    let mut storage = MemStorage::default();
+    app.persist(&mut storage);
+    let writes = storage.writes;
+    app.persist(&mut storage);
+    assert_eq!(storage.writes, writes, "unchanged values are not written again");
+    let mut next = browser_app();
+    next.restore_browser(&storage);
+    assert_eq!(next.program.as_deref(), Some("first.asm"));
+    assert_eq!(next.text, app.text);
+    assert!(next.dirty());
+
+    // Another program with unsaved changes: the unsaved changes dialog names it first, then opens.
+    next.import_program("other.asm", "org 100h\nret\n".into());
+    next.text.push_str("; edited\n");
+    next.program = None;
+    next.guarded(PendingAction::Program("first.asm".into()));
+    let mut h = harness(next);
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    h.state_mut().save_name.as_mut().unwrap().text = "copy".into();
+    h.run_steps(1);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    let app = h.state_mut();
+    assert!(app.programs["copy.asm"].text.ends_with("; edited\n"));
+    assert_eq!(app.program.as_deref(), Some("first.asm"), "then the chosen program opened");
+
+    // An upload named like a different program is kept under a new name; the same text is not
+    // duplicated.
+    app.import_program("first.asm", "org 100h\nret\n".into());
+    assert_eq!(app.program.as_deref(), Some("first (2).asm"));
+    app.import_program("first.asm", app.programs["first.asm"].text.clone());
+    assert_eq!(app.program.as_deref(), Some("first.asm"));
+    assert_eq!(app.recent_programs()[0], "first.asm");
+
+    // The "my programs" window.
+    app.windows = Default::default();
+    app.windows.programs = true;
+    h.run_steps(3);
+    assert!(h.query_by_label("copy.asm").is_some());
+    save(&mut h, "26_my_programs");
+    h.get_all_by_label("delete…").next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("yes").click();
+    h.run_steps(2);
+    assert_eq!(h.state().programs.len(), 3);
 }

@@ -22,15 +22,14 @@ impl WebApp {
         WebApp { layout: Some(wrap(app, tablet, ctx)), on_switch }
     }
 
-    #[cfg(test)]
-    fn app(&self) -> &App {
+    pub fn app(&self) -> &App {
         match self.layout.as_ref().expect("layout") {
             Layout::Desktop(d) => &d.0,
             Layout::Tablet(t) => &t.app,
         }
     }
 
-    fn app_mut(&mut self) -> &mut App {
+    pub fn app_mut(&mut self) -> &mut App {
         match self.layout.as_mut().expect("layout") {
             Layout::Desktop(d) => &mut d.0,
             Layout::Tablet(t) => &mut t.app,
@@ -57,6 +56,17 @@ fn wrap(mut app: App, tablet: bool, ctx: &egui::Context) -> Layout {
 impl eframe::App for WebApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.app_mut().persist(storage);
+    }
+
+    /// Unchanged values are not written again (`App::persist`), so this is cheap.
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(10)
+    }
+
+    /// The page saves the app itself when it is hidden or closed (`main.rs`).
+    #[cfg(target_arch = "wasm32")]
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(&mut *self)
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
