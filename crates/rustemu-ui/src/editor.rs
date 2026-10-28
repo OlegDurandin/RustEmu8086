@@ -136,6 +136,21 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
             }
             app.editor_exec_line = exec_line.map(|(l, _)| l);
 
+            // The parts of lines the errors are about: a wavy underline.
+            let red = Color32::from_rgb(230, 60, 60);
+            for &(line, col, len) in &app.error_spans {
+                let Some(text) = app.text.split('\n').nth(line as usize - 1) else { continue };
+                let n = text.chars().count();
+                if col >= n {
+                    continue;
+                }
+                let start = crate::find::line_start_char(&app.text, line) + col;
+                let a = out.galley.pos_from_cursor(CCursor::new(start));
+                let b = out.galley.pos_from_cursor(CCursor::new(start + len.min(n - col)));
+                let y = out.galley_pos.y + a.bottom() - 1.0;
+                ui.painter().add(wavy_line(out.galley_pos.x + a.left(), out.galley_pos.x + b.left(), y, red));
+            }
+
             context_menu(app, ui, &out, top, row_h);
             hover_help(app, ui, &out);
 
@@ -182,6 +197,15 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
             }
         });
     });
+}
+
+/// A wavy line from `x0` to `x1` along `y` (an error underline).
+fn wavy_line(x0: f32, x1: f32, y: f32, color: Color32) -> egui::Shape {
+    const STEP: f32 = 2.0;
+    let points = (0..=((x1 - x0) / STEP).ceil().max(1.0) as usize)
+        .map(|i| pos2((x0 + i as f32 * STEP).min(x1), y + if i % 2 == 0 { 1.5 } else { -1.0 }))
+        .collect();
+    egui::Shape::line(points, Stroke::new(1.0, color))
 }
 
 fn painter_full(ui: &Ui) -> egui::Painter {

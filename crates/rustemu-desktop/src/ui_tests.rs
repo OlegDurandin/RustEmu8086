@@ -114,7 +114,15 @@ fn compile_error_is_reported() {
     h.get_by_label("▶ emulate").click();
     h.run();
     assert_eq!(h.state().error_lines, vec![3, 4]);
+    // The parts of the lines: the unknown mnemonic and the value that does not fit.
+    assert_eq!(h.state().error_spans, vec![(3, 0, 3), (4, 8, 3)]);
+    assert!(h.state().messages[1].text.contains("(4:9): value 300"), "{}", h.state().messages[1].text);
     save(&mut h, "03_errors");
+    // A click on the message selects that part of the line.
+    h.get_by_label_contains("(4:9)").click();
+    h.run();
+    let start = "org 100h\nmov ax, bx\nfoo 1\n".len();
+    assert_eq!(h.state().selection, (start + 8, start + 11));
 }
 
 #[test]
@@ -876,4 +884,33 @@ fn programs_are_kept_in_the_browser() {
     h.get_by_label("yes").click();
     h.run_steps(2);
     assert_eq!(h.state().programs.len(), 3);
+}
+
+#[test]
+fn share_links_open_the_program() {
+    let mut app = app_with_example(0);
+    app.share_base = Some("https://example.org/RustEmu8086/".into());
+    app.share = Some(rustemu_ui::share::ShareDialog { run: true });
+    let link = app.share_link(true);
+    assert!(link.starts_with("https://example.org/RustEmu8086/#name=hello.asm&code="), "{link}");
+    let shared = rustemu_ui::share::parse(link.split_once('#').unwrap().1).unwrap();
+    assert_eq!((shared.text.as_str(), shared.run), (app.text.as_str(), true));
+    let mut h = harness(app);
+    h.run_steps(2);
+    save(&mut h, "27_share_link");
+    h.get_by_label("copy").click();
+    h.run_steps(2);
+    assert!(h.state().share.is_none());
+
+    // Opening the link: the program is loaded and runs; unsaved changes are asked about first.
+    let mut other = app_with_example(5);
+    other.text.push_str("; edited\n");
+    other.open_link(shared.clone());
+    assert!(other.confirm_discard.is_some() && other.text.ends_with("; edited\n"));
+    let mut clean = app_with_example(5);
+    clean.open_link(shared);
+    assert_eq!(clean.file_name(), "hello.asm");
+    assert!(!clean.dirty() && clean.loaded());
+    run_until_paused(&mut clean);
+    assert_eq!(String::from_utf8_lossy(&clean.session.machine.output), "Hello, World!\r\n");
 }

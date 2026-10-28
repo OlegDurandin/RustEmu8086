@@ -311,18 +311,16 @@ pub(crate) fn output_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect:
                     );
                 }
                 let mut jump = None;
-                for m in &app.messages {
+                for (i, m) in app.messages.iter().enumerate() {
                     let color = if m.error { pal::RED } else { pal::TEXT };
                     let r =
                         ui.add(egui::Label::new(RichText::new(&m.text).monospace().color(color)).sense(Sense::click()));
-                    if let Some((_, line)) = &m.loc
-                        && r.clicked()
-                    {
-                        jump = Some(*line);
+                    if m.loc.is_some() && r.clicked() {
+                        jump = Some(i);
                     }
                 }
-                if jump.is_some() {
-                    app.goto_line = jump;
+                if let Some(i) = jump {
+                    app.jump_to_message(i);
                 }
             });
         }

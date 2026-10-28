@@ -150,6 +150,8 @@ pub struct Message {
     pub text: String,
     /// (file name, line) the message refers to.
     pub loc: Option<(String, u32)>,
+    /// The part of that line: column and length in characters.
+    pub span: Option<(usize, usize)>,
     pub error: bool,
 }
 
@@ -243,6 +245,9 @@ pub struct App {
     pub messages: Vec<Message>,
     /// Error lines of the current file (1-based).
     pub error_lines: Vec<u32>,
+    /// Parts of lines of the current file the errors are about: (line, column, length), underlined
+    /// in the editor.
+    pub error_spans: Vec<(u32, usize, usize)>,
     /// A build/load has failed since the last successful emulator load. The
     /// previous machine remains available for inspection, but Run must not
     /// start it by mistake.
@@ -342,6 +347,10 @@ pub struct App {
     pub save_name: Option<crate::programs::SaveName>,
     /// A program in the "my programs" window waiting for its deletion to be confirmed.
     pub program_delete: Option<String>,
+    /// "share link" dialog.
+    pub share: Option<crate::share::ShareDialog>,
+    /// Address share links point to (the web version: its own; default [`WEB_URL`]).
+    pub share_base: Option<String>,
     /// Values last written to the storage, to skip unchanged ones (see [`App::persist`]).
     persisted: std::collections::HashMap<&'static str, u64>,
     /// Colour of the current instruction in the editor (default: [`crate::colors::info`]).
@@ -363,6 +372,8 @@ pub enum PendingAction {
     Program(String),
     /// A file from the computer (the browser asks for it).
     Upload,
+    /// A program from a link.
+    Shared(crate::share::Shared),
     Quit,
 }
 
@@ -391,6 +402,7 @@ impl App {
             saved_text: String::new(),
             messages: Vec::new(),
             error_lines: Vec::new(),
+            error_spans: Vec::new(),
             build_failed: false,
             goto_line: None,
             cursor_line: 1,
@@ -455,6 +467,8 @@ impl App {
             program: None,
             save_name: None,
             program_delete: None,
+            share: None,
+            share_base: None,
             persisted: Default::default(),
             current_line_color: None,
             tablet_layout: false,
@@ -549,7 +563,7 @@ impl App {
         self.text = template.to_string();
         self.saved_text = self.text.clone();
         self.messages.clear();
-        self.error_lines.clear();
+        self.clear_errors();
         self.status = "New file".into();
     }
 
@@ -581,7 +595,7 @@ impl App {
                 self.doc_name = None;
                 self.program = None;
                 self.messages.clear();
-                self.error_lines.clear();
+                self.clear_errors();
                 self.add_recent(p);
                 self.settings.last_file = Some(p.to_path_buf());
                 self.example_key = None;
@@ -708,7 +722,7 @@ impl App {
         self.text = src.to_string();
         self.saved_text = self.text.clone();
         self.messages.clear();
-        self.error_lines.clear();
+        self.clear_errors();
         self.restore_session();
         self.status = format!("Example: {name}");
     }
@@ -847,6 +861,7 @@ impl App {
             PendingAction::Example(i) => self.load_example(i),
             PendingAction::Program(name) => self.open_program(&name),
             PendingAction::Upload => self.pending_upload = Some(crate::platform::UploadFor::Open),
+            PendingAction::Shared(s) => self.open_shared(s),
             PendingAction::Quit => {}
         }
     }
@@ -857,11 +872,32 @@ impl App {
 
     // ---- compile / emulate ----------------------------------------------------------------
 
+    pub fn clear_errors(&mut self) {
+        self.error_lines.clear();
+        self.error_spans.clear();
+    }
+
+    /// Shows the place message `i` refers to in the editor: the part of the line an error is
+    /// about is selected, otherwise the cursor goes to the line.
+    pub fn jump_to_message(&mut self, i: usize) {
+        let Some(m) = self.messages.get(i) else { return };
+        let Some((_, line)) = m.loc else { return };
+        match m.span {
+            Some((col, len)) => {
+                let start = crate::find::line_start_char(&self.text, line);
+                let line_len = self.text.split('\n').nth(line as usize - 1).map_or(0, |l| l.chars().count());
+                let (a, b) = (col.min(line_len), (col + len).min(line_len));
+                self.pending_select = Some((start + a, start + b));
+            }
+            None => self.goto_line = Some(line),
+        }
+    }
+
     fn assemble(&mut self) -> Option<rustemu_asm::Program> {
         let name = self.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
         let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
         self.messages.clear();
-        self.error_lines.clear();
+        self.clear_errors();
         match rustemu_asm::assemble_dialect(&name, &self.text, &mut loader, self.settings.syntax.dialect()) {
             Ok(p) => {
                 self.messages.push(Message {
@@ -873,6 +909,7 @@ impl App {
                         p.file_bytes().len()
                     ),
                     loc: None,
+                    span: None,
                     error: false,
                 });
                 Some(p)
@@ -883,22 +920,32 @@ impl App {
                     let file = e.files.get(err.file).cloned().unwrap_or_default();
                     let short =
                         Path::new(&file).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or(file.clone());
+                    let span = err.col.map(|c| (c, err.len.max(1)));
                     if err.file == 0 && err.line > 0 {
                         self.error_lines.push(err.line);
+                        if let Some((col, len)) = span {
+                            self.error_spans.push((err.line, col, len));
+                        }
                     }
                     self.messages.push(Message {
-                        text: if err.line > 0 {
-                            format!("{short} ({}): {}", err.line, err.msg)
-                        } else {
-                            err.msg.clone()
+                        text: match (err.line, span) {
+                            (0, _) => err.msg.clone(),
+                            (line, Some((col, _))) => format!("{short} ({line}:{}): {}", col + 1, err.msg),
+                            (line, None) => format!("{short} ({line}): {}", err.msg),
                         },
                         loc: (err.line > 0 && err.file == 0).then_some((file, err.line)),
+                        span: span.filter(|_| err.file == 0),
                         error: true,
                     });
                 }
-                self.messages.push(Message { text: format!("{} error(s)", e.errors.len()), loc: None, error: true });
-                if let Some(l) = self.error_lines.first() {
-                    self.goto_line = Some(*l);
+                self.messages.push(Message {
+                    text: format!("{} error(s)", e.errors.len()),
+                    loc: None,
+                    span: None,
+                    error: true,
+                });
+                if let Some(i) = self.messages.iter().position(|m| m.loc.is_some()) {
+                    self.jump_to_message(i);
                 }
                 self.status = "Assembly failed".into();
                 None
@@ -914,7 +961,7 @@ impl App {
             let stem = stem.rsplit_once('.').map_or(stem.as_str(), |(s, _)| s);
             let name = format!("{stem}.{}", p.format.extension());
             crate::platform::download(&name, &p.file_bytes());
-            self.messages.push(Message { text: format!("downloaded: {name}"), loc: None, error: false });
+            self.messages.push(Message { text: format!("downloaded: {name}"), loc: None, span: None, error: false });
             self.status = format!("Compiled to {name}");
             return;
         }
@@ -939,7 +986,12 @@ impl App {
         match res {
             Ok(()) => {
                 for w in written {
-                    self.messages.push(Message { text: format!("written: {}", w.display()), loc: None, error: false });
+                    self.messages.push(Message {
+                        text: format!("written: {}", w.display()),
+                        loc: None,
+                        span: None,
+                        error: false,
+                    });
                 }
                 self.status = format!("Compiled to {}", out.display());
             }
@@ -1303,7 +1355,7 @@ impl App {
             Event::Terminated(code) => {
                 self.run = RunMode::Paused;
                 self.status = format!("Program terminated (exit code {code})");
-                self.messages.push(Message { text: self.status.clone(), loc: None, error: false });
+                self.messages.push(Message { text: self.status.clone(), loc: None, span: None, error: false });
             }
             Event::Breakpoint => {
                 self.run = RunMode::Paused;
