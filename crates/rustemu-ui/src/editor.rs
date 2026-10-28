@@ -72,7 +72,7 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                 if let Some((l, strong)) = exec_line
                     && l == n
                 {
-                    let c = crate::colors::info(ui);
+                    let c = app.current_line_color.unwrap_or_else(|| crate::colors::info(ui));
                     let band = Rect::from_min_max(pos2(gutter_rect.right() - 2.0, y), pos2(clip.right(), y + row_h));
                     painter_full(ui).rect_filled(band, 0.0, c.gamma_multiply(if strong { 0.28 } else { 0.12 }));
                     if strong {

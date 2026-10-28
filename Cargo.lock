@@ -2085,22 +2085,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustemu-app"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "egui_kittest",
- "image",
- "rfd",
- "rustemu-asm",
- "rustemu-core",
- "rustemu-session",
- "serde",
- "winit",
-]
-
-[[package]]
 name = "rustemu-asm"
 version = "0.1.0"
 
@@ -2122,11 +2106,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustemu-desktop"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui_kittest",
+ "rustemu-asm",
+ "rustemu-core",
+ "rustemu-session",
+ "rustemu-ui",
+]
+
+[[package]]
 name = "rustemu-session"
 version = "0.1.0"
 dependencies = [
  "rustemu-asm",
  "rustemu-core",
+]
+
+[[package]]
+name = "rustemu-tablet"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui_kittest",
+ "objc2 0.6.5",
+ "raw-window-handle",
+ "rustemu-core",
+ "rustemu-session",
+ "rustemu-ui",
+ "winit",
+]
+
+[[package]]
+name = "rustemu-ui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "egui_kittest",
+ "image",
+ "rfd",
+ "rustemu-asm",
+ "rustemu-core",
+ "rustemu-session",
+ "serde",
 ]
 
 [[package]]

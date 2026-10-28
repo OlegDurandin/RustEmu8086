@@ -4,43 +4,17 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
-use crate::app::{App, Settings};
+use rustemu_ui::app::{App, Settings};
+use rustemu_ui::testing::{app_with_example, save};
 
 fn harness(app: App) -> Harness<'static, App> {
     let h = Harness::builder()
         .with_size([1440.0, 900.0])
         .with_max_steps(64)
         .build_ui_state(|ui, app: &mut App| crate::ui::main_ui(app, ui), app);
-    crate::fonts::install(&h.ctx);
+    rustemu_ui::fonts::install(&h.ctx);
     h.state().apply_theme(&h.ctx);
     h
-}
-
-fn save(h: &mut Harness<'_, App>, name: &str) {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/ui-snapshots");
-    std::fs::create_dir_all(&dir).unwrap();
-    // egui_kittest 0.37 panics while lazily creating its renderer when WGPU
-    // has no adapter, instead of returning the documented `Err`. UI logic is
-    // still testable in such headless environments; only the PNG is skipped.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.render())) {
-        Ok(Ok(img)) => img.save(dir.join(format!("{name}.png"))).unwrap(),
-        Ok(Err(e)) => eprintln!("render skipped: {e}"),
-        Err(panic) => {
-            let message =
-                panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied());
-            if message.is_some_and(|m| m.contains("No adapter found")) {
-                eprintln!("render skipped: WGPU renderer is unavailable");
-            } else {
-                std::panic::resume_unwind(panic);
-            }
-        }
-    }
-}
-
-fn app_with_example(i: usize) -> App {
-    let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
-    app.load_example(i);
-    app
 }
 
 #[test]
@@ -50,7 +24,7 @@ fn run_does_not_start_after_assembly_failure() {
 
     app.start_run();
 
-    assert_eq!(app.run, crate::app::RunMode::Paused);
+    assert_eq!(app.run, rustemu_ui::app::RunMode::Paused);
     assert!(!app.loaded());
     assert_eq!(app.status, "Assembly failed");
 
@@ -66,7 +40,7 @@ fn run_does_not_start_after_assembly_failure() {
 
     app.start_run();
 
-    assert_eq!(app.run, crate::app::RunMode::Paused);
+    assert_eq!(app.run, rustemu_ui::app::RunMode::Paused);
     assert!(app.loaded());
     assert_eq!(app.status, "Assembly failed");
     assert_eq!(app.session.machine.cpu, cpu);
@@ -83,7 +57,7 @@ fn run_does_not_start_after_assembly_failure() {
 
     app.start_run();
 
-    assert_eq!(app.run, crate::app::RunMode::Running);
+    assert_eq!(app.run, rustemu_ui::app::RunMode::Running);
     assert_eq!(app.session.program.as_ref().unwrap().image, expected);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -147,7 +121,7 @@ fn graphics_and_devices() {
     h.run();
     save(&mut h, "05_graphics");
 
-    let robot = crate::examples::EXAMPLES.iter().position(|e| e.0 == "robot.asm").unwrap();
+    let robot = rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == "robot.asm").unwrap();
     let mut h = harness(app_with_example(robot));
     h.run();
     h.state_mut().emulate();
@@ -164,7 +138,7 @@ fn editing_a_device_clears_step_back_history() {
     h.state_mut().single_step();
     assert!(h.state().session.machine.history_len() > 0);
     h.state_mut().session.machine.sys.dev.printer.extend_from_slice(b"AB");
-    h.state_mut().device_tab = crate::devices_ui::Device::Printer;
+    h.state_mut().device_tab = rustemu_ui::devices_ui::Device::Printer;
     h.state_mut().windows.devices = true;
     h.run();
     h.get_by_label("clear paper").click();
@@ -176,7 +150,7 @@ fn editing_a_device_clears_step_back_history() {
 
 #[test]
 fn stepping_into_library_macros() {
-    let calc = crate::examples::EXAMPLES.iter().position(|e| e.0 == "calc.asm").unwrap();
+    let calc = rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == "calc.asm").unwrap();
     let mut h = harness(app_with_example(calc));
     h.run();
     h.state_mut().emulate();
@@ -208,7 +182,7 @@ fn stepping_into_library_macros() {
     }
     let v = h.state().session.current_view(true).unwrap();
     assert_eq!((v.file, v.level), (0, 0));
-    assert!(h.state().run == crate::app::RunMode::Paused);
+    assert!(h.state().run == rustemu_ui::app::RunMode::Paused);
     h.run_steps(20);
     save(&mut h, "10_after_step_out");
 
@@ -238,14 +212,14 @@ fn new_dialog_menus_and_tools() {
     st.calculator.expr = "0FFh + 'A' * 2".into();
     st.options_open = true;
     st.cursor_line = 3;
-    crate::editcmd::toggle_bookmark(st);
+    rustemu_ui::editcmd::toggle_bookmark(st);
     h.run_steps(5);
     save(&mut h, "12_calculator_options");
 }
 
 #[test]
 fn reference_window_and_editor_lookup() {
-    use crate::reference::Topic;
+    use rustemu_ui::reference::Topic;
     let mut h = harness(app_with_example(0));
     h.run();
     // F1 with the text cursor on `int 21h` opens the DOS function chosen by the preceding MOV AH.
@@ -255,10 +229,10 @@ fn reference_window_and_editor_lookup() {
     st.selection = (ci, ci);
     st.help_at_cursor();
     h.run_steps(5);
-    let int21 = crate::reference::find_interrupt(0x21).unwrap();
+    let int21 = rustemu_ui::reference::find_interrupt(0x21).unwrap();
     assert_eq!(h.state().reference.topic, Some(Topic::Int(int21, Some(9))));
     save(&mut h, "13_reference_interrupt");
-    let mov = crate::reference::find_instruction("adc").unwrap();
+    let mov = rustemu_ui::reference::find_instruction("adc").unwrap();
     h.state_mut().reference.show(Topic::Instr(mov));
     h.run_steps(5);
     save(&mut h, "14_reference_instruction");
@@ -268,7 +242,7 @@ fn reference_window_and_editor_lookup() {
 fn run_until_paused(app: &mut App) {
     let ctx = egui::Context::default();
     for _ in 0..500 {
-        if app.run == crate::app::RunMode::Paused {
+        if app.run == rustemu_ui::app::RunMode::Paused {
             return;
         }
         app.tick(&ctx);
@@ -288,7 +262,7 @@ next:
 #[test]
 fn conditional_breakpoint_run_to_cursor_and_stop_condition() {
     use rustemu_core::cpu::{AX, BX, CX};
-    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     app.text = LOOP_SRC.into();
     app.emulate();
     assert!(app.loaded());
@@ -330,18 +304,18 @@ fn conditional_breakpoint_run_to_cursor_and_stop_condition() {
     app.text.push_str("; changed\n");
     assert!(app.is_stale());
     app.run_to_line(0, 6);
-    assert_eq!(app.run, crate::app::RunMode::Paused);
+    assert_eq!(app.run, rustemu_ui::app::RunMode::Paused);
     assert!(app.status.contains("reassemble"));
 }
 
 #[test]
 fn breakpoints_follow_edited_lines() {
-    let map = crate::editor::line_mapper("a\nb\nc\nd", "a\nnew\nb\nc\nd");
+    let map = rustemu_ui::editor::line_mapper("a\nb\nc\nd", "a\nnew\nb\nc\nd");
     assert_eq!((map(1), map(2), map(4)), (Some(1), Some(3), Some(5)));
     // Typing inside a line keeps it; deleting a line drops its marks.
-    let map = crate::editor::line_mapper("a\nb\nc", "a\nbx\nc");
+    let map = rustemu_ui::editor::line_mapper("a\nb\nc", "a\nbx\nc");
     assert_eq!((map(2), map(3)), (Some(2), Some(3)));
-    let map = crate::editor::line_mapper("a\nb\nc", "a\nc");
+    let map = rustemu_ui::editor::line_mapper("a\nb\nc", "a\nc");
     assert_eq!((map(1), map(2), map(3)), (Some(1), None, Some(2)));
 }
 
@@ -360,7 +334,7 @@ square proc
 square endp
 value dw 1234h
 ";
-    let mut h = harness(App::with_settings(crate::app::Settings { last_file: None, ..Default::default() }));
+    let mut h = harness(App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() }));
     h.run();
     let app = h.state_mut();
     app.text = src.into();
@@ -371,9 +345,9 @@ value dw 1234h
     app.start_run();
     run_until_paused(app);
     assert_eq!(app.session.current_line(), Some((0, 9)));
-    crate::debugger::add_watch(app, "ax");
-    crate::debugger::add_watch(app, "value");
-    crate::debugger::add_watch(app, "word ss:[sp]");
+    rustemu_ui::debugger::add_watch(app, "ax");
+    rustemu_ui::debugger::add_watch(app, "value");
+    rustemu_ui::debugger::add_watch(app, "word ss:[sp]");
     let w = &mut app.windows;
     (w.breakpoints, w.call_stack, w.alu, w.source, w.emulator, w.screen) = (true, true, true, false, false, false);
     h.run_steps(8);
@@ -419,7 +393,7 @@ fn emulator_bottom_buttons_and_aux_menu() {
 
 #[test]
 fn session_is_restored_after_restart() {
-    use crate::app::Settings;
+    use rustemu_ui::app::Settings;
     let dir = std::env::temp_dir().join(format!("rustemu_session_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (a, b) = (dir.join("a.asm"), dir.join("b.asm"));
@@ -439,7 +413,7 @@ fn session_is_restored_after_restart() {
     let putc = app.source_index[inc].iter().find(|e| e.name == "PUTC").unwrap().line;
     app.toggle_breakpoint_at_line(inc, putc);
     let inc_bp = *app.bp_lines.keys().find(|k| k.0 == inc).unwrap();
-    crate::debugger::add_watch(&mut app, "cx");
+    rustemu_ui::debugger::add_watch(&mut app, "cx");
     app.bookmarks.insert(5);
     app.stop_condition.text = "cx == 1".into();
     app.windows.watch = true;
@@ -478,12 +452,12 @@ fn session_is_restored_after_restart() {
 
 #[test]
 fn screen_paste_and_copy() {
-    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     app.load_example(0);
     app.emulate();
     let m = &mut app.session.machine;
     let before = m.sys.keys.len();
-    crate::screen::paste_keys(m, "12\r\n3\tx");
+    rustemu_ui::screen::paste_keys(m, "12\r\n3\tx");
     let keys: Vec<u16> = m.sys.keys.iter().skip(before).copied().collect();
     assert_eq!(keys.len(), 6);
     assert_eq!(keys[2], 0x1C0D, "new line is Enter");
@@ -492,13 +466,13 @@ fn screen_paste_and_copy() {
     // Copy: the text the program printed.
     app.start_run();
     run_until_paused(&mut app);
-    let text = crate::screen::screen_text(&app.session.machine.sys.mem);
+    let text = rustemu_ui::screen::screen_text(&app.session.machine.sys.mem);
     assert!(text.contains("Hello"), "{text}");
 }
 
 #[test]
 fn no_execution_command_runs_the_old_image_after_a_failed_build() {
-    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     app.text = LOOP_SRC.into();
     app.emulate();
     let cpu = app.session.machine.cpu.clone();
@@ -509,7 +483,7 @@ fn no_execution_command_runs_the_old_image_after_a_failed_build() {
     app.step_over();
     app.step_out();
     app.run_to_line(0, 2);
-    assert_eq!(app.run, crate::app::RunMode::Paused);
+    assert_eq!(app.run, rustemu_ui::app::RunMode::Paused);
     assert_eq!(app.session.machine.cpu, cpu, "the old image must not execute");
     // Fixing the code makes stepping work again (on the new build).
     app.text = LOOP_SRC.into();
@@ -519,7 +493,7 @@ fn no_execution_command_runs_the_old_image_after_a_failed_build() {
 
 #[test]
 fn address_breakpoints_belong_to_one_program() {
-    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     app.text = LOOP_SRC.into();
     app.emulate();
     app.toggle_breakpoint_at_line(0, 4);
@@ -540,7 +514,7 @@ fn address_breakpoints_belong_to_one_program() {
 #[test]
 fn emulator_window_debug_and_file_menus() {
     use rustemu_core::cpu::{BX, CX};
-    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     app.text = LOOP_SRC.into();
     app.emulate();
     // Select `mov bx, 1` (line 6) as if clicked in the disassembly.
@@ -611,7 +585,7 @@ fn value_viewer_addresses_and_view_menu_snapshots() {
     let mut cpu = rustemu_core::Cpu::new();
     cpu.sregs[rustemu_core::cpu::DS] = 0x0700;
     cpu.regs[rustemu_core::cpu::SI] = 0x0010;
-    use crate::debugger::parse_view_addr;
+    use rustemu_ui::debugger::parse_view_addr;
     assert_eq!(parse_view_addr(&cpu, "DS:0100"), Some(0x7100));
     assert_eq!(parse_view_addr(&cpu, "ds:si"), Some(0x7010));
     assert_eq!(parse_view_addr(&cpu, "07105h"), Some(0x7105));
@@ -627,9 +601,9 @@ fn value_viewer_addresses_and_view_menu_snapshots() {
     h.run_steps(4);
     save(&mut h, "20_emulator_view_menu");
     let app = h.state_mut();
-    crate::debugger::view_register(app, "SP");
+    rustemu_ui::debugger::view_register(app, "SP");
     assert!(app.windows.value_viewer && app.value_viewer.reg == Some(7));
-    app.device_tab = crate::devices_ui::Device::VgaState;
+    app.device_tab = rustemu_ui::devices_ui::Device::VgaState;
     app.windows.devices = true;
     h.key_press(egui::Key::Escape);
     h.run_steps(6);
@@ -638,8 +612,8 @@ fn value_viewer_addresses_and_view_menu_snapshots() {
 
 #[test]
 fn value_viewer_sets_registers_and_memory() {
-    use crate::debugger::{set_viewed_value, view_register};
-    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    use rustemu_ui::debugger::{set_viewed_value, view_register};
+    let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     app.load_example(0);
     app.emulate();
     view_register(&mut app, "BX");
@@ -659,7 +633,7 @@ fn value_viewer_sets_registers_and_memory() {
 
 #[test]
 fn nasm_templates_and_syntax_setting() {
-    let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+    let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     for i in [0, 2, 3] {
         app.new_from_nasm_template(i);
         app.emulate();
@@ -668,18 +642,18 @@ fn nasm_templates_and_syntax_setting() {
     }
     // Forcing the Emu8086 syntax on NASM code fails; forcing NASM works.
     app.text = "mov ax, [bx]\nret\n".into();
-    app.settings.syntax = crate::app::SyntaxChoice::Nasm;
+    app.settings.syntax = rustemu_ui::app::SyntaxChoice::Nasm;
     app.emulate();
     assert!(app.messages[0].text.contains("NASM syntax"));
     app.text = "org 100h\nmov word [count], 1\nret\ncount dw 0\n".into();
-    app.settings.syntax = crate::app::SyntaxChoice::Masm;
+    app.settings.syntax = rustemu_ui::app::SyntaxChoice::Masm;
     app.emulate();
     assert!(app.messages.iter().any(|m| m.error));
 }
 
 #[test]
 fn nasm_editor_snapshot() {
-    let i = crate::examples::EXAMPLES.iter().position(|e| e.0 == "hello_nasm.asm").unwrap();
+    let i = rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == "hello_nasm.asm").unwrap();
     let mut h = harness(app_with_example(i));
     h.run();
     let app = h.state_mut();

@@ -1,5 +1,5 @@
 //! Renders the application icon (a DIP chip labelled "8086") to a 1024x1024 PNG.
-//! Usage: cargo run -p rustemu-app --example make_icon -- <out.png>
+//! Usage: cargo run -p rustemu-ui --example make_icon -- <out.png>
 
 use image::{Rgba, RgbaImage};
 

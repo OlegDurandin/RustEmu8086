@@ -280,37 +280,40 @@ fn console_ui(app: &mut App, ui: &mut Ui) {
         app.console.lines.push("RustEmu8086 debug console - type ? for help".into());
     }
     log_state(app);
-    let h = ui.available_height() - 30.0;
-    egui::ScrollArea::vertical().max_height(h.max(100.0)).stick_to_bottom(true).auto_shrink([false, false]).show(
-        ui,
-        |ui| {
+    // The command line is a bottom panel and the log fills the rest: a height reserved by hand
+    // drifts with the style (touch-sized widgets made the window grow every frame).
+    egui::Panel::bottom("console_input").frame(egui::Frame::NONE).show(ui, |ui| {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("-").monospace());
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut app.console.input)
+                    .font(egui::TextStyle::Monospace)
+                    .hint_text("command")
+                    .desired_width(f32::INFINITY),
+            );
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                let cmd = std::mem::take(&mut app.console.input);
+                if !cmd.trim().is_empty() {
+                    app.console.history.push(cmd.clone());
+                    execute(app, cmd.trim());
+                }
+                r.request_focus();
+            }
+            if r.has_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::ArrowUp))
+                && let Some(last) = app.console.history.last()
+            {
+                app.console.input = last.clone();
+            }
+        });
+    });
+    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+        egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
             for l in &app.console.lines {
                 ui.label(RichText::new(l).monospace().size(12.5));
             }
-        },
-    );
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("-").monospace());
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut app.console.input)
-                .font(egui::TextStyle::Monospace)
-                .hint_text("command")
-                .desired_width(f32::INFINITY),
-        );
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            let cmd = std::mem::take(&mut app.console.input);
-            if !cmd.trim().is_empty() {
-                app.console.history.push(cmd.clone());
-                execute(app, cmd.trim());
-            }
-            r.request_focus();
-        }
-        if r.has_focus()
-            && ui.input(|i| i.key_pressed(egui::Key::ArrowUp))
-            && let Some(last) = app.console.history.last()
-        {
-            app.console.input = last.clone();
-        }
+        });
     });
 }
 

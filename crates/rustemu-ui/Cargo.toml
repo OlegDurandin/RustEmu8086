@@ -1,0 +1,36 @@
+[package]
+name = "rustemu-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The part of the GUI shared by the desktop (rustemu-desktop) and tablet (rustemu-tablet) front ends:
+# the application state (`App`: files, assembling, running, breakpoints, settings), the editor, the
+# emulator screen, tool windows and dialogs, the reference and OS services (src/platform.rs).
+
+# ---- all platforms --------------------------------------------------------------------------------
+[dependencies]
+rustemu-core.workspace = true
+rustemu-asm.workspace = true
+rustemu-session.workspace = true
+# wgpu renderer everywhere: Metal on macOS and iPadOS, Vulkan / GLES on Android (eframe on iOS
+# supports only wgpu, so the desktop uses the same renderer).
+eframe = { workspace = true }
+egui = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+# Feature `testing`: helpers for the UI tests of the front ends (src/testing.rs).
+egui_kittest = { workspace = true, optional = true }
+
+# ---- desktop: macOS (Windows / Linux should work too) --------------------------------------------
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+# System clipboard for Cmd+C / Cmd+V (arboard does not support iOS; egui-winit has none on Android).
+eframe = { workspace = true, features = ["clipboard"] }
+# Native open / save dialogs; not available on iOS / Android (see src/platform.rs).
+rfd = "0.17"
+
+[dev-dependencies]
+# examples/make_icon.rs
+image = { workspace = true }
+
+[features]
+testing = ["dep:egui_kittest"]

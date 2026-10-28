@@ -4,7 +4,7 @@ use egui::{Color32, DragValue, FontId, RichText, Ui, pos2};
 use rustemu_core::cpu::{self, REG16_NAMES, SREG_NAMES};
 use rustemu_core::disasm::disassemble;
 
-use crate::app::{App, RunMode};
+use rustemu_ui::app::{App, RunMode};
 
 const CHANGED: Color32 = Color32::from_rgb(0xFF, 0x50, 0x50);
 
@@ -32,7 +32,7 @@ pub fn stale_banner(app: &mut App, ui: &mut Ui) {
                     RichText::new(
                         "⚠ The source was changed after the program was loaded - the running code is outdated.",
                     )
-                    .color(crate::colors::warn(ui)),
+                    .color(rustemu_ui::colors::warn(ui)),
                 );
                 if ui.button("Reassemble and load (F9)").clicked() {
                     app.emulate();
@@ -56,7 +56,7 @@ fn emulator_ui(app: &mut App, ui: &mut Ui) {
         ui.menu_button("debug", |ui| debug_menu(app, ui));
         ui.menu_button("view", |ui| view_menu(app, ui));
         ui.menu_button("virtual devices", |ui| virtual_devices_menu(app, ui));
-        ui.menu_button("virtual drive", |ui| crate::ui::virtual_drive_menu(app, ui));
+        ui.menu_button("virtual drive", |ui| rustemu_ui::windows::virtual_drive_menu(app, ui));
         ui.menu_button("help", |ui| help_menu(app, ui));
     });
     let loaded = app.loaded();
@@ -141,7 +141,7 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
     }
     ui.separator();
     ui.menu_button("examples", |ui| {
-        for (i, (name, _)) in crate::examples::EXAMPLES.iter().enumerate() {
+        for (i, (name, _)) in rustemu_ui::examples::EXAMPLES.iter().enumerate() {
             if ui.button(*name).clicked() {
                 app.emulate_example(i);
             }
@@ -211,7 +211,7 @@ fn view_menu(app: &mut App, ui: &mut Ui) {
 
 /// "virtual devices" menu: the device programs of Emu8086, shown as tabs of the devices window.
 pub fn virtual_devices_menu(app: &mut App, ui: &mut Ui) {
-    for (d, name) in crate::devices_ui::Device::EXE {
+    for (d, name) in rustemu_ui::devices_ui::Device::EXE {
         if ui.button(name).clicked() {
             app.device_tab = d;
             app.windows.devices = true;
@@ -228,7 +228,7 @@ fn help_menu(app: &mut App, ui: &mut Ui) {
     ui.separator();
     if item(ui, true, "check for an update…", "") {
         // The project page lists the releases; there is no automatic updater.
-        crate::platform::open_url(crate::app::RELEASES_URL);
+        rustemu_ui::platform::open_url(rustemu_ui::app::RELEASES_URL);
     }
     ui.separator();
     if item(ui, true, "about…", "") {
@@ -414,47 +414,13 @@ fn registers(app: &mut App, ui: &mut Ui) {
     ui.add_space(4.0);
     ui.label(RichText::new(format!("instructions: {}", c.instr_count)).weak().small());
     if let Some(name) = view {
-        crate::debugger::view_register(app, name);
+        rustemu_ui::debugger::view_register(app, name);
     }
-}
-
-/// Near target offset of a disassembled `CALL`/`JMP`/`Jcc`/`LOOP`/`JCXZ` (`"CALL 0150h"` -> 0x150).
-fn jump_target(text: &str) -> Option<u16> {
-    let (mnem, arg) = text.split_once(' ')?;
-    if !(mnem.starts_with('J') || mnem == "CALL" || mnem.starts_with("LOOP")) || arg.contains(['[', ':', ' ']) {
-        return None;
-    }
-    u16::from_str_radix(arg.strip_suffix('h')?, 16).ok()
-}
-
-/// Finds the address to start the disassembly at so that the list stays stable while stepping.
-fn disasm_start(app: &mut App, rows: usize) -> u32 {
-    if app.code_view_pinned {
-        return app.code_view_start;
-    }
-    let m = &app.session.machine;
-    let pc = m.cpu.pc();
-    let mut a = app.code_view_start;
-    let ip0 = m.cpu.ip.wrapping_sub(pc.wrapping_sub(a) as u16);
-    let mut ip = ip0;
-    for _ in 0..rows.saturating_sub(3) {
-        if a == pc {
-            return app.code_view_start;
-        }
-        let ins = disassemble(m.sys.mem.slice(a, 8), ip);
-        a += ins.len as u32;
-        ip = ip.wrapping_add(ins.len as u16);
-        if a > pc {
-            break;
-        }
-    }
-    app.code_view_start = pc;
-    pc
 }
 
 fn code_view(app: &mut App, ui: &mut Ui) {
     let rows = 22;
-    let start = disasm_start(app, rows);
+    let start = rustemu_ui::debug::disasm_start(app, rows);
     let m = &app.session.machine;
     let pc = m.cpu.pc();
     // Addresses are shown relative to CS, or to the segment of a shown breakpoint.
@@ -508,7 +474,9 @@ fn code_view(app: &mut App, ui: &mut Ui) {
             if ui.add(egui::Label::new(mk(format!("{hex:<10}"))).sense(egui::Sense::click())).clicked() {
                 select = Some((cs, row_ip));
             }
-            let text = match jump_target(&ins.text).and_then(|off| session.symbol_at(rustemu_core::linear(cs, off))) {
+            let text = match rustemu_ui::debug::jump_target(&ins.text)
+                .and_then(|off| session.symbol_at(rustemu_core::linear(cs, off)))
+            {
                 Some(name) => format!("{}  ; {name}", ins.text),
                 None => ins.text.clone(),
             };
@@ -592,7 +560,7 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
         let user_file = app.source_files.get(sf).map(|f| f.0.clone()).unwrap_or_default();
         egui::Frame::new().fill(ui.visuals().faint_bg_color).inner_margin(4.0).corner_radius(3.0).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("▸ inside {what}")).strong().color(crate::colors::info(ui)));
+                ui.label(RichText::new(format!("▸ inside {what}")).strong().color(rustemu_ui::colors::info(ui)));
                 ui.weak(format!("({} line {ol})", app.source_files[of].0));
                 if ui.link(format!("statement: {user_file} line {sl}")).clicked() {
                     app.follow_source = false;
@@ -603,7 +571,7 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
                 if let Some(e) = &entry
                     && !e.doc.is_empty()
                 {
-                    ui.label(RichText::new("ℹ").color(crate::colors::info(ui))).on_hover_text(&e.doc);
+                    ui.label(RichText::new("ℹ").color(rustemu_ui::colors::info(ui))).on_hover_text(&e.doc);
                 }
             });
         });
@@ -661,7 +629,7 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let dot = if let Some(bp) = bp {
-                    RichText::new("●").color(crate::debugger::marker_color(bp))
+                    RichText::new("●").color(rustemu_ui::debugger::marker_color(bp))
                 } else {
                     RichText::new("○").weak()
                 };
