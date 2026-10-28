@@ -26,6 +26,7 @@ pub(crate) enum Icon {
     Down,
     Menu,
     Keyboard,
+    Share,
 }
 
 pub(crate) fn paint_icon(p: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, color: Color32) {
@@ -115,6 +116,26 @@ pub(crate) fn paint_icon(p: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, c
             for dy in [-0.28, 0.0, 0.28] {
                 p.circle_filled(c + vec2(0.0, dy * s), s * 0.08, color);
             }
+        }
+        Icon::Share => {
+            // An open box with an arrow out of it.
+            let (w, top, bottom) = (s * 0.3, -s * 0.05, s * 0.4);
+            p.add(egui::Shape::line(
+                vec![
+                    c + vec2(-w * 0.45, top),
+                    c + vec2(-w, top),
+                    c + vec2(-w, bottom),
+                    c + vec2(w, bottom),
+                    c + vec2(w, top),
+                    c + vec2(w * 0.45, top),
+                ],
+                Stroke::new(1.5, color),
+            ));
+            p.line_segment([c + vec2(0.0, s * 0.18), c + vec2(0.0, -s * 0.42)], Stroke::new(1.5, color));
+            p.add(egui::Shape::line(
+                vec![c + vec2(-s * 0.15, -s * 0.27), c + vec2(0.0, -s * 0.42), c + vec2(s * 0.15, -s * 0.27)],
+                Stroke::new(1.5, color),
+            ));
         }
         Icon::Keyboard => {
             let body = Rect::from_center_size(c, vec2(s * 0.9, s * 0.6));
