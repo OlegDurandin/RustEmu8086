@@ -2612,12 +2612,9 @@ dependencies = [
  "eframe",
  "egui",
  "egui_kittest",
- "objc2 0.6.5",
- "raw-window-handle",
  "rustemu-core",
  "rustemu-session",
  "rustemu-ui",
- "winit",
 ]
 
 [[package]]

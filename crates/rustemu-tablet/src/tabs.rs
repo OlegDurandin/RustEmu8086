@@ -15,7 +15,7 @@ use crate::widgets::{GAP, HEAD_H, split_x, split_y};
 const REGS_H: f32 = HEAD_H + 7.0 * 34.0 + 22.0;
 
 /// Width of the left column (editor, disassembly) beside the registers; None when the window is
-/// too narrow for two columns (iPadOS windows, Split View) and the cards are stacked.
+/// too narrow for two columns (a narrow browser window) and the cards are stacked.
 fn left_width(w: f32) -> Option<f32> {
     let right = (w * 0.42).clamp(400.0, 560.0);
     (w - right - GAP >= 380.0).then_some(w - right - GAP)

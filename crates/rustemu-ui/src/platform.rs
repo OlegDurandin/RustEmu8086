@@ -3,11 +3,7 @@
 //!
 //! Desktop (macOS, also Windows / Linux) uses `rfd` for dialogs. The browser has no paths: files
 //! are uploaded ([`request_upload`], picked up with [`take_uploads`]) and saved as downloads
-//! ([`download`]). iPadOS and Android have no `rfd`; there the functions are stubs for now:
-//! - iPadOS: `UIDocumentPickerViewController` for open / save, `UIPasteboard` for the clipboard,
-//!   `UIApplication.open` for URLs, the app's Documents folder for data;
-//! - Android: the Storage Access Framework (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`)
-//!   through JNI, `ClipboardManager`, an `ACTION_VIEW` intent, `Context.getFilesDir()`.
+//! ([`download`]).
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +12,7 @@ pub type Filter<'a> = (&'a str, &'a [&'a str]);
 
 /// Lets the user choose an existing file.
 pub fn pick_file(filters: &[Filter], dir: Option<&Path>) -> Option<PathBuf> {
-    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let mut dlg = rfd::FileDialog::new();
         for (name, exts) in filters {
@@ -27,7 +23,7 @@ pub fn pick_file(filters: &[Filter], dir: Option<&Path>) -> Option<PathBuf> {
         }
         dlg.pick_file()
     }
-    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+    #[cfg(target_arch = "wasm32")]
     {
         let _ = (filters, dir);
         None
@@ -36,7 +32,7 @@ pub fn pick_file(filters: &[Filter], dir: Option<&Path>) -> Option<PathBuf> {
 
 /// Lets the user choose where to save a file (`name` is the suggested file name).
 pub fn save_file(filters: &[Filter], dir: Option<&Path>, name: &str) -> Option<PathBuf> {
-    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let mut dlg = rfd::FileDialog::new().set_file_name(name);
         for (desc, exts) in filters {
@@ -47,16 +43,11 @@ pub fn save_file(filters: &[Filter], dir: Option<&Path>, name: &str) -> Option<P
         }
         dlg.save_file()
     }
-    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+    #[cfg(target_arch = "wasm32")]
     {
         let _ = (filters, dir, name);
         None
     }
-}
-
-/// Whether file dialogs with paths are available (menus can hide what cannot work).
-pub fn has_file_dialogs() -> bool {
-    cfg!(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))
 }
 
 /// Whether files are opened by upload and saved by download (the browser).
@@ -180,13 +171,11 @@ pub fn open_url(url: &str) {
     if let Some(w) = web_sys::window() {
         let _ = w.open_with_url_and_target(url, "_blank");
     }
-    #[cfg(any(target_os = "ios", target_os = "android"))]
-    let _ = url;
 }
 
 /// Folder for files of unsaved programs (the DOS drive C:): `~/Documents/RustEmu8086/vdrive` on
-/// the desktop; on iPadOS `HOME` is the app's sandbox, so this is inside its Documents folder. The
-/// browser has no file system (DOS file functions report errors there).
+/// the desktop. The browser has no file system: its drive C: is in memory
+/// (`rustemu_core::memdrive`), the path only names it.
 pub fn data_dir() -> PathBuf {
     if cfg!(target_arch = "wasm32") {
         // std::env::temp_dir panics there.
