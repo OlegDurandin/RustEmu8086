@@ -1,0 +1,25 @@
+[package]
+name = "rustemu-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The desktop application (macOS; Windows / Linux should work too): the Emu8086-style main window
+# with menus and toolbar, the emulator window with its menus and the source window, drawn around
+# the shared GUI of rustemu-ui. Packaged by scripts/bundle_macos.sh.
+
+[[bin]]
+name = "RustEmu8086"
+path = "src/main.rs"
+
+[dependencies]
+rustemu-core.workspace = true
+rustemu-asm.workspace = true
+rustemu-session.workspace = true
+rustemu-ui.workspace = true
+eframe = { workspace = true }
+egui = { workspace = true }
+
+[dev-dependencies]
+egui_kittest = { workspace = true }
+rustemu-ui = { workspace = true, features = ["testing"] }

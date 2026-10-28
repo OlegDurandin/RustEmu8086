@@ -60,19 +60,54 @@ pub fn screen_window(app: &mut App, ctx: &egui::Context) {
     app.windows.screen = open;
 }
 
-fn screen_ui(app: &mut App, ui: &mut Ui) {
+/// Size of the screen view.
+#[derive(Clone, Copy)]
+pub enum Fit {
+    /// The zoom of the screen window.
+    Zoom,
+    /// The whole screen, as large as fits (tablet layout).
+    Whole(egui::Vec2),
+    /// Text as wide as fits (at most the given font size), only the rows around the cursor that fit
+    /// (next to the on-screen keyboard). Graphics modes are shown whole.
+    Cursor(egui::Vec2, f32),
+}
+
+/// The screen itself with keyboard and mouse input.
+pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
     if app.screen.font_size == 0.0 {
         app.screen.font_size = 13.0;
     }
     let mem = &app.session.machine.sys.mem;
     let mode = Video::mode(mem);
-    let font = FontId::monospace(app.screen.font_size);
-    let cw = ui.fonts_mut(|f| f.glyph_width(&font, 'M')).ceil();
-    let ch = (app.screen.font_size * 1.25).ceil();
-    let size = if Video::is_text(mem) {
-        vec2(Video::cols(mem) as f32 * cw, Video::rows(mem) as f32 * ch)
-    } else {
-        vec2(640.0, 400.0)
+    let (cols, rows) = (Video::cols(mem) as f32, Video::rows(mem) as f32);
+    let text = Video::is_text(mem);
+    let ratio = ui.fonts_mut(|f| f.glyph_width(&FontId::monospace(100.0), 'M')) / 100.0;
+    let font_size = match fit {
+        Fit::Whole(max) if text => (max.x / cols / ratio).min(max.y / rows / 1.25).floor().max(4.0),
+        Fit::Cursor(max, limit) if text => (max.x / cols / ratio).min(limit).min(max.y / 1.25).floor().max(4.0),
+        _ => app.screen.font_size,
+    };
+    let font = FontId::monospace(font_size);
+    let (cw, ch) = match fit {
+        Fit::Zoom => (ui.fonts_mut(|f| f.glyph_width(&font, 'M')).ceil(), (font_size * 1.25).ceil()),
+        _ => (ui.fonts_mut(|f| f.glyph_width(&font, 'M')), font_size * 1.25),
+    };
+    // Rows shown: all, or those around the cursor that fit.
+    let (first_row, shown_rows) = match fit {
+        Fit::Cursor(max, _) if text => {
+            let shown = ((max.y / ch).floor() as u16).clamp(1, rows as u16);
+            let (_, cr) = Video::cursor(mem, Video::page(mem));
+            (cr.min(rows as u16 - 1).saturating_add(1).saturating_sub(shown), shown)
+        }
+        _ => (0, rows as u16),
+    };
+    let size = match fit {
+        _ if text => vec2(cols * cw, shown_rows as f32 * ch),
+        Fit::Whole(max) | Fit::Cursor(max, _) => {
+            let k = (max.x / 640.0).min(max.y / 400.0);
+            vec2(640.0 * k, 400.0 * k)
+        }
+        Fit::Zoom => vec2(640.0, 400.0),
     };
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let id = resp.id;
@@ -97,7 +132,7 @@ fn screen_ui(app: &mut App, ui: &mut Ui) {
     painter.rect_filled(rect, 0.0, Color32::BLACK);
     let mem = &app.session.machine.sys.mem;
     if Video::is_text(mem) {
-        draw_text(app, ui, rect, cw, ch, &font);
+        draw_text(app, ui, rect, (cw, ch), (first_row, shown_rows), &font);
     } else if mode == 0x13 {
         let mut img = ColorImage::new([320, 200], vec![Color32::BLACK; 320 * 200]);
         let pal = &app.session.machine.sys.dev.palette;
@@ -130,7 +165,11 @@ fn screen_ui(app: &mut App, ui: &mut Ui) {
     let stroke_color =
         if focused { ui.visuals().selection.bg_fill } else { ui.visuals().widgets.noninteractive.bg_stroke.color };
     painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
+    resp
+}
 
+fn screen_ui(app: &mut App, ui: &mut Ui) {
+    let focused = screen_view(app, ui, Fit::Zoom).has_focus();
     ui.horizontal(|ui| {
         let waiting = app.session.machine.is_waiting_input();
         if waiting {
@@ -166,7 +205,8 @@ fn screen_ui(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn draw_text(app: &App, ui: &Ui, rect: Rect, cw: f32, ch: f32, font: &FontId) {
+/// Draws text rows `first..first + shown` of the screen into `rect`.
+fn draw_text(app: &App, ui: &Ui, rect: Rect, (cw, ch): (f32, f32), (first, shown): (u16, u16), font: &FontId) {
     let mem = &app.session.machine.sys.mem;
     let painter = ui.painter_at(rect);
     let page = Video::page(mem);
@@ -175,13 +215,16 @@ fn draw_text(app: &App, ui: &Ui, rect: Rect, cw: f32, ch: f32, font: &FontId) {
     let blink_enabled = mem.read8(video::BDA + 0x65) & 0x20 != 0;
     let time = ui.input(|i| i.time);
     let blink_on = (time * 2.0) as i64 % 2 == 0;
-    for r in 0..rows {
+    for r in first..(first + shown).min(rows) {
         for c in 0..cols {
             let (chr, attr) = Video::read_cell(mem, page, c, r);
             let bg_idx = if blink_enabled { (attr >> 4) & 7 } else { attr >> 4 };
             let fg = CGA[(attr & 15) as usize];
             let bg = CGA[bg_idx as usize];
-            let cell = Rect::from_min_size(pos2(rect.left() + c as f32 * cw, rect.top() + r as f32 * ch), vec2(cw, ch));
+            let cell = Rect::from_min_size(
+                pos2(rect.left() + c as f32 * cw, rect.top() + (r - first) as f32 * ch),
+                vec2(cw, ch),
+            );
             if bg_idx != 0 {
                 painter.rect_filled(cell, 0.0, bg);
             }
@@ -212,10 +255,10 @@ fn draw_text(app: &App, ui: &Ui, rect: Rect, cw: f32, ch: f32, font: &FontId) {
     let shape = mem.read16(video::BDA_CURSOR_SHAPE);
     if shape & 0x2000 == 0 && blink_on {
         let (cc, cr) = Video::cursor(mem, page);
-        if cc < cols && cr < rows {
+        if cc < cols && (first..first + shown).contains(&cr) {
             let (_, attr) = Video::read_cell(mem, page, cc, cr);
             let x = rect.left() + cc as f32 * cw;
-            let y = rect.top() + cr as f32 * ch;
+            let y = rect.top() + (cr - first) as f32 * ch;
             painter.rect_filled(
                 Rect::from_min_max(pos2(x, y + ch - 3.0), pos2(x + cw, y + ch - 1.0)),
                 0.0,
@@ -262,7 +305,7 @@ pub fn paste_keys(m: &mut rustemu_core::Machine, text: &str) {
 }
 
 /// Paste from the menu or the button (egui only delivers the clipboard with ⌘V events).
-fn paste_from_clipboard(app: &mut App) {
+pub fn paste_from_clipboard(app: &mut App) {
     if let Some(text) = crate::platform::read_clipboard() {
         paste_keys(&mut app.session.machine, &text);
     }

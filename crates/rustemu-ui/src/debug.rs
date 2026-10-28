@@ -41,7 +41,7 @@ pub fn debug_windows(app: &mut App, ctx: &egui::Context) {
 }
 
 /// Parses `seg:off` (hex) or a linear hex address; segment may be a register name.
-fn parse_addr(app: &App, s: &str) -> Option<u32> {
+pub fn parse_addr(app: &App, s: &str) -> Option<u32> {
     let s = s.trim();
     let hex = |t: &str| -> Option<u32> {
         let t = t.trim().trim_end_matches(['h', 'H']);
@@ -372,6 +372,40 @@ fn log_ui(app: &mut App, ui: &mut Ui) {
             ui.label(RichText::new(l).monospace().color(crate::colors::warn(ui)));
         }
     });
+}
+
+/// Near target offset of a disassembled `CALL`/`JMP`/`Jcc`/`LOOP`/`JCXZ` (`"CALL 0150h"` -> 0x150).
+pub fn jump_target(text: &str) -> Option<u16> {
+    let (mnem, arg) = text.split_once(' ')?;
+    if !(mnem.starts_with('J') || mnem == "CALL" || mnem.starts_with("LOOP")) || arg.contains(['[', ':', ' ']) {
+        return None;
+    }
+    u16::from_str_radix(arg.strip_suffix('h')?, 16).ok()
+}
+
+/// Finds the address to start the disassembly at so that the list stays stable while stepping.
+pub fn disasm_start(app: &mut App, rows: usize) -> u32 {
+    if app.code_view_pinned {
+        return app.code_view_start;
+    }
+    let m = &app.session.machine;
+    let pc = m.cpu.pc();
+    let mut a = app.code_view_start;
+    let ip0 = m.cpu.ip.wrapping_sub(pc.wrapping_sub(a) as u16);
+    let mut ip = ip0;
+    for _ in 0..rows.saturating_sub(3) {
+        if a == pc {
+            return app.code_view_start;
+        }
+        let ins = rustemu_core::disasm::disassemble(m.sys.mem.slice(a, 8), ip);
+        a += ins.len as u32;
+        ip = ip.wrapping_add(ins.len as u16);
+        if a > pc {
+            break;
+        }
+    }
+    app.code_view_start = pc;
+    pc
 }
 
 #[cfg(test)]

@@ -9,14 +9,14 @@ rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 if [ "$UNIVERSAL" = 1 ]; then
   for t in aarch64-apple-darwin x86_64-apple-darwin; do
-    cargo build --release --target $t -p rustemu-app -p rustemu-cli
+    cargo build --release --target $t -p rustemu-desktop -p rustemu-cli
   done
   for b in RustEmu8086 rustemu; do
     lipo -create -output "$BUNDLE/Contents/MacOS/$b" \
       "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
   done
 else
-  cargo build --release -p rustemu-app -p rustemu-cli
+  cargo build --release -p rustemu-desktop -p rustemu-cli
   cp target/release/RustEmu8086 "$BUNDLE/Contents/MacOS/RustEmu8086"
   cp target/release/rustemu "$BUNDLE/Contents/MacOS/rustemu"
 fi
@@ -24,7 +24,7 @@ fi
 # Icon
 ICONSET=target/release/bundle/RustEmu8086.iconset
 rm -rf "$ICONSET" && mkdir -p "$ICONSET"
-cargo run --quiet --release -p rustemu-app --example make_icon -- target/release/bundle/icon_1024.png
+cargo run --quiet --release -p rustemu-ui --example make_icon -- target/release/bundle/icon_1024.png
 for s in 16 32 128 256 512; do
   sips -z $s $s target/release/bundle/icon_1024.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
   d=$((s * 2))

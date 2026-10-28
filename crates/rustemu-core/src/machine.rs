@@ -853,6 +853,12 @@ impl Machine {
         self.history.len()
     }
 
+    /// CPU state before each recorded step, oldest first (the step-back history; the execution
+    /// trace of the GUI).
+    pub fn history_cpus(&self) -> impl DoubleEndedIterator<Item = &Cpu> + ExactSizeIterator {
+        self.history.iter().map(|s| &s.cpu)
+    }
+
     pub fn clear_history(&mut self) {
         self.history.clear();
     }

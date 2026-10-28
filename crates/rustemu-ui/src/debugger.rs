@@ -65,12 +65,12 @@ pub fn show_location(app: &mut App, file: usize, line: u32) {
     }
 }
 
-fn file_line(app: &App, file: usize, line: u32) -> String {
+pub fn file_line(app: &App, file: usize, line: u32) -> String {
     let name = app.source_files.get(file).map_or("?", |f| f.0.as_str());
     format!("{name}:{line}")
 }
 
-fn source_text(app: &App, file: usize, line: u32) -> String {
+pub fn source_text(app: &App, file: usize, line: u32) -> String {
     app.source_files
         .get(file)
         .and_then(|f| f.1.get(line as usize - 1))
@@ -384,7 +384,7 @@ fn call_stack_rows(app: &App) -> Vec<Row> {
     rows
 }
 
-fn call_stack_ui(app: &mut App, ui: &mut Ui) {
+pub fn call_stack_ui(app: &mut App, ui: &mut Ui) {
     if !app.loaded() {
         ui.weak("No program loaded.");
         return;

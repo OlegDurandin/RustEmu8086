@@ -173,6 +173,12 @@ impl Breakpoint {
     }
 }
 
+impl Default for Breakpoint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// "Stop on condition" (checked after every instruction while running).
 #[derive(Default)]
 pub struct StopCondition {
@@ -305,6 +311,11 @@ pub struct App {
     pub bookmarks: std::collections::BTreeSet<u32>,
     /// Undo (`true`) / redo (`false`) requested from the Edit menu.
     pub pending_undo: Option<bool>,
+    /// A front end with a fixed theme of its own (the tablet layout) sets it here; it replaces the
+    /// theme setting.
+    pub fixed_theme: Option<fn(&egui::Context)>,
+    /// Colour of the current instruction in the editor (default: [`crate::colors::info`]).
+    pub current_line_color: Option<egui::Color32>,
 }
 
 #[derive(Clone)]
@@ -390,6 +401,8 @@ impl App {
             calculator: Default::default(),
             bookmarks: Default::default(),
             pending_undo: None,
+            fixed_theme: None,
+            current_line_color: None,
         };
         app.windows = app.settings.windows.clone();
         app.windows.about = false;
@@ -406,6 +419,10 @@ impl App {
     }
 
     pub fn apply_theme(&self, ctx: &egui::Context) {
+        if let Some(apply) = self.fixed_theme {
+            apply(ctx);
+            return;
+        }
         ctx.set_theme(match self.settings.theme {
             ThemeChoice::Light => egui::ThemePreference::Light,
             ThemeChoice::Dark => egui::ThemePreference::Dark,
@@ -1277,7 +1294,7 @@ impl App {
         } else {
             line
         };
-        self.bp_lines.entry((file, line)).or_insert_with(Breakpoint::new);
+        self.bp_lines.entry((file, line)).or_default();
         self.sync_breakpoints();
     }
 
@@ -1565,17 +1582,15 @@ impl App {
     }
 }
 
-impl eframe::App for App {
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+impl App {
+    /// Saves the settings (`eframe::App::save` of the front ends).
+    pub fn persist(&mut self, storage: &mut dyn eframe::Storage) {
         self.store_settings();
         eframe::set_value(storage, eframe::APP_KEY, &self.settings);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        self.shortcuts(&ctx);
-        self.tick(&ctx);
-        crate::ui::main_ui(self, ui);
+    /// Asks to save unsaved changes when the window is being closed.
+    pub fn confirm_close(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) && self.dirty() && self.confirm_discard.is_none() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm_discard = Some(PendingAction::Quit);

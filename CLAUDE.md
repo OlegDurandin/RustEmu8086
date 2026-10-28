@@ -13,7 +13,9 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
 | `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
-| `crates/rustemu-app` | GUI на `eframe/egui` 0.37 (рендерер wgpu): библиотека `rustemu_app` (`lib.rs`) + бинарь `RustEmu8086` (`main.rs`) + `android_main` (Android, cdylib); сервисы ОС — `platform.rs` (см. этап 5 и 6.7). |
+| `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, окна отладки/инструментов и диалоги (`windows::shared_windows`), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
+| `crates/rustemu-desktop` | Бинарь `RustEmu8086` (macOS): интерфейс Emu8086 — главное окно с меню/тулбаром (`ui.rs`), окно эмулятора и исходника (`emulator.rs`), `DesktopApp`; UI-тесты `ui_tests.rs`. |
+| `crates/rustemu-tablet` | Интерфейс iPadOS/Android (см. 6.7): `TabletApp` + `TabletState`, библиотека с `run()` и `android_main` (cdylib) + бинарь `rustemu-tablet` (iPadOS; на Mac — для разработки). |
 
 ### Ключевые решения
 - **Прерывания — «настоящие».** IVT в 0000:0000 указывает на заглушки `F000:1000+4*n`, заглушка —
@@ -77,9 +79,11 @@ cargo test --workspace
 cargo run -p rustemu-cli -- run examples/hello.asm
 cargo run -p rustemu-cli -- run examples/calc.asm --input '12\n30\n'
 cargo run -p rustemu-cli -- asm examples/hello_exe.asm -l -s
-cargo run -p rustemu-app            # GUI (можно передать путь к .asm)
-cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон в target/ui-snapshots/
+cargo run -p rustemu-desktop        # GUI (можно передать путь к .asm)
+cargo run -p rustemu-tablet         # интерфейс планшета в окне на Mac
+cargo test -p rustemu-desktop -p rustemu-tablet  # UI-тесты + PNG-снимки в target/ui-snapshots/
 ./scripts/bundle_macos.sh        # RustEmu8086.app
+./scripts/run_ios_sim.sh         # iPad-симулятор (rustup target add aarch64-apple-ios-sim)
 ```
 
 ## План работ (статус: [ ] — не начато, [~] — в работе, [x] — готово)
@@ -128,11 +132,13 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
 - [x] 4.1 `rustemu asm` (-l листинг, -s символы), `rustemu run`, `rustemu disasm`
 - [x] 4.2 Интеграционные тесты на примерах
 
-### Этап 5. GUI (`rustemu-app`, eframe/egui 0.37)
-Модули: `app.rs` (состояние, файлы, compile/emulate, цикл выполнения, горячие клавиши), `ui.rs` (меню,
-тулбар, сообщения, диалоги, инструменты), `editor.rs` + `highlight.rs`, `emulator.rs` (окно эмулятора и
-исходника), `screen.rs`, `debug.rs`, `devices_ui.rs`, `examples.rs` (встроенные `examples/*.asm`),
-`help.rs`, `reference.rs` + `reference_ui.rs`, `debugger.rs`, `fonts.rs`, `ui_tests.rs` (kittest, PNG-снимки в `target/ui-snapshots/`).
+### Этап 5. GUI (eframe/egui 0.37)
+`rustemu-ui`: `app.rs` (состояние, файлы, compile/emulate, цикл выполнения, горячие клавиши), `windows.rs`
+(общие диалоги и инструменты), `editor.rs` + `highlight.rs`, `screen.rs`, `debug.rs` (+ начало дизассемблера
+`disasm_start`), `devices_ui.rs`, `examples.rs` (встроенные `examples/*.asm`), `help.rs`, `reference.rs` +
+`reference_ui.rs`, `debugger.rs`, `fonts.rs`. `rustemu-desktop`: `ui.rs` (меню, тулбар, сообщения, статус),
+`emulator.rs` (окно эмулятора и исходника), `ui_tests.rs` (kittest, PNG-снимки в `target/ui-snapshots/`).
+`rustemu-tablet` — см. 6.7.
 - [x] 5.1 Редактор: подсветка, номера строк, отметки ошибок, переход к строке по клику на ошибку,
       открыть/сохранить/недавние, примеры, compile (⌘B, пишет .com/.exe + .lst + .symbol), emulate (F9)
 - [x] 5.2 Окно эмулятора: редактируемые регистры (изменённые — красным), дизассемблер от CS:IP,
@@ -149,7 +155,7 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
       подсказка при наведении, F1/⌘-клик открывает статью (для `INT nn` функция берётся из `mov ah, ..` выше).
       Тест: все примеры справочника собираются, все мнемоники ассемблера описаны
 - [x] 5.7 `scripts/bundle_macos.sh` → `target/release/bundle/RustEmu8086.app` + `RustEmu8086-<версия>-macos.zip`,
-      ad-hoc подпись; `UNIVERSAL=1` — arm64 + x86_64 через `lipo` (иконка: `cargo run -p rustemu-app --example make_icon`)
+      ad-hoc подпись; `UNIVERSAL=1` — arm64 + x86_64 через `lipo` (иконка: `cargo run -p rustemu-ui --example make_icon`)
 - [x] 5.8 Редактор: поиск/замена (⌘F, ⌘G/⇧⌘G), переход к строке (⌘L), комментирование блока (⌘/) — `find.rs`
 - [x] 5.10 Прозрачность макросов: `Line/LineInfo.origin` — строка в определении макроса; окно исходника
       показывает код `emu8086.inc` при шаге внутри макроса/процедуры (плашка + строка вызова), подсказки
@@ -186,10 +192,20 @@ cargo test -p rustemu-app           # UI-тесты + PNG-снимки окон 
 ### Этап 6. Полировка
 - [x] 6.1 Сравнение с Emu8086: корпус из 84 оригинальных примеров (сборка + выполнение), устройства по
       исходникам оригинала, параметры командной строки, виртуальная дискета, шаблоны New
-- [~] 6.7 Планшеты (iPadOS, Android) — заготовка: wgpu везде, `Cargo.toml` по платформам (`rfd` и clipboard —
-      только desktop; android-native-activity), `platform.rs` (диалоги/буфер/URL/папка данных; на мобильных —
-      заглушки), lib + точки входа. `cargo check --target aarch64-apple-ios` проходит. Не сделано: файлы и буфер
-      на планшетах, сенсорный ввод экрана, раскладка UI, упаковка (Xcode / NDK)
+- [~] 6.7 Планшеты (iPadOS, Android) — крейт `rustemu-tablet`: wgpu везде, зависимости по платформам (`rfd` и
+      clipboard — только desktop, в `rustemu-ui`; objc2 и android-native-activity — в `rustemu-tablet`),
+      `rustemu_ui::platform` (диалоги/буфер/URL/папка данных; на мобильных — заглушки). iPad-симулятор:
+      `scripts/run_ios_sim.sh` (Info.plist со сценой; `ios.rs`: окно winit привязывается к UIScene —
+      `attach_to_scene`, Enter системной клавиатуры — подмена `insertText:` в `catch_return_key`; лимиты wgpu ≤
+      адаптера в `rustemu_ui::native_options`). Android — только `cargo check`. Модули: `lib.rs` (`TabletApp`,
+      `TabletState`, `tablet_ui`), `theme.rs` (тёмная тема через `App::fixed_theme`), `widgets.rs` (иконки,
+      кнопки, карточки), `bars.rs` (верхняя панель Run/Pause/Step/Reset, вкладки, меню ⋮, статус), `tabs.rs`
+      (раскладка Editor / Debugger / Memory; узкое окно — стопкой, `left_width`), `cards.rs`, `memory.rs`
+      (`MemoryView`: hex-редактор, инспектор, сегменты, стек, карта), `keypad.rs` (экранная клавиатура: US +
+      Esc/Tab/Ctrl/стрелки/F1–F10/Ins…PgDn, Shift/Ctrl на одну клавишу, открывается при `is_waiting_input`;
+      рядом экран `screen::Fit::Cursor`), `tests.rs` (снимки `30_tablet_*`, `31_tablet_keyboard*`). Трасса —
+      `Machine::history_cpus`. Не сделано: файлы и буфер на планшетах, стрелки системной клавиатуры в
+      редакторе (winit 0.30 шлёт только текст), подпись/NDK
 - [ ] 6.6 Синтаксис FASM (`#fasm#`) — не поддерживается
 - [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, масштаб экрана, задержка,
       открытые окна (положения хранит egui), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —
