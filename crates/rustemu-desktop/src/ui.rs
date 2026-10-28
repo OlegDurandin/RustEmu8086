@@ -176,6 +176,7 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
                 (Tab::Instructions, "Instruction set (F1)"),
                 (Tab::Interrupts, "BIOS and DOS interrupts"),
                 (Tab::Directives, "Assembler directives"),
+                (Tab::Nasm, "NASM syntax"),
                 (Tab::Quick, "Quick reference"),
             ] {
                 if ui.button(label).clicked() {

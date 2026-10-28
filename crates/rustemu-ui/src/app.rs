@@ -44,6 +44,8 @@ pub enum ThemeChoice {
 const DRIVE_KEY: &str = "dos_drive";
 
 pub const RELEASES_URL: &str = "https://github.com/OlegDurandin/RustEmu8086/releases";
+pub const REPO_URL: &str = "https://github.com/OlegDurandin/RustEmu8086";
+pub const WEB_URL: &str = "https://olegdurandin.github.io/RustEmu8086/";
 
 /// Settings persisted between runs.
 #[derive(Serialize, Deserialize, Clone)]

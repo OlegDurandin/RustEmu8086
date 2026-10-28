@@ -418,11 +418,71 @@ fn tools(app: &mut App, ctx: &egui::Context) {
     app.windows.converter = open;
 
     let mut open = app.windows.about;
-    egui::Window::new("About").open(&mut open).collapsible(false).show(ctx, |ui| {
-        ui.heading("RustEmu8086");
-        ui.label(format!("version {}", env!("CARGO_PKG_VERSION")));
-        ui.label("8086 assembler, emulator and debugger for macOS,");
-        ui.label("compatible with Emu8086 programs.");
-    });
+    egui::Window::new("About")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, about_ui);
     app.windows.about = open;
+}
+
+/// A list item whose wrapped lines stay to the right of the bullet.
+pub fn bullet(ui: &mut Ui, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.label("•");
+        ui.add(egui::Label::new(text).wrap());
+    });
+}
+
+/// Where this build runs.
+fn platform_name() -> &'static str {
+    if cfg!(target_arch = "wasm32") {
+        "web version"
+    } else if cfg!(target_os = "ios") {
+        "iPadOS"
+    } else if cfg!(target_os = "android") {
+        "Android"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else {
+        "Linux"
+    }
+}
+
+fn about_ui(ui: &mut Ui) {
+    ui.set_max_width(440.0);
+    ui.heading("RustEmu8086");
+    ui.label(format!("version {} · {}", env!("CARGO_PKG_VERSION"), platform_name()));
+    ui.add_space(6.0);
+    ui.label("8086 assembler, emulator and debugger, compatible with Emu8086 programs.");
+    ui.add_space(4.0);
+    for line in [
+        "Emu8086 (MASM) and NASM syntax, COM / EXE / BIN / boot sector output",
+        "source-level debugger: breakpoints with conditions, watch, call stack, step back",
+        "BIOS and DOS services, a virtual drive, floppies and the Emu8086 virtual devices",
+        "the desktop layout of Emu8086 and a touch layout for tablets",
+        "the CPU is checked against 2.9 million tests recorded on a real 8088",
+    ] {
+        bullet(ui, line);
+    }
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        for (name, url) in [
+            ("source code (GitHub)", crate::app::REPO_URL),
+            ("web version", crate::app::WEB_URL),
+            ("releases", crate::app::RELEASES_URL),
+        ] {
+            if ui.link(name).on_hover_text(url).clicked() {
+                crate::platform::open_url(url);
+            }
+        }
+    });
+    ui.add_space(8.0);
+    ui.label("MIT License · © 2026 Oleg Durandin");
+    ui.weak(
+        "Written in Rust with egui. RustEmu8086 is an independent program, not affiliated with the authors of Emu8086.",
+    );
 }

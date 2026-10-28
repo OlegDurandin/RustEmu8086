@@ -1,6 +1,6 @@
 name: Release
 
-# Pushing a tag like v0.1.0 builds the universal RustEmu8086.app and publishes it as a GitHub release.
+# Pushing a tag like v0.2.0 builds the universal RustEmu8086.app and publishes it as a GitHub release.
 on:
   push:
     tags: ['v*']
@@ -25,9 +25,12 @@ jobs:
         run: cargo test --workspace
       - name: Build RustEmu8086.app (universal)
         run: UNIVERSAL=1 ./scripts/bundle_macos.sh
+      # The description comes from release-notes/<tag>.md when there is one, otherwise GitHub writes it.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          NOTES="release-notes/$GITHUB_REF_NAME.md"
+          if [ -f "$NOTES" ]; then set -- --notes-file "$NOTES"; else set -- --generate-notes; fi
           gh release create "$GITHUB_REF_NAME" target/release/bundle/RustEmu8086-*-macos.zip \
-            --title "RustEmu8086 $GITHUB_REF_NAME" --generate-notes
+            --title "RustEmu8086 $GITHUB_REF_NAME" "$@"
