@@ -55,6 +55,11 @@ fn columns(r: Rect, (left, mid, _): (f32, f32, f32)) -> (Rect, Rect, Rect) {
     (a, b, c)
 }
 
+/// Height of an output card `w` wide: room for an 80x25 screen (16:10) above its hint line.
+fn output_height(w: f32) -> f32 {
+    w * 0.625 + HEAD_H + 50.0
+}
+
 fn regs_and_flags(app: &mut App, ui: &mut Ui, rect: Rect) {
     let flags_w = 120.0;
     let (r, f) = split_x(rect, rect.width() - flags_w - GAP);
@@ -84,8 +89,7 @@ pub(crate) fn editor_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: 
             // The keyboard sheet shows the screen.
             memory_card(app, &mut t.mem, ui, right);
         } else {
-            // Room for an 80x25 screen (16:10) above its hint line.
-            let out_h = (right.width() * 0.625 + HEAD_H + 50.0).min(right.height() * 0.6);
+            let out_h = output_height(right.width()).min(right.height() * 0.6);
             let (out, mem) = split_y(right, out_h);
             output_card(app, t, ui, out);
             memory_card(app, &mut t.mem, ui, mem);
@@ -116,8 +120,11 @@ pub(crate) fn editor_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: 
 }
 
 pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
+    // The program's output is shown here too, unless the on-screen keyboard (with its own large
+    // screen) is open.
+    let show_output = !t.keypad.open;
     if let Some(cols) = three_columns(rect.width(), rect.height(), &DEBUGGER_COLUMNS) {
-        // Landscape: disassembly | registers, watch, breakpoints | call stack, trace.
+        // Landscape: disassembly | registers, watch, breakpoints | output, call stack, trace.
         let (code, mid, right) = columns(rect, cols);
         disasm_card(app, ui, code, true);
         let (regs, rest) = split_y(mid, REGS_H.min(mid.height() * 0.5));
@@ -125,6 +132,13 @@ pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect
         let (watch, bps) = split_y(rest, (rest.height() - GAP) * 0.5);
         watch_card(app, ui, watch);
         breakpoints_card(app, t, ui, bps);
+        let right = if show_output {
+            let (out, rest) = split_y(right, output_height(right.width()).min(right.height() * 0.45));
+            output_card(app, t, ui, out);
+            rest
+        } else {
+            right
+        };
         let (calls, trace) = split_y(right, (right.height() * 0.35).max(HEAD_H + 60.0));
         call_stack_card(app, ui, calls);
         trace_card(app, ui, trace);
@@ -135,9 +149,15 @@ pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect
         Some(w) => {
             let (code, right) = split_x(top, w);
             disasm_card(app, ui, code, true);
-            let (regs, calls) = split_y(right, REGS_H.min(right.height() * 0.6));
+            let (regs, rest) = split_y(right, REGS_H.min(right.height() * 0.6));
             regs_and_flags(app, ui, regs);
-            call_stack_card(app, ui, calls);
+            if show_output {
+                let (out, calls) = split_y(rest, output_height(rest.width()).min(rest.height() * 0.7));
+                output_card(app, t, ui, out);
+                call_stack_card(app, ui, calls);
+            } else {
+                call_stack_card(app, ui, rest);
+            }
         }
         None => {
             // Narrow window: no call stack.
@@ -148,9 +168,9 @@ pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect
     }
     let Some(bottom) = bottom else { return };
     if bottom.width() < 900.0 {
-        // Narrow window: no room for the trace.
-        let (bps, watch) = split_x(bottom, (bottom.width() - GAP) * 0.5);
-        breakpoints_card(app, t, ui, bps);
+        // Narrow window: the output and the watch (breakpoints are in the disassembly's margin).
+        let (out, watch) = split_x(bottom, (bottom.width() - GAP) * 0.55);
+        output_card(app, t, ui, out);
         watch_card(app, ui, watch);
         return;
     }
