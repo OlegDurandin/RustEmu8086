@@ -39,10 +39,10 @@ pub enum ThemeChoice {
     System,
 }
 
-/// Releases of RustEmu8086 (help -> check for an update).
 /// Storage key of the memory drive C: (see [`App::persist`]).
 const DRIVE_KEY: &str = "dos_drive";
 
+/// Releases of RustEmu8086 (help -> check for an update).
 pub const RELEASES_URL: &str = "https://github.com/OlegDurandin/RustEmu8086/releases";
 pub const REPO_URL: &str = "https://github.com/OlegDurandin/RustEmu8086";
 pub const WEB_URL: &str = "https://olegdurandin.github.io/RustEmu8086/";
@@ -142,6 +142,8 @@ pub struct Windows {
     pub value_viewer: bool,
     /// Files of the memory drive C: (the browser).
     pub drive: bool,
+    /// "my programs": programs saved in the browser.
+    pub programs: bool,
 }
 
 pub struct Message {
@@ -329,6 +331,19 @@ pub struct App {
     /// A front end with a fixed theme of its own (the tablet layout) sets it here; it replaces the
     /// theme setting.
     pub fixed_theme: Option<fn(&egui::Context)>,
+    /// Files live in browser storage (the web version): Save keeps the program in "my programs",
+    /// Open shows them, DOS programs get a drive C: in memory.
+    pub browser: bool,
+    /// Programs saved in the browser, by name.
+    pub programs: crate::programs::Programs,
+    /// The program of `programs` shown in the editor.
+    pub program: Option<String>,
+    /// "save in this browser" dialog: the name being typed.
+    pub save_name: Option<crate::programs::SaveName>,
+    /// A program in the "my programs" window waiting for its deletion to be confirmed.
+    pub program_delete: Option<String>,
+    /// Values last written to the storage, to skip unchanged ones (see [`App::persist`]).
+    persisted: std::collections::HashMap<&'static str, u64>,
     /// Colour of the current instruction in the editor (default: [`crate::colors::info`]).
     pub current_line_color: Option<egui::Color32>,
     /// The tablet layout is shown (set by the tablet front end).
@@ -344,6 +359,10 @@ pub enum PendingAction {
     New,
     Open(Option<PathBuf>),
     Example(usize),
+    /// A program saved in the browser.
+    Program(String),
+    /// A file from the computer (the browser asks for it).
+    Upload,
     Quit,
 }
 
@@ -353,6 +372,7 @@ impl App {
         let mut app = Self::with_settings(settings);
         if let Some(storage) = cc.storage {
             app.restore_drive(storage);
+            app.restore_browser(storage);
         }
         crate::fonts::install(&cc.egui_ctx);
         app.apply_theme(&cc.egui_ctx);
@@ -430,6 +450,12 @@ impl App {
             bookmarks: Default::default(),
             pending_undo: None,
             fixed_theme: None,
+            browser: crate::platform::is_web(),
+            programs: Default::default(),
+            program: None,
+            save_name: None,
+            program_delete: None,
+            persisted: Default::default(),
             current_line_color: None,
             tablet_layout: false,
             can_switch_layout: false,
@@ -447,7 +473,7 @@ impl App {
             _ => app.load_example(0),
         }
         // The browser has no file system: DOS programs get a drive in memory.
-        if crate::platform::is_web() {
+        if app.browser {
             app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
         }
         app
@@ -491,6 +517,7 @@ impl App {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .or_else(|| self.doc_name.clone())
+            .or_else(|| self.example_key.as_ref().and_then(|k| k.strip_prefix("example:")).map(str::to_string))
             .unwrap_or_else(|| "untitled.asm".into())
     }
 
@@ -515,6 +542,7 @@ impl App {
         self.store_session();
         self.path = None;
         self.doc_name = None;
+        self.program = None;
         self.example_key = None;
         self.clear_session();
         self.bookmarks.clear();
@@ -526,8 +554,8 @@ impl App {
     }
 
     pub fn open_dialog(&mut self) {
-        if crate::platform::is_web() {
-            self.pending_upload = Some(crate::platform::UploadFor::Open);
+        if self.browser {
+            self.windows.programs = true;
             return;
         }
         let dir = self.path.as_ref().and_then(|p| p.parent());
@@ -551,6 +579,7 @@ impl App {
                 self.saved_text = self.text.clone();
                 self.path = Some(p.to_path_buf());
                 self.doc_name = None;
+                self.program = None;
                 self.messages.clear();
                 self.error_lines.clear();
                 self.add_recent(p);
@@ -574,15 +603,8 @@ impl App {
             }
             return;
         }
-        self.store_session();
-        self.text = String::from_utf8_lossy(&u.bytes).replace("\r\n", "\n");
-        self.saved_text = self.text.clone();
-        self.path = None;
-        self.doc_name = Some(u.name.clone());
-        self.example_key = None;
-        self.messages.clear();
-        self.error_lines.clear();
-        self.status = format!("Opened {}", u.name);
+        let text = String::from_utf8_lossy(&u.bytes).replace("\r\n", "\n");
+        self.import_program(&u.name, text);
     }
 
     /// Asks the browser for the requested file and opens the files that arrived.
@@ -621,9 +643,17 @@ impl App {
         self.settings.recent.truncate(10);
     }
 
+    /// Saves the file (in the browser: as a program of "my programs"; a new one asks for its name
+    /// first and returns `false`).
     pub fn save(&mut self) -> bool {
-        if crate::platform::is_web() {
-            return self.download_source();
+        if self.browser {
+            match self.program.clone() {
+                Some(name) => {
+                    self.save_program(&name);
+                    return true;
+                }
+                None => return self.save_as(),
+            }
         }
         match self.path.clone() {
             Some(p) => self.save_to(&p),
@@ -632,8 +662,9 @@ impl App {
     }
 
     pub fn save_as(&mut self) -> bool {
-        if crate::platform::is_web() {
-            return self.download_source();
+        if self.browser {
+            self.save_name = Some(crate::programs::SaveName { text: self.file_name(), then: None });
+            return false;
         }
         let dir = self.path.as_ref().and_then(|p| p.parent());
         match crate::platform::save_file(&[("Assembly", &["asm"])], dir, &self.file_name()) {
@@ -643,12 +674,10 @@ impl App {
     }
 
     /// Saves the editor text as a download (the browser).
-    fn download_source(&mut self) -> bool {
+    pub fn download_source(&mut self) {
         let name = self.file_name();
         crate::platform::download(&name, self.text.as_bytes());
-        self.saved_text = self.text.clone();
         self.status = format!("Downloaded {name}");
-        true
     }
 
     fn save_to(&mut self, p: &Path) -> bool {
@@ -674,6 +703,7 @@ impl App {
         self.store_session();
         self.path = None;
         self.doc_name = None;
+        self.program = None;
         self.example_key = Some(format!("example:{name}"));
         self.text = src.to_string();
         self.saved_text = self.text.clone();
@@ -689,7 +719,7 @@ impl App {
     pub fn session_key(&self) -> Option<String> {
         match &self.path {
             Some(p) => Some(p.to_string_lossy().into_owned()),
-            None => self.example_key.clone(),
+            None => self.example_key.clone().or_else(|| self.program.as_ref().map(|n| format!("program:{n}"))),
         }
     }
 
@@ -815,6 +845,8 @@ impl App {
             PendingAction::Open(None) => self.open_dialog(),
             PendingAction::Open(Some(p)) => self.open_path(&p),
             PendingAction::Example(i) => self.load_example(i),
+            PendingAction::Program(name) => self.open_program(&name),
+            PendingAction::Upload => self.pending_upload = Some(crate::platform::UploadFor::Open),
             PendingAction::Quit => {}
         }
     }
@@ -877,7 +909,7 @@ impl App {
     /// Compile and write the output file next to the source.
     pub fn compile(&mut self) {
         let Some(p) = self.assemble() else { return };
-        if crate::platform::is_web() {
+        if self.browser {
             let stem = self.file_name();
             let stem = stem.rsplit_once('.').map_or(stem.as_str(), |(s, _)| s);
             let name = format!("{stem}.{}", p.format.extension());
@@ -1724,13 +1756,31 @@ impl App {
 }
 
 impl App {
-    /// Saves the settings (`eframe::App::save` of the front ends).
+    /// Saves the settings (`eframe::App::save` of the front ends); in the browser also drive C:,
+    /// "my programs" and the editor. Values that did not change since the last call are not
+    /// written again.
     pub fn persist(&mut self, storage: &mut dyn eframe::Storage) {
         use base64::Engine;
         self.store_settings();
-        eframe::set_value(storage, eframe::APP_KEY, &self.settings);
+        let settings = ron::ser::to_string(&self.settings).unwrap_or_default();
+        self.put(storage, eframe::APP_KEY, settings);
         if let Some(drive) = self.session.machine.dos_memory_drive() {
-            storage.set_string(DRIVE_KEY, base64::engine::general_purpose::STANDARD.encode(drive.to_bytes()));
+            let drive = base64::engine::general_purpose::STANDARD.encode(drive.to_bytes());
+            self.put(storage, DRIVE_KEY, drive);
+        }
+        if self.browser {
+            self.persist_browser(storage);
+        }
+    }
+
+    /// Writes `value` under `key` unless it is what was written last time.
+    pub(crate) fn put(&mut self, storage: &mut dyn eframe::Storage, key: &'static str, value: String) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        value.hash(&mut h);
+        let hash = h.finish();
+        if self.persisted.insert(key, hash) != Some(hash) {
+            storage.set_string(key, value);
         }
     }
 
