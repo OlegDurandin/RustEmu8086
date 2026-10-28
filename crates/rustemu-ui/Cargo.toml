@@ -33,6 +33,8 @@ egui_kittest = { workspace = true, optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # System clipboard for Cmd+C / Cmd+V.
 eframe = { workspace = true, features = ["clipboard"] }
+# egui's emoji fonts (the browser gets subsets of them, src/fonts.rs).
+egui = { workspace = true, features = ["monochrome_emoji_fonts"] }
 
 # ---- the browser (rustemu-web) ---------------------------------------------------------------------
 [target.'cfg(target_arch = "wasm32")'.dependencies]
