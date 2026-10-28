@@ -151,12 +151,23 @@ impl Session {
         Ok(())
     }
 
-    /// Assembles (for `.asm`) or reads an executable file and loads it.
+    /// Assembles (for `.asm`) or reads an executable file and loads it; DOS file functions then
+    /// see the file's folder as drive C:.
     pub fn load_path(&mut self, path: &Path) -> Result<(), String> {
-        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.load_named(&path.to_string_lossy(), bytes)?;
         let root =
             path.parent().map(|dir| if dir.as_os_str().is_empty() { PathBuf::from(".") } else { dir.to_path_buf() });
+        if let Some(root) = root {
+            self.machine.set_dos_root(root);
+        }
+        Ok(())
+    }
+
+    /// Loads the contents of file `name` (an executable by its extension, otherwise assembly source),
+    /// e.g. a file opened in the browser.
+    pub fn load_named(&mut self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
+        let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         let mut floppy = None;
         let result = match ext.as_str() {
             "com" => self.load_bytes(Loadable::Com, bytes),
@@ -172,18 +183,14 @@ impl Session {
             _ => {
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
-                let prog =
-                    rustemu_asm::assemble(&path.to_string_lossy(), &text, &mut loader).map_err(|e| e.to_string())?;
+                let prog = rustemu_asm::assemble(name, &text, &mut loader).map_err(|e| e.to_string())?;
                 self.load_program(prog)
             }
         };
-        if result.is_ok() {
-            if let Some(root) = root {
-                self.machine.set_dos_root(root);
-            }
-            if let Some(floppy) = floppy {
-                self.machine.floppies[0] = floppy;
-            }
+        if result.is_ok()
+            && let Some(floppy) = floppy
+        {
+            self.machine.floppies[0] = floppy;
         }
         result
     }

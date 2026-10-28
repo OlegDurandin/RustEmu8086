@@ -2102,7 +2102,9 @@ name = "rustemu-core"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "js-sys",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -2149,11 +2151,30 @@ dependencies = [
  "egui",
  "egui_kittest",
  "image",
+ "js-sys",
  "rfd",
  "rustemu-asm",
  "rustemu-core",
  "rustemu-session",
  "serde",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
+name = "rustemu-web"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "rustemu-desktop",
+ "rustemu-tablet",
+ "rustemu-ui",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

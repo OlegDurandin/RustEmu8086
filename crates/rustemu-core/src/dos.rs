@@ -709,7 +709,7 @@ fn io_code(e: &std::io::Error) -> u16 {
 /// Local time of the host.
 fn host_now() -> DateTime {
     let secs =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
     let offset = local_utc_offset_secs();
     let ms = secs + offset * 1000;
     let days = ms.div_euclid(86_400_000);
@@ -759,7 +759,13 @@ fn local_utc_offset_secs() -> i64 {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(target_arch = "wasm32")]
+fn local_utc_offset_secs() -> i64 {
+    // getTimezoneOffset() is UTC minus local time, in minutes.
+    -(js_sys::Date::new_0().get_timezone_offset() as i64) * 60
+}
+
+#[cfg(not(any(unix, target_arch = "wasm32")))]
 fn local_utc_offset_secs() -> i64 {
     0
 }

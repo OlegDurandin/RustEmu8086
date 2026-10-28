@@ -68,7 +68,9 @@ impl eframe::App for TabletApp {
     }
 }
 
-/// Runs the application (iPadOS and the Mac: `main.rs`; Android: [`android_main`]).
+/// Runs the application (iPadOS and the Mac: `main.rs`; Android: [`android_main`]). The web
+/// version starts [`TabletApp`] itself.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(options: eframe::NativeOptions) -> eframe::Result {
     eframe::run_native(
         "RustEmu8086",

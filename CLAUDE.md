@@ -14,8 +14,9 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
 | `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, окна отладки/инструментов и диалоги (`windows::shared_windows`), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
-| `crates/rustemu-desktop` | Бинарь `RustEmu8086` (macOS): интерфейс Emu8086 — главное окно с меню/тулбаром (`ui.rs`), окно эмулятора и исходника (`emulator.rs`), `DesktopApp`; UI-тесты `ui_tests.rs`. |
+| `crates/rustemu-desktop` | Интерфейс Emu8086: библиотека (`DesktopApp`, главное окно с меню/тулбаром — `ui.rs`, окно эмулятора и исходника — `emulator.rs`; UI-тесты `ui_tests.rs`) + бинарь `RustEmu8086` (macOS). |
 | `crates/rustemu-tablet` | Интерфейс iPadOS/Android (см. 6.7): `TabletApp` + `TabletState`, библиотека с `run()` и `android_main` (cdylib) + бинарь `rustemu-tablet` (iPadOS; на Mac — для разработки). |
+| `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`), выбирает `DesktopApp` или `TabletApp` (`?ui=`), `?example=…&run`. |
 
 ### Ключевые решения
 - **Прерывания — «настоящие».** IVT в 0000:0000 указывает на заглушки `F000:1000+4*n`, заглушка —
@@ -84,6 +85,7 @@ cargo run -p rustemu-tablet         # интерфейс планшета в о�
 cargo test -p rustemu-desktop -p rustemu-tablet  # UI-тесты + PNG-снимки в target/ui-snapshots/
 ./scripts/bundle_macos.sh        # RustEmu8086.app
 ./scripts/run_ios_sim.sh         # iPad-симулятор (rustup target add aarch64-apple-ios-sim)
+cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0.1:8080 (wasm32-unknown-unknown + trunk)
 ```
 
 ## План работ (статус: [ ] — не начато, [~] — в работе, [x] — готово)
@@ -207,6 +209,11 @@ cargo test -p rustemu-desktop -p rustemu-tablet  # UI-тесты + PNG-сним�
       рядом экран `screen::Fit::Cursor`), `tests.rs` (снимки `30_tablet_*`, `31_tablet_keyboard*`). Трасса —
       `Machine::history_cpus`. Не сделано: файлы и буфер на планшетах, стрелки системной клавиатуры в
       редакторе (winit 0.30 шлёт только текст), подпись/NDK
+- [~] 6.8 Веб-версия (`rustemu-web`, trunk → GitHub Pages, задания `web`/`deploy-web` в CI): WebGPU с откатом на
+      WebGL 2 (`rustemu_ui::wgpu_options`); время — `web-time` (std `Instant` в браузере паникует), часовой пояс —
+      `js_sys::Date`; файлы — `platform::request_upload`/`take_uploads` (rfd `AsyncFileDialog`) и `download`;
+      `App::doc_name` — имя файла без пути, `Session::load_named` — загрузка из байтов. Не сделано: файловая
+      система DOS в памяти (сейчас файловые функции INT 21h возвращают ошибку), шрифт с ☻☼⌂ⁿ, PWA/офлайн
 - [ ] 6.6 Синтаксис FASM (`#fasm#`) — не поддерживается
 - [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, масштаб экрана, задержка,
       открытые окна (положения хранит egui), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —

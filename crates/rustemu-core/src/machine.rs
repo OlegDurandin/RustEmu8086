@@ -190,7 +190,7 @@ struct Snapshot {
     log_len: usize,
     terminated: Option<u8>,
     tick_instr: u64,
-    tick_time: Option<std::time::Instant>,
+    tick_time: Option<web_time::Instant>,
     tick_frac: f64,
     bios_ticks: u32,
     system: Option<Box<SystemSnapshot>>,
@@ -204,7 +204,7 @@ struct SystemSnapshot {
     dos: DosSnapshot,
     mouse: (u16, u16, u16),
     mouse_visible: bool,
-    wait_until: Option<std::time::Instant>,
+    wait_until: Option<web_time::Instant>,
     floppy_lens: Vec<usize>,
     floppy_undo: Vec<(u8, usize, u8)>,
 }
@@ -259,10 +259,10 @@ pub struct Machine {
     /// Timer source: `None` = host clock (18.2 Hz), `Some(n)` = one tick every `n` instructions.
     pub instructions_per_tick: Option<u64>,
     tick_instr: u64,
-    tick_time: Option<std::time::Instant>,
+    tick_time: Option<web_time::Instant>,
     tick_frac: f64,
     /// End of a running INT 15h/86h wait.
-    pub(crate) wait_until: Option<std::time::Instant>,
+    pub(crate) wait_until: Option<web_time::Instant>,
     /// Complete INT 15h/86h waits immediately (tests, headless runs).
     pub instant_waits: bool,
 }
@@ -598,7 +598,7 @@ impl Machine {
                 t
             }
             None => {
-                let now = std::time::Instant::now();
+                let now = web_time::Instant::now();
                 let last = *self.tick_time.get_or_insert(now);
                 let el = now.duration_since(last).as_secs_f64();
                 if el < 0.01 {

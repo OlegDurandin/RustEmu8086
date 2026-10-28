@@ -1,0 +1,27 @@
+[package]
+name = "rustemu-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The web version: the same application compiled to WebAssembly, drawn into a <canvas> with WebGPU
+# (WebGL 2 as a fallback). Large screens get the desktop layout (rustemu-desktop), touch screens and
+# narrow windows the tablet layout (rustemu-tablet); `?ui=desktop` / `?ui=tablet` chooses one.
+# Built with trunk (index.html):
+#   rustup target add wasm32-unknown-unknown && brew install trunk   (or: cargo install trunk)
+#   cd crates/rustemu-web && trunk serve        # http://127.0.0.1:8080, rebuilds on changes
+#   cd crates/rustemu-web && trunk build --release   # the site in crates/rustemu-web/dist/
+
+[[bin]]
+name = "rustemu-web"
+path = "src/main.rs"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rustemu-ui.workspace = true
+rustemu-desktop = { path = "../rustemu-desktop" }
+rustemu-tablet = { path = "../rustemu-tablet" }
+eframe = { workspace = true }
+egui = { workspace = true }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Document", "Element", "HtmlCanvasElement", "HtmlElement", "Location", "MediaQueryList", "Navigator", "UrlSearchParams", "Window"] }

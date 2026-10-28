@@ -6,7 +6,12 @@ license.workspace = true
 
 # The desktop application (macOS; Windows / Linux should work too): the Emu8086-style main window
 # with menus and toolbar, the emulator window with its menus and the source window, drawn around
-# the shared GUI of rustemu-ui. Packaged by scripts/bundle_macos.sh.
+# the shared GUI of rustemu-ui. Packaged by scripts/bundle_macos.sh; the library is also the
+# large-screen layout of the web version (rustemu-web).
+
+[lib]
+name = "rustemu_desktop"
+path = "src/lib.rs"
 
 [[bin]]
 name = "RustEmu8086"
