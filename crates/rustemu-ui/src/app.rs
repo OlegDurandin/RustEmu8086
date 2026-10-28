@@ -221,6 +221,10 @@ pub struct App {
     pub settings: Settings,
     // ---- editor
     pub path: Option<PathBuf>,
+    /// Name of a file without a path (opened in the browser), shown and used for downloads.
+    pub doc_name: Option<String>,
+    /// A file to ask the browser for at the next frame (see `platform::request_upload`).
+    pub pending_upload: Option<crate::platform::UploadFor>,
     pub text: String,
     pub saved_text: String,
     pub messages: Vec<Message>,
@@ -339,6 +343,8 @@ impl App {
         let mut app = App {
             settings,
             path: None,
+            doc_name: None,
+            pending_upload: None,
             text: String::new(),
             saved_text: String::new(),
             messages: Vec::new(),
@@ -439,6 +445,7 @@ impl App {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
+            .or_else(|| self.doc_name.clone())
             .unwrap_or_else(|| "untitled.asm".into())
     }
 
@@ -462,6 +469,7 @@ impl App {
     fn new_from(&mut self, template: &str) {
         self.store_session();
         self.path = None;
+        self.doc_name = None;
         self.example_key = None;
         self.clear_session();
         self.bookmarks.clear();
@@ -473,6 +481,10 @@ impl App {
     }
 
     pub fn open_dialog(&mut self) {
+        if crate::platform::is_web() {
+            self.pending_upload = Some(crate::platform::UploadFor::Open);
+            return;
+        }
         let dir = self.path.as_ref().and_then(|p| p.parent());
         let filters: [crate::platform::Filter; 2] =
             [("Assembly", &["asm", "nasm", "inc", "txt"]), ("All files", &["*"])];
@@ -493,6 +505,7 @@ impl App {
                 self.text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
                 self.saved_text = self.text.clone();
                 self.path = Some(p.to_path_buf());
+                self.doc_name = None;
                 self.messages.clear();
                 self.error_lines.clear();
                 self.add_recent(p);
@@ -505,6 +518,44 @@ impl App {
         }
     }
 
+    /// Opens a file the user uploaded (the browser): an executable is loaded into the emulator,
+    /// anything else goes into the editor.
+    fn open_upload(&mut self, u: crate::platform::Upload) {
+        let ext = Path::new(&u.name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if matches!(ext.as_str(), "com" | "exe" | "bin" | "boot" | "img") {
+            match self.session.load_named(&u.name, u.bytes) {
+                Ok(()) => self.after_binary_load(),
+                Err(e) => self.notice("Load", &e),
+            }
+            return;
+        }
+        self.store_session();
+        self.text = String::from_utf8_lossy(&u.bytes).replace("\r\n", "\n");
+        self.saved_text = self.text.clone();
+        self.path = None;
+        self.doc_name = Some(u.name.clone());
+        self.example_key = None;
+        self.messages.clear();
+        self.error_lines.clear();
+        self.status = format!("Opened {}", u.name);
+    }
+
+    /// Asks the browser for the requested file and opens the files that arrived.
+    fn handle_uploads(&mut self, ctx: &egui::Context) {
+        if let Some(purpose) = self.pending_upload.take() {
+            let filters: [crate::platform::Filter; 2] = [
+                ("Assembly or executable", &["asm", "nasm", "inc", "txt", "com", "exe", "bin"]),
+                ("All files", &["*"]),
+            ];
+            crate::platform::request_upload(ctx, purpose, &filters);
+        }
+        for u in crate::platform::take_uploads() {
+            match u.purpose {
+                crate::platform::UploadFor::Open => self.open_upload(u),
+            }
+        }
+    }
+
     fn add_recent(&mut self, p: &Path) {
         self.settings.recent.retain(|r| r != p);
         self.settings.recent.insert(0, p.to_path_buf());
@@ -512,6 +563,9 @@ impl App {
     }
 
     pub fn save(&mut self) -> bool {
+        if crate::platform::is_web() {
+            return self.download_source();
+        }
         match self.path.clone() {
             Some(p) => self.save_to(&p),
             None => self.save_as(),
@@ -519,11 +573,23 @@ impl App {
     }
 
     pub fn save_as(&mut self) -> bool {
+        if crate::platform::is_web() {
+            return self.download_source();
+        }
         let dir = self.path.as_ref().and_then(|p| p.parent());
         match crate::platform::save_file(&[("Assembly", &["asm"])], dir, &self.file_name()) {
             Some(p) => self.save_to(&p),
             None => false,
         }
+    }
+
+    /// Saves the editor text as a download (the browser).
+    fn download_source(&mut self) -> bool {
+        let name = self.file_name();
+        crate::platform::download(&name, self.text.as_bytes());
+        self.saved_text = self.text.clone();
+        self.status = format!("Downloaded {name}");
+        true
     }
 
     fn save_to(&mut self, p: &Path) -> bool {
@@ -548,6 +614,7 @@ impl App {
         let (name, src) = EXAMPLES[i];
         self.store_session();
         self.path = None;
+        self.doc_name = None;
         self.example_key = Some(format!("example:{name}"));
         self.text = src.to_string();
         self.saved_text = self.text.clone();
@@ -751,6 +818,15 @@ impl App {
     /// Compile and write the output file next to the source.
     pub fn compile(&mut self) {
         let Some(p) = self.assemble() else { return };
+        if crate::platform::is_web() {
+            let stem = self.file_name();
+            let stem = stem.rsplit_once('.').map_or(stem.as_str(), |(s, _)| s);
+            let name = format!("{stem}.{}", p.format.extension());
+            crate::platform::download(&name, &p.file_bytes());
+            self.messages.push(Message { text: format!("downloaded: {name}"), loc: None, error: false });
+            self.status = format!("Compiled to {name}");
+            return;
+        }
         let out = match &self.path {
             Some(src) => src.with_extension(p.format.extension()),
             None => match crate::platform::save_file(&[], None, &format!("program.{}", p.format.extension())) {
@@ -1147,6 +1223,7 @@ impl App {
 
     /// Advances the emulation for this frame.
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.handle_uploads(ctx);
         if self.run == RunMode::Paused || !self.loaded() {
             return;
         }
@@ -1159,7 +1236,7 @@ impl App {
         }
         // Emulation time per frame.
         let frame = std::time::Duration::from_millis(12);
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         match self.run.clone() {
             RunMode::Running if self.settings.step_delay_ms > 0 => {
                 if (now - self.last_step) * 1000.0 >= self.settings.step_delay_ms as f64 {
@@ -1197,7 +1274,7 @@ impl App {
             }
             RunMode::Running => {
                 loop {
-                    let t = std::time::Instant::now();
+                    let t = web_time::Instant::now();
                     let ev = self.session.machine.run(self.instr_per_frame);
                     let el = t.elapsed().as_secs_f64();
                     if ev == Event::Budget {

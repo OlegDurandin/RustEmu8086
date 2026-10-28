@@ -28,7 +28,8 @@ pub mod screen;
 pub mod testing;
 pub mod windows;
 
-/// Window options shared by all platforms (on tablets the window is the whole screen).
+/// Window options shared by all native platforms (on tablets the window is the whole screen).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -46,7 +47,7 @@ pub fn native_options() -> eframe::NativeOptions {
 /// egui's default wgpu setup asks for the WebGPU default limits, which some GPUs do not reach
 /// (the iPad simulator has 15 inter-stage shader variables, not 16): ask for no more than the
 /// adapter offers. egui itself needs far less.
-fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+pub fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
     use eframe::egui_wgpu::{self, WgpuSetup, wgpu};
     let WgpuSetup::CreateNew(mut setup) = egui_wgpu::WgpuConfiguration::default().wgpu_setup else {
         return egui_wgpu::WgpuConfiguration::default();

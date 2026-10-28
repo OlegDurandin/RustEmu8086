@@ -18,15 +18,28 @@ rustemu-session.workspace = true
 eframe = { workspace = true }
 egui = { workspace = true }
 serde = { version = "1", features = ["derive"] }
+web-time = "1"
 # Feature `testing`: helpers for the UI tests of the front ends (src/testing.rs).
 egui_kittest = { workspace = true, optional = true }
 
 # ---- desktop: macOS (Windows / Linux should work too) --------------------------------------------
-[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+[target.'cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))'.dependencies]
 # System clipboard for Cmd+C / Cmd+V (arboard does not support iOS; egui-winit has none on Android).
 eframe = { workspace = true, features = ["clipboard"] }
-# Native open / save dialogs; not available on iOS / Android (see src/platform.rs).
+
+# ---- desktop and the browser ----------------------------------------------------------------------
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+# Open / save dialogs (src/platform.rs): native on the desktop, a file input in the browser; not
+# available on iOS / Android.
 rfd = "0.17"
+
+# ---- the browser (rustemu-web) ---------------------------------------------------------------------
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Uploads and downloads (src/platform.rs).
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Document", "Element", "HtmlAnchorElement", "HtmlElement", "Url", "Window"] }
 
 [dev-dependencies]
 # examples/make_icon.rs

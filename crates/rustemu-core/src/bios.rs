@@ -185,7 +185,7 @@ impl Machine {
             // Wait CX:DX microseconds (real time).
             0x86 => {
                 let us = ((self.cpu.regs[CX] as u64) << 16) | self.cpu.regs[DX] as u64;
-                let now = std::time::Instant::now();
+                let now = web_time::Instant::now();
                 match self.wait_until {
                     _ if self.instant_waits => {}
                     None => {

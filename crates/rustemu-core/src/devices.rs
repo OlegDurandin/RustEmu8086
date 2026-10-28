@@ -52,7 +52,7 @@ pub struct Devices {
     pub air_temperature: i32,
     /// Time base of device simulations.
     pub clock: DeviceClock,
-    last_tick: Option<std::time::Instant>,
+    last_tick: Option<web_time::Instant>,
     thermo_ms: f64,
     /// VGA DAC palette (6-bit components).
     pub palette: [[u8; 3]; 256],
@@ -85,7 +85,7 @@ pub(crate) struct DevicesSnapshot {
     temperature: i32,
     air_temperature: i32,
     clock: DeviceClock,
-    last_tick: Option<std::time::Instant>,
+    last_tick: Option<web_time::Instant>,
     thermo_ms: f64,
     palette_undo: Vec<(usize, [u8; 3])>,
     dac_write_index: u8,
@@ -269,7 +269,7 @@ impl Devices {
     pub fn tick(&mut self, instructions: u64) {
         let ms = match self.clock {
             DeviceClock::RealTime => {
-                let now = std::time::Instant::now();
+                let now = web_time::Instant::now();
                 let last = *self.last_tick.get_or_insert(now);
                 self.last_tick = Some(now);
                 // A paused debugger does not make time jump forward.

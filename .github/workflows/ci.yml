@@ -12,6 +12,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Install NASM (reference assembler for encoding tests)
         run: brew install nasm
@@ -19,6 +20,8 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (web version, WebAssembly)
+        run: cargo clippy --target wasm32-unknown-unknown -p rustemu-web -- -D warnings
       - name: Tests
         run: cargo test --workspace
 
@@ -41,3 +44,38 @@ jobs:
           name: RustEmu8086-macos
           path: target/release/bundle/RustEmu8086-*-macos.zip
           retention-days: 30
+
+  # The web version on GitHub Pages (https://olegdurandin.github.io/RustEmu8086/). Pages must use
+  # "GitHub Actions" as the source (Settings -> Pages).
+  web:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install trunk
+        run: |
+          curl -sSL https://github.com/trunk-rs/trunk/releases/download/v0.22.1/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+      - name: Build the site
+        working-directory: crates/rustemu-web
+        run: trunk build --release --public-url /RustEmu8086/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: crates/rustemu-web/dist
+
+  deploy-web:
+    needs: web
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

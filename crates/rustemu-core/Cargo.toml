@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# std::time::Instant panics in the browser (wasm32-unknown-unknown); web-time is std::time natively.
+web-time = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Local time zone of the browser (DOS date and time).
+js-sys = "0.3"
 
 [dev-dependencies]
 flate2 = "1"
