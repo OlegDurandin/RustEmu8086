@@ -23,6 +23,31 @@ mod web {
         }
     }
 
+    /// Keeps keys the app uses from the browser: F1-F10 (F5 would reload the page), Escape (Safari
+    /// on iPadOS takes the focus away from the page with it) and ⌘ / Ctrl with R, B, E, F, G, L
+    /// (reload, find, address bar...). ⌘⇧R still reloads. eframe gets the events anyway.
+    fn keep_app_keys(window: &web_sys::Window) {
+        use wasm_bindgen::JsCast;
+        let on_key =
+            wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|e: web_sys::KeyboardEvent| {
+                let key = e.key();
+                let f_key =
+                    key.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| (1..=10).contains(&n));
+                let letter = match key.to_ascii_lowercase().as_str() {
+                    "b" | "e" | "f" | "g" | "l" => true,
+                    "r" => !e.shift_key(),
+                    _ => false,
+                };
+                let command = (e.meta_key() || e.ctrl_key()) && letter;
+                if f_key || command || key == "Escape" {
+                    e.prevent_default();
+                }
+            });
+        // Capture phase: before the browser's own handling of the event.
+        let _ = window.add_event_listener_with_callback_and_bool("keydown", on_key.as_ref().unchecked_ref(), true);
+        on_key.forget();
+    }
+
     /// The tablet layout for iPads, touch screens and narrow windows.
     fn auto_tablet(window: &web_sys::Window) -> bool {
         let media = |q: &str| window.match_media(q).ok().flatten().is_some_and(|m| m.matches());
@@ -39,6 +64,7 @@ mod web {
 
         let window = web_sys::window().expect("no window");
         let document = window.document().expect("no document");
+        keep_app_keys(&window);
         let canvas = document
             .get_element_by_id("rustemu_canvas")
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
