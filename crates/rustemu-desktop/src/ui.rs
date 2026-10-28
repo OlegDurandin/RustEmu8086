@@ -307,6 +307,9 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         if ui.button("💾 save").on_hover_text("⌘S").clicked() {
             app.save();
         }
+        if ui.button("🔗 share").on_hover_text("A link that opens this program in the web version").clicked() {
+            app.share = Some(rustemu_ui::share::ShareDialog { run: false });
+        }
         ui.separator();
         if ui.button("⚙ compile").on_hover_text("Assemble and write the executable (⌘B)").clicked() {
             app.compile();

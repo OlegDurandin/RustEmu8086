@@ -40,12 +40,17 @@ pub(crate) fn registers_card(app: &mut App, ui: &mut Ui, rect: Rect) {
             for (names, col) in [(&left[..], 0), (&right[..], 1)] {
                 match names.get(row) {
                     Some(&(name, i)) => {
-                        let name = if col == 1 { format!("  {name}") } else { name.to_string() };
-                        let label = ui.label(RichText::new(name).monospace().size(15.0).color(pal::TEXT)).id;
+                        let label_text = if col == 1 { format!("  {name}") } else { name.to_string() };
+                        let label = ui.label(RichText::new(label_text).monospace().size(15.0).color(pal::TEXT)).id;
                         let old = *reg(&mut prev_c, i);
                         let v = reg(c, i);
-                        let accent = (*v != old).then_some(pal::AMBER);
-                        hex_box(ui, v, 4, accent, box_w, label);
+                        if i < 4 {
+                            // AX..DX as their high and low bytes (AH | AL), like the desktop emulator.
+                            byte_pair(ui, v, old, name, box_w, label);
+                        } else {
+                            let accent = (*v != old).then_some(pal::AMBER);
+                            hex_box(ui, v, 4, accent, box_w, label);
+                        }
                     }
                     None => {
                         ui.label("");
@@ -55,6 +60,20 @@ pub(crate) fn registers_card(app: &mut App, ui: &mut Ui, rect: Rect) {
             }
             ui.end_row();
         }
+    });
+}
+
+/// A general register as two byte boxes (`AX` -> AH, AL), each marked when it changed.
+fn byte_pair(ui: &mut Ui, v: &mut u16, old: u16, name: &str, width: f32, label: egui::Id) {
+    let r = &name[..1];
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let w = (width - 4.0) / 2.0;
+        let (mut hi, mut lo) = (*v >> 8, *v & 0xFF);
+        let changed = |mask: u16| ((*v ^ old) & mask != 0).then_some(pal::AMBER);
+        hex_box(ui, &mut hi, 2, changed(0xFF00), w, label).on_hover_text(format!("{r}H"));
+        hex_box(ui, &mut lo, 2, changed(0x00FF), w, label).on_hover_text(format!("{r}L"));
+        *v = hi << 8 | lo;
     });
 }
 
