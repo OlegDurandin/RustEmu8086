@@ -12,6 +12,7 @@ pub mod console;
 pub mod debug;
 pub mod debugger;
 pub mod devices_ui;
+pub mod drive_ui;
 pub mod editcmd;
 pub mod editor;
 pub mod examples;

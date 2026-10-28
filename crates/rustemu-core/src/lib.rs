@@ -9,6 +9,7 @@ pub mod dos;
 pub mod font;
 pub mod keyboard;
 pub mod machine;
+pub mod memdrive;
 pub mod robot;
 pub mod video;
 

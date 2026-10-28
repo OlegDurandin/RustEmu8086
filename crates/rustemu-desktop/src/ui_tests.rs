@@ -663,3 +663,65 @@ fn nasm_editor_snapshot() {
     save(&mut h, "22_nasm_editor");
     assert!(h.state().messages[0].text.contains("NASM syntax, COM format"));
 }
+
+#[test]
+fn memory_drive_window_and_storage() {
+    // The browser's drive C:: a program writes a file next to an uploaded one, the "drive C:"
+    // window lists both and previews one, and the drive survives a restart through storage.
+    struct Storage(std::collections::HashMap<String, String>);
+    impl eframe::Storage for Storage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_string(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+    let mut app = app_with_example(0);
+    app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    app.add_drive_file("data/in.txt", b"first line\r\nsecond line\r\n".to_vec());
+    app.text = "org 100h
+    mov ah, 3Ch
+    xor cx, cx
+    mov dx, offset fname
+    int 21h
+    mov bx, ax
+    mov ah, 40h
+    mov cx, 4
+    mov dx, offset text
+    int 21h
+    mov ah, 3Eh
+    int 21h
+    ret
+fname db 'out.txt', 0
+text  db 'done'
+"
+    .into();
+    app.emulate();
+    app.start_run();
+    run_until_paused(&mut app);
+    let drive = app.session.machine.dos_memory_drive().unwrap().clone();
+    assert_eq!(drive.read("out.txt"), Some(&b"done"[..]), "{}", app.status);
+
+    let mut storage = Storage(Default::default());
+    app.persist(&mut storage);
+    let mut restarted = app_with_example(0);
+    restarted.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    restarted.restore_drive(&storage);
+    assert_eq!(restarted.session.machine.dos_memory_drive(), Some(&drive));
+
+    app.windows = Default::default();
+    app.windows.drive = true;
+    app.drive_preview = Some("DATA/IN.TXT".into());
+    let mut h = harness(app);
+    h.run_steps(4);
+    assert!(h.query_by_label("C:\\OUT.TXT").is_some());
+    save(&mut h, "23_drive_window");
+    h.get_by_label("C:\\OUT.TXT").click();
+    h.run_steps(2);
+    assert_eq!(h.state().drive_preview.as_deref(), Some("OUT.TXT"));
+}

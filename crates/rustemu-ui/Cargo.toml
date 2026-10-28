@@ -19,6 +19,8 @@ eframe = { workspace = true }
 egui = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 web-time = "1"
+# The memory drive C: in browser storage (text values).
+base64 = "0.22"
 # Feature `testing`: helpers for the UI tests of the front ends (src/testing.rs).
 egui_kittest = { workspace = true, optional = true }
 

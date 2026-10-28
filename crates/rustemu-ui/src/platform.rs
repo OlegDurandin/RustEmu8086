@@ -69,6 +69,8 @@ pub fn is_web() -> bool {
 pub enum UploadFor {
     /// Assembly source for the editor, or an executable to load (by its extension).
     Open,
+    /// Files for DOS programs on the memory drive C: (several at once).
+    DriveFiles,
 }
 
 /// A file the user uploaded (the browser).
@@ -96,9 +98,14 @@ pub fn request_upload(ctx: &egui::Context, purpose: UploadFor, filters: &[Filter
         }
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let Some(file) = dlg.pick_file().await else { return };
-            let upload = Upload { purpose, name: file.file_name(), bytes: file.read().await };
-            UPLOADS.with(|u| u.borrow_mut().push(upload));
+            let files = match purpose {
+                UploadFor::DriveFiles => dlg.pick_files().await.unwrap_or_default(),
+                UploadFor::Open => dlg.pick_file().await.into_iter().collect(),
+            };
+            for file in files {
+                let upload = Upload { purpose, name: file.file_name(), bytes: file.read().await };
+                UPLOADS.with(|u| u.borrow_mut().push(upload));
+            }
             ctx.request_repaint();
         });
     }

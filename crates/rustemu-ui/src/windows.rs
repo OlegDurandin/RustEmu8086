@@ -11,6 +11,7 @@ pub fn shared_windows(app: &mut App, ctx: &egui::Context) {
     crate::debug::debug_windows(app, &ctx);
     crate::debugger::debugger_windows(app, &ctx);
     crate::devices_ui::devices_window(app, &ctx);
+    crate::drive_ui::drive_window(app, &ctx);
     tools(app, &ctx);
     crate::find::goto_dialog(app, &ctx);
     crate::console::console_window(app, &ctx);
@@ -141,6 +142,13 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
 pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
     use rustemu_core::machine::{FLOPPY_SIZE, MAX_FLOPPIES};
     ui.set_min_width(330.0);
+    if app.session.machine.dos_memory_drive().is_some() {
+        if ui.button("drive C: files…").on_hover_text("Files DOS programs read and write (INT 21h)").clicked() {
+            app.windows.drive = true;
+            ui.close();
+        }
+        ui.separator();
+    }
     let drives = app.session.machine.floppies.len();
     ui.menu_button("boot from virtual floppy", |ui| {
         for d in 0..drives {
