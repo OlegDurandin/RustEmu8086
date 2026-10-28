@@ -91,19 +91,36 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
         .default_pos(egui::pos2(760.0, 110.0))
         .show(ctx, |ui| {
             egui::Grid::new("options").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
-                ui.label("theme");
-                ui.horizontal(|ui| {
-                    let mut changed = false;
-                    for (t, name) in
-                        [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark"), (ThemeChoice::System, "system")]
-                    {
-                        changed |= ui.radio_value(&mut app.settings.theme, t, name).changed();
-                    }
-                    if changed {
-                        app.apply_theme(ui.ctx());
-                    }
-                });
-                ui.end_row();
+                if app.can_switch_layout {
+                    ui.label("layout");
+                    ui.horizontal(|ui| {
+                        let mut tablet = app.tablet_layout;
+                        ui.radio_value(&mut tablet, false, "desktop (Emu8086)");
+                        ui.radio_value(&mut tablet, true, "tablet (touch)");
+                        if tablet != app.tablet_layout {
+                            app.switch_layout = true;
+                        }
+                    });
+                    ui.end_row();
+                }
+                // The tablet layout has a theme of its own.
+                if app.fixed_theme.is_none() {
+                    ui.label("theme");
+                    ui.horizontal(|ui| {
+                        let mut changed = false;
+                        for (t, name) in [
+                            (ThemeChoice::Light, "light"),
+                            (ThemeChoice::Dark, "dark"),
+                            (ThemeChoice::System, "system"),
+                        ] {
+                            changed |= ui.radio_value(&mut app.settings.theme, t, name).changed();
+                        }
+                        if changed {
+                            app.apply_theme(ui.ctx());
+                        }
+                    });
+                    ui.end_row();
+                }
                 ui.label("assembler syntax");
                 ui.horizontal(|ui| {
                     use crate::app::SyntaxChoice;

@@ -16,7 +16,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, окна отладки/инструментов и диалоги (`windows::shared_windows`), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
 | `crates/rustemu-desktop` | Интерфейс Emu8086: библиотека (`DesktopApp`, главное окно с меню/тулбаром — `ui.rs`, окно эмулятора и исходника — `emulator.rs`; UI-тесты `ui_tests.rs`) + бинарь `RustEmu8086` (macOS). |
 | `crates/rustemu-tablet` | Интерфейс iPadOS/Android (см. 6.7): `TabletApp` + `TabletState`, библиотека с `run()` и `android_main` (cdylib) + бинарь `rustemu-tablet` (iPadOS; на Mac — для разработки). |
-| `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`), выбирает `DesktopApp` или `TabletApp` (`?ui=`), `?example=…&run`. |
+| `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`); `layout.rs` — `WebApp` с `DesktopApp` или `TabletApp`, переключение на лету (`App::switch_layout`, выбор в localStorage); раскладка по умолчанию — iPad (`MacIntel` + касания), `pointer: coarse` или узкое окно; `?ui=`, `?example=…&run`. |
 
 ### Ключевые решения
 - **Прерывания — «настоящие».** IVT в 0000:0000 указывает на заглушки `F000:1000+4*n`, заглушка —
