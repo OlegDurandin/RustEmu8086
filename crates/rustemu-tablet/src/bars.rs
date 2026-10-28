@@ -122,6 +122,9 @@ pub(crate) fn tabs_row(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
             if small_icon(ui, Icon::Keyboard, "on-screen keyboard").clicked() {
                 t.keypad.open = !t.keypad.open;
             }
+            if small_icon(ui, Icon::Share, "share link").clicked() {
+                app.share = Some(rustemu_ui::share::ShareDialog { run: false });
+            }
             if app.is_stale() {
                 ui.colored_label(pal::AMBER, "edited since the last build — Run / Step / Reset assemble again");
             }
