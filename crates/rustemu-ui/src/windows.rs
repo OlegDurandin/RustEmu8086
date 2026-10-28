@@ -12,6 +12,7 @@ pub fn shared_windows(app: &mut App, ctx: &egui::Context) {
     crate::debugger::debugger_windows(app, &ctx);
     crate::devices_ui::devices_window(app, &ctx);
     crate::drive_ui::drive_window(app, &ctx);
+    crate::programs::programs_window(app, &ctx);
     tools(app, &ctx);
     crate::find::goto_dialog(app, &ctx);
     crate::console::console_window(app, &ctx);
@@ -21,6 +22,7 @@ pub fn shared_windows(app: &mut App, ctx: &egui::Context) {
     new_dialog(app, &ctx);
     options_window(app, &ctx);
     dialogs(app, &ctx);
+    crate::programs::save_name_dialog(app, &ctx);
 }
 
 /// "choose code template" (File -> New), like Emu8086.
@@ -321,9 +323,15 @@ fn dialogs(app: &mut App, ctx: &egui::Context) {
             .show(ctx, |ui| {
                 ui.label(format!("Save changes to {}?", app.file_name()));
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() && app.save() {
-                        app.confirm_discard = None;
-                        finish(app, ctx, action.clone());
+                    if ui.button("Save").clicked() {
+                        if app.save() {
+                            app.confirm_discard = None;
+                            finish(app, ctx, action.clone());
+                        } else if let Some(d) = &mut app.save_name {
+                            // A new program in the browser: named first, then the action.
+                            d.then = Some(action.clone());
+                            app.confirm_discard = None;
+                        }
                     }
                     if ui.button("Discard").clicked() {
                         app.confirm_discard = None;

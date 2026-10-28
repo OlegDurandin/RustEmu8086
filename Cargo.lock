@@ -2628,6 +2628,7 @@ dependencies = [
  "image",
  "js-sys",
  "rfd",
+ "ron",
  "rustemu-asm",
  "rustemu-core",
  "rustemu-session",

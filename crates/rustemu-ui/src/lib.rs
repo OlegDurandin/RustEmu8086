@@ -22,6 +22,7 @@ pub mod help;
 pub mod highlight;
 pub mod library_ui;
 pub mod platform;
+pub mod programs;
 pub mod reference;
 pub mod reference_ui;
 pub mod screen;

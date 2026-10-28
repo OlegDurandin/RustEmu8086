@@ -6,7 +6,7 @@ mod layout;
 
 #[cfg(target_arch = "wasm32")]
 mod web {
-    use rustemu_ui::app::App;
+    use rustemu_ui::app::{App, PendingAction};
 
     use crate::layout::WebApp;
 
@@ -15,6 +15,56 @@ mod web {
 
     fn local_storage() -> Option<web_sys::Storage> {
         web_sys::window()?.local_storage().ok().flatten()
+    }
+
+    /// eframe's storage in the browser: the keys straight in local storage.
+    struct LocalStore(web_sys::Storage);
+
+    impl eframe::Storage for LocalStore {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get_item(key).ok().flatten()
+        }
+
+        fn set_string(&mut self, key: &str, value: String) {
+            let _ = self.0.set_item(key, &value);
+        }
+
+        fn remove_string(&mut self, key: &str) {
+            let _ = self.0.remove_item(key);
+        }
+
+        fn flush(&mut self) {}
+    }
+
+    /// Whether local storage keeps what is written (some private modes refuse).
+    fn storage_works() -> bool {
+        local_storage()
+            .is_some_and(|s| s.set_item("rustemu_probe", "1").is_ok() && s.remove_item("rustemu_probe").is_ok())
+    }
+
+    /// Saves the app when the page is hidden or closed: eframe 0.37 listens for "onbeforeunload",
+    /// which never fires, and Safari on iPadOS may discard a hidden page without any other event.
+    /// Without storage, closing the page with unsaved changes asks first.
+    fn save_on_leave(window: &web_sys::Window, runner: &eframe::WebRunner, storage_ok: bool) {
+        use wasm_bindgen::JsCast;
+        let runner = runner.clone();
+        let document = window.document();
+        let on_leave = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            if e.type_() == "visibilitychange" && !document.as_ref().is_some_and(|d| d.hidden()) {
+                return;
+            }
+            let Some(mut app) = runner.app_mut::<WebApp>() else { return };
+            if let Some(s) = local_storage() {
+                eframe::App::save(&mut *app, &mut LocalStore(s));
+            }
+            if e.type_() == "beforeunload" && !storage_ok && app.app().dirty() {
+                e.prevent_default();
+            }
+        });
+        for event in ["visibilitychange", "pagehide", "beforeunload"] {
+            let _ = window.add_event_listener_with_callback(event, on_leave.as_ref().unchecked_ref());
+        }
+        on_leave.forget();
     }
 
     fn store_layout(tablet: bool) {
@@ -82,8 +132,10 @@ mod web {
         let example = param("example").and_then(|n| rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == n));
         let run = param("run").is_some();
         let options = eframe::WebOptions { wgpu_options: rustemu_ui::wgpu_options(), ..Default::default() };
+        let storage_ok = storage_works();
         wasm_bindgen_futures::spawn_local(async move {
             let runner = eframe::WebRunner::new();
+            save_on_leave(&window, &runner, storage_ok);
             let started = runner
                 .start(
                     canvas,
@@ -91,11 +143,23 @@ mod web {
                     Box::new(move |cc| {
                         let mut app = App::new(cc);
                         if let Some(i) = example {
-                            app.load_example(i);
-                            if run {
-                                app.emulate();
-                                app.start_run();
+                            if app.dirty() {
+                                // Unsaved changes of the last visit: ask before replacing them.
+                                app.guarded(PendingAction::Example(i));
+                            } else {
+                                app.load_example(i);
+                                if run {
+                                    app.emulate();
+                                    app.start_run();
+                                }
                             }
+                        }
+                        if !storage_ok {
+                            app.notice(
+                                "Browser storage",
+                                "This browser does not let the page keep data (private browsing?): programs, \
+                                 settings and drive C: are lost when the page is closed. Use Download to keep a program.",
+                            );
                         }
                         Ok(Box::new(WebApp::new(app, tablet, &cc.egui_ctx, store_layout)))
                     }),

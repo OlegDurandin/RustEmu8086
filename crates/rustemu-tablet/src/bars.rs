@@ -155,6 +155,10 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
         app.save_as();
         ui.close();
     }
+    if app.browser && ui.button("Download").clicked() {
+        app.download_source();
+        ui.close();
+    }
     ui.separator();
     if ui.button("Assemble and load").clicked() {
         app.emulate();

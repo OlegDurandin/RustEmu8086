@@ -1,7 +1,7 @@
 //! Emulator screen: text and graphics rendering, keyboard and mouse input.
 
 use egui::{Color32, ColorImage, FontId, Key, Rect, Sense, TextureHandle, TextureOptions, Ui, pos2, vec2};
-use rustemu_core::font::{char_to_cp437, cp437_to_char};
+use rustemu_core::font::{char_to_cp437, cp437_to_char, glyph8x16};
 use rustemu_core::keyboard::{keys, scan_code_for};
 use rustemu_core::video::{self, Video};
 
@@ -13,6 +13,9 @@ pub struct ScreenState {
     /// The emulator screen has keyboard focus (keys go to the program).
     pub focused: bool,
     texture: Option<TextureHandle>,
+    /// The CP437 glyphs of the text modes (see [`glyph_atlas`]).
+    glyphs: Option<TextureHandle>,
+    /// Text size: a character cell is `font_size * 1.25` high and half as wide.
     pub font_size: f32,
 }
 
@@ -81,16 +84,17 @@ pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
     let mode = Video::mode(mem);
     let (cols, rows) = (Video::cols(mem) as f32, Video::rows(mem) as f32);
     let text = Video::is_text(mem);
-    let ratio = ui.fonts_mut(|f| f.glyph_width(&FontId::monospace(100.0), 'M')) / 100.0;
-    let font_size = match fit {
-        Fit::Whole(max) if text => (max.x / cols / ratio).min(max.y / rows / 1.25).floor().max(4.0),
-        Fit::Cursor(max, limit) if text => (max.x / cols / ratio).min(limit).min(max.y / 1.25).floor().max(4.0),
-        _ => app.screen.font_size,
-    };
-    let font = FontId::monospace(font_size);
+    let ppp = ui.ctx().pixels_per_point();
+    // Character cells of 8x16 glyph pixels. The zoomed window uses whole screen pixels per glyph
+    // pixel (sharp at any zoom); fitted views take the space there is, in whole screen pixels.
     let (cw, ch) = match fit {
-        Fit::Zoom => (ui.fonts_mut(|f| f.glyph_width(&font, 'M')).ceil(), (font_size * 1.25).ceil()),
-        _ => (ui.fonts_mut(|f| f.glyph_width(&font, 'M')), font_size * 1.25),
+        Fit::Zoom => {
+            let k = (app.screen.font_size * 1.25 * ppp / 16.0).round().max(1.0);
+            (8.0 * k / ppp, 16.0 * k / ppp)
+        }
+        Fit::Whole(max) if text => fitted_cell((max.x / cols).min(max.y / rows / 2.0), ppp),
+        Fit::Cursor(max, limit) if text => fitted_cell((max.x / cols).min(limit * 0.625).min(max.y / 2.0), ppp),
+        _ => (0.0, 0.0),
     };
     // Rows shown: all, or those around the cursor that fit.
     let (first_row, shown_rows) = match fit {
@@ -130,10 +134,10 @@ pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
 
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, Color32::BLACK);
-    let mem = &app.session.machine.sys.mem;
-    if Video::is_text(mem) {
-        draw_text(app, ui, rect, (cw, ch), (first_row, shown_rows), &font);
+    if Video::is_text(&app.session.machine.sys.mem) {
+        draw_text(app, ui, rect, (cw, ch), (first_row, shown_rows));
     } else if mode == 0x13 {
+        let mem = &app.session.machine.sys.mem;
         let mut img = ColorImage::new([320, 200], vec![Color32::BLACK; 320 * 200]);
         let pal = &app.session.machine.sys.dev.palette;
         let vram = mem.slice(video::GFX_BASE, 64000);
@@ -158,7 +162,7 @@ pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
             rect.center(),
             egui::Align2::CENTER_CENTER,
             format!("video mode {mode:02X}h is not supported"),
-            font.clone(),
+            FontId::proportional(14.0),
             Color32::GRAY,
         );
     }
@@ -205,8 +209,57 @@ fn screen_ui(app: &mut App, ui: &mut Ui) {
     });
 }
 
-/// Draws text rows `first..first + shown` of the screen into `rect`.
-fn draw_text(app: &App, ui: &Ui, rect: Rect, (cw, ch): (f32, f32), (first, shown): (u16, u16), font: &FontId) {
+/// Cell size for a cell width of at most `w` points, in whole screen pixels.
+fn fitted_cell(w: f32, ppp: f32) -> (f32, f32) {
+    let w = ((w * ppp).floor() / ppp).max(2.0);
+    (w, 2.0 * w)
+}
+
+/// Glyph pixels are drawn this many texels wide in the atlas: with linear filtering, scaling it
+/// down keeps the pixels sharp at sizes that are not a whole multiple ("sharp bilinear").
+const ATLAS_SCALE: usize = 4;
+/// Texels around each glyph; they repeat its edge, so neighbouring cells join without seams.
+const ATLAS_PAD: usize = 2;
+const ATLAS_CELL: [usize; 2] = [8 * ATLAS_SCALE + 2 * ATLAS_PAD, 16 * ATLAS_SCALE + 2 * ATLAS_PAD];
+/// 16 x 16 glyphs and a row with a solid cell (index 256, for backgrounds).
+const ATLAS_SIZE: [usize; 2] = [16 * ATLAS_CELL[0], 17 * ATLAS_CELL[1]];
+const SOLID: usize = 256;
+
+/// The 256 CP437 glyphs (white on transparent; the vertex colour paints them).
+fn glyph_atlas() -> ColorImage {
+    let [w, h] = ATLAS_SIZE;
+    let mut pixels = vec![Color32::TRANSPARENT; w * h];
+    for g in 0..=SOLID {
+        let bits = if g == SOLID { [0xFF; 16] } else { glyph8x16(g as u8) };
+        let (ox, oy) = ((g % 16) * ATLAS_CELL[0], (g / 16) * ATLAS_CELL[1]);
+        for y in 0..ATLAS_CELL[1] {
+            let fy = y.saturating_sub(ATLAS_PAD).min(16 * ATLAS_SCALE - 1) / ATLAS_SCALE;
+            for x in 0..ATLAS_CELL[0] {
+                let fx = x.saturating_sub(ATLAS_PAD).min(8 * ATLAS_SCALE - 1) / ATLAS_SCALE;
+                if bits[fy] & (0x80 >> fx) != 0 {
+                    pixels[(oy + y) * w + ox + x] = Color32::WHITE;
+                }
+            }
+        }
+    }
+    ColorImage::new(ATLAS_SIZE, pixels)
+}
+
+/// Texture coordinates of glyph `g` in the atlas.
+fn glyph_uv(g: usize) -> Rect {
+    let [w, h] = ATLAS_SIZE.map(|v| v as f32);
+    let x = ((g % 16) * ATLAS_CELL[0] + ATLAS_PAD) as f32;
+    let y = ((g / 16) * ATLAS_CELL[1] + ATLAS_PAD) as f32;
+    Rect::from_min_size(pos2(x / w, y / h), vec2((8 * ATLAS_SCALE) as f32 / w, (16 * ATLAS_SCALE) as f32 / h))
+}
+
+/// Draws text rows `first..first + shown` of the screen into `rect` with the bitmap font.
+fn draw_text(app: &mut App, ui: &Ui, rect: Rect, (cw, ch): (f32, f32), (first, shown): (u16, u16)) {
+    let atlas = app
+        .screen
+        .glyphs
+        .get_or_insert_with(|| ui.ctx().load_texture("cp437_8x16", glyph_atlas(), TextureOptions::LINEAR))
+        .id();
     let mem = &app.session.machine.sys.mem;
     let painter = ui.painter_at(rect);
     let page = Video::page(mem);
@@ -215,52 +268,37 @@ fn draw_text(app: &App, ui: &Ui, rect: Rect, (cw, ch): (f32, f32), (first, shown
     let blink_enabled = mem.read8(video::BDA + 0x65) & 0x20 != 0;
     let time = ui.input(|i| i.time);
     let blink_on = (time * 2.0) as i64 % 2 == 0;
+    // Cells start on screen pixels, so glyph pixels keep their edges.
+    let ppp = ui.ctx().pixels_per_point();
+    let origin = pos2((rect.left() * ppp).round() / ppp, (rect.top() * ppp).round() / ppp);
+    let mut mesh = egui::Mesh::with_texture(atlas);
     for r in first..(first + shown).min(rows) {
         for c in 0..cols {
             let (chr, attr) = Video::read_cell(mem, page, c, r);
             let bg_idx = if blink_enabled { (attr >> 4) & 7 } else { attr >> 4 };
-            let fg = CGA[(attr & 15) as usize];
-            let bg = CGA[bg_idx as usize];
-            let cell = Rect::from_min_size(
-                pos2(rect.left() + c as f32 * cw, rect.top() + (r - first) as f32 * ch),
-                vec2(cw, ch),
-            );
+            let cell =
+                Rect::from_min_size(pos2(origin.x + c as f32 * cw, origin.y + (r - first) as f32 * ch), vec2(cw, ch));
             if bg_idx != 0 {
-                painter.rect_filled(cell, 0.0, bg);
+                mesh.add_rect_with_uv(cell, glyph_uv(SOLID), CGA[bg_idx as usize]);
             }
             let hidden = blink_enabled && attr & 0x80 != 0 && !blink_on;
-            if chr != 0 && chr != b' ' && chr != 0xFF && !hidden {
-                let glyph = cp437_to_char(chr);
-                // Block characters are drawn as rectangles so they tile without gaps.
-                let block = match chr {
-                    0xDB => Some(cell),
-                    0xDC => Some(Rect::from_min_max(pos2(cell.left(), cell.center().y), cell.max)),
-                    0xDF => Some(Rect::from_min_max(cell.min, pos2(cell.right(), cell.center().y))),
-                    0xDD => Some(Rect::from_min_max(cell.min, pos2(cell.center().x, cell.bottom()))),
-                    0xDE => Some(Rect::from_min_max(pos2(cell.center().x, cell.top()), cell.max)),
-                    _ => None,
-                };
-                match block {
-                    Some(r) => {
-                        painter.rect_filled(r, 0.0, fg);
-                    }
-                    None => {
-                        painter.text(cell.center(), egui::Align2::CENTER_CENTER, glyph, font.clone(), fg);
-                    }
-                }
+            if !matches!(chr, 0 | b' ' | 0xFF) && !hidden {
+                mesh.add_rect_with_uv(cell, glyph_uv(chr as usize), CGA[(attr & 15) as usize]);
             }
         }
     }
+    painter.add(egui::Shape::mesh(mesh));
     // Cursor (hidden when CH bit 5 is set).
     let shape = mem.read16(video::BDA_CURSOR_SHAPE);
     if shape & 0x2000 == 0 && blink_on {
         let (cc, cr) = Video::cursor(mem, page);
         if cc < cols && (first..first + shown).contains(&cr) {
             let (_, attr) = Video::read_cell(mem, page, cc, cr);
-            let x = rect.left() + cc as f32 * cw;
-            let y = rect.top() + (cr - first) as f32 * ch;
+            let x = origin.x + cc as f32 * cw;
+            let y = origin.y + (cr - first) as f32 * ch;
+            // Glyph rows 13-14 of 16, like the VGA BIOS cursor.
             painter.rect_filled(
-                Rect::from_min_max(pos2(x, y + ch - 3.0), pos2(x + cw, y + ch - 1.0)),
+                Rect::from_min_max(pos2(x, y + ch * 13.0 / 16.0), pos2(x + cw, y + ch * 15.0 / 16.0)),
                 0.0,
                 CGA[(attr & 15).max(7) as usize],
             );
