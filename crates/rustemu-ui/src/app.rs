@@ -329,6 +329,12 @@ pub struct App {
     pub fixed_theme: Option<fn(&egui::Context)>,
     /// Colour of the current instruction in the editor (default: [`crate::colors::info`]).
     pub current_line_color: Option<egui::Color32>,
+    /// The tablet layout is shown (set by the tablet front end).
+    pub tablet_layout: bool,
+    /// The front end can switch between the desktop and the tablet layout (the web version); the
+    /// options window and the tablet menu offer it then and set `switch_layout`.
+    pub can_switch_layout: bool,
+    pub switch_layout: bool,
 }
 
 #[derive(Clone)]
@@ -423,6 +429,9 @@ impl App {
             pending_undo: None,
             fixed_theme: None,
             current_line_color: None,
+            tablet_layout: false,
+            can_switch_layout: false,
+            switch_layout: false,
         };
         app.windows = app.settings.windows.clone();
         app.windows.about = false;

@@ -204,6 +204,10 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
     let w = &mut app.windows;
     ui.checkbox(&mut w.converter, "Base converter");
     ui.checkbox(&mut w.ascii, "ASCII codes");
+    if app.can_switch_layout && ui.button("Desktop layout").clicked() {
+        app.switch_layout = true;
+        ui.close();
+    }
     if ui.button("Options").clicked() {
         app.options_open = true;
         ui.close();

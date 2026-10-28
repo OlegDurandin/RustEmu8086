@@ -35,6 +35,7 @@ impl TabletApp {
     pub fn new(mut app: App) -> Self {
         app.fixed_theme = Some(theme::apply);
         app.current_line_color = Some(pal::AMBER);
+        app.tablet_layout = true;
         TabletApp { app, state: TabletState::default() }
     }
 }
