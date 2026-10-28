@@ -1,4 +1,5 @@
-//! DOS services (INT 21h) with file access confined to a host directory.
+//! DOS services (INT 21h). Drive C: is a host directory (file access confined to it) or a drive in
+//! memory ([`MemDrive`], the browser).
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use crate::bus::linear;
 use crate::cpu::{AX, BX, CX, DI, DS, DX, ES, SI, flags};
 use crate::machine::{Machine, Svc};
+use crate::memdrive::MemDrive;
 
 type FindState = Option<(Arc<Vec<(String, u64)>>, usize)>;
 
@@ -25,12 +27,39 @@ pub struct DateTime {
     pub hundredths: u8,
 }
 
+/// Drive C: of DOS programs.
+pub(crate) enum DosDrive {
+    /// A host directory: files stay on disk, confined to it.
+    Host(PathBuf),
+    /// Files in memory (the browser).
+    Memory(MemDrive),
+}
+
+/// A file opened by a DOS program.
+pub(crate) enum OpenFile {
+    Host(File),
+    /// A file of the memory drive: its key, the position and the access of the open call.
+    Mem {
+        key: String,
+        pos: u64,
+        read: bool,
+        write: bool,
+    },
+}
+
+/// A file or folder of drive C:.
+enum Target {
+    Host(PathBuf),
+    /// A key of the memory drive.
+    Mem(String),
+}
+
 #[derive(Default)]
 pub(crate) struct DosState {
-    pub root: Option<PathBuf>,
+    pub drive: Option<DosDrive>,
     /// Current directory inside the root, using `/` separators, no leading slash.
     pub cwd: String,
-    pub files: HashMap<u16, File>,
+    pub files: HashMap<u16, OpenFile>,
     pub psp: u16,
     pub dta: (u16, u16),
     pub waiting: bool,
@@ -101,10 +130,10 @@ impl DosState {
     }
 }
 
-const E_FILE_NOT_FOUND: u16 = 2;
-const E_PATH_NOT_FOUND: u16 = 3;
+pub(crate) const E_FILE_NOT_FOUND: u16 = 2;
+pub(crate) const E_PATH_NOT_FOUND: u16 = 3;
 const E_TOO_MANY: u16 = 4;
-const E_ACCESS: u16 = 5;
+pub(crate) const E_ACCESS: u16 = 5;
 const E_HANDLE: u16 = 6;
 const E_NO_MEM: u16 = 8;
 const E_INVALID: u16 = 1;
@@ -373,13 +402,9 @@ impl Machine {
         String::from_utf8_lossy(&self.read_string(seg, off, 0, 256)).into_owned()
     }
 
-    /// Maps a DOS path to a host path inside the root directory.
-    fn host_path(&self, dos: &str) -> Option<PathBuf> {
-        // Work from the canonical root so a root configured through a symlink is
-        // treated as the directory it points to.  The final containment check
-        // below is what prevents symlinks inside the virtual drive from escaping
-        // to the host filesystem.
-        let root = self.canonical_dos_root()?;
+    /// Names of DOS path `dos` from the root of drive C:, with `.` and `..` resolved against the
+    /// current directory; None when `..` leaves the root.
+    fn dos_components(&self, dos: &str) -> Option<Vec<String>> {
         let mut p = dos.trim().replace('\\', "/");
         if p.len() >= 2 && p.as_bytes()[1] == b':' {
             p = p[2..].to_string();
@@ -391,33 +416,67 @@ impl Machine {
         } else {
             format!("{}/{}", self.dos.cwd, p)
         };
-        let mut parts: Vec<&str> = Vec::new();
+        let mut parts = Vec::new();
         for c in full.split('/') {
             match c {
                 "" | "." => {}
                 ".." => {
                     parts.pop()?;
                 }
-                c => parts.push(c),
+                c => parts.push(c.to_string()),
             }
         }
-        let mut out = root.clone();
-        for c in parts {
-            out = out.join(find_case_insensitive(&out, c));
+        Some(parts)
+    }
+
+    /// Maps a DOS path to a file or folder of drive C:.
+    fn target(&self, dos: &str) -> Option<Target> {
+        let parts = self.dos_components(dos)?;
+        match self.dos.drive.as_ref()? {
+            DosDrive::Host(_) => {
+                // Work from the canonical root so a root configured through a symlink is treated
+                // as the directory it points to. The final containment check is what prevents
+                // symlinks inside the virtual drive from escaping to the host filesystem.
+                let root = self.canonical_dos_root()?;
+                let mut out = root.clone();
+                for c in parts {
+                    out = out.join(find_case_insensitive(&out, &c));
+                }
+                path_is_confined(&root, &out).then_some(Target::Host(out))
+            }
+            DosDrive::Memory(_) => Some(Target::Mem(parts.join("/").to_ascii_uppercase())),
         }
-        path_is_confined(&root, &out).then_some(out)
+    }
+
+    /// The host path of a DOS path (drive C: in a host folder).
+    #[cfg(test)]
+    fn host_path(&self, dos: &str) -> Option<PathBuf> {
+        match self.target(dos)? {
+            Target::Host(p) => Some(p),
+            Target::Mem(_) => None,
+        }
     }
 
     fn canonical_dos_root(&self) -> Option<PathBuf> {
-        std::fs::canonicalize(self.dos.root.as_ref()?).ok()
+        match self.dos.drive.as_ref()? {
+            DosDrive::Host(root) => std::fs::canonicalize(root).ok(),
+            DosDrive::Memory(_) => None,
+        }
     }
 
-    fn path_arg(&mut self, seg: u16, off: u16) -> Option<PathBuf> {
+    fn mem_drive(&mut self) -> Option<&mut MemDrive> {
+        match self.dos.drive.as_mut()? {
+            DosDrive::Memory(d) => Some(d),
+            DosDrive::Host(_) => None,
+        }
+    }
+
+    fn path_arg(&mut self, seg: u16, off: u16) -> Option<Target> {
         let s = self.read_asciiz(seg, off);
-        match self.host_path(&s) {
-            Some(p) => Some(p),
+        match self.target(&s) {
+            Some(t) => Some(t),
             None => {
-                if self.dos.root.is_none() {
+                if self.dos.drive.is_none() {
                     self.log.push("DOS file access is disabled (no virtual drive configured)".into());
                 }
                 self.fail(E_PATH_NOT_FOUND);
@@ -427,10 +486,23 @@ impl Machine {
     }
 
     fn dos_path_op(&mut self, ah: u8) {
-        let Some(p) = self.path_arg(self.cpu.sregs[DS], self.cpu.regs[DX]) else { return };
+        let Some(t) = self.path_arg(self.cpu.sregs[DS], self.cpu.regs[DX]) else { return };
+        let res = match t {
+            Target::Host(p) => self.host_path_op(ah, &p),
+            Target::Mem(key) => self.mem_path_op(ah, key),
+        };
+        match res {
+            Ok(()) => self.ok(),
+            Err(code) => self.fail(code),
+        }
+    }
+
+    /// AH=39h-3Bh, 41h, 43h, 56h on a host folder.
+    fn host_path_op(&mut self, ah: u8, p: &Path) -> Result<(), u16> {
+        let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
         let res = match ah {
-            0x39 => std::fs::create_dir(&p),
-            0x3A => std::fs::remove_dir(&p),
+            0x39 => std::fs::create_dir(p),
+            0x3A => std::fs::remove_dir(p),
             0x3B => {
                 if p.is_dir() {
                     let cwd =
@@ -440,29 +512,63 @@ impl Machine {
                             self.dos.cwd = cwd.to_string_lossy().replace('\\', "/");
                             Ok(())
                         }
-                        None => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+                        None => Err(not_found()),
                     }
                 } else {
-                    Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                    Err(not_found())
                 }
             }
-            0x41 => std::fs::remove_file(&p),
+            0x41 => std::fs::remove_file(p),
             0x43 => {
                 if p.exists() {
                     self.cpu.regs[CX] = if p.is_dir() { 0x10 } else { 0x20 };
                     Ok(())
                 } else {
-                    Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                    Err(not_found())
                 }
             }
             _ => {
-                let Some(to) = self.path_arg(self.cpu.sregs[ES], self.cpu.regs[DI]) else { return };
-                std::fs::rename(&p, to)
+                let to = self.read_asciiz(self.cpu.sregs[ES], self.cpu.regs[DI]);
+                let Some(Target::Host(to)) = self.target(&to) else { return Err(E_PATH_NOT_FOUND) };
+                std::fs::rename(p, to)
             }
         };
-        match res {
-            Ok(()) => self.ok(),
-            Err(e) => self.fail(io_code(&e)),
+        res.map_err(|e| io_code(&e))
+    }
+
+    /// AH=39h-3Bh, 41h, 43h, 56h on the memory drive.
+    fn mem_path_op(&mut self, ah: u8, key: String) -> Result<(), u16> {
+        let to = (ah == 0x56).then(|| self.read_asciiz(self.cpu.sregs[ES], self.cpu.regs[DI]));
+        let to = match to.map(|to| self.target(&to)) {
+            Some(Some(Target::Mem(k))) => Some(k),
+            Some(_) => return Err(E_PATH_NOT_FOUND),
+            None => None,
+        };
+        let cwd = self.dos.cwd.clone();
+        let Some(d) = self.mem_drive() else { return Err(E_PATH_NOT_FOUND) };
+        match ah {
+            0x39 => d.create_dir(&key),
+            // The current directory cannot be removed.
+            0x3A if key == cwd || cwd.starts_with(&format!("{key}/")) => Err(E_ACCESS),
+            0x3A => d.remove_dir(&key),
+            0x3B if d.is_dir(&key) => {
+                self.dos.cwd = key;
+                Ok(())
+            }
+            0x3B => Err(E_PATH_NOT_FOUND),
+            0x41 => d.remove_file(&key),
+            0x43 => {
+                let attr = if d.is_dir(&key) {
+                    0x10
+                } else if d.file(&key).is_some() {
+                    0x20
+                } else {
+                    return Err(E_FILE_NOT_FOUND);
+                };
+                self.cpu.regs[CX] = attr;
+                Ok(())
+            }
+            _ => d.rename(&key, &to.unwrap_or_default()),
         }
     }
 
@@ -471,16 +577,29 @@ impl Machine {
     }
 
     fn dos_open(&mut self, ah: u8) {
-        let Some(p) = self.path_arg(self.cpu.sregs[DS], self.cpu.regs[DX]) else { return };
+        let Some(t) = self.path_arg(self.cpu.sregs[DS], self.cpu.regs[DX]) else { return };
         let Some(h) = self.alloc_handle() else { return self.fail(E_TOO_MANY) };
-        let r = match ah {
-            0x3C => File::create(&p),
-            0x5B => OpenOptions::new().write(true).read(true).create_new(true).open(&p),
-            _ => match self.al() & 3 {
-                0 => File::open(&p),
-                1 => OpenOptions::new().write(true).open(&p),
-                _ => OpenOptions::new().read(true).write(true).open(&p),
-            },
+        let mode = self.al() & 3;
+        let r = match t {
+            Target::Host(p) => match ah {
+                0x3C => File::create(&p),
+                0x5B => OpenOptions::new().write(true).read(true).create_new(true).open(&p),
+                _ => match mode {
+                    0 => File::open(&p),
+                    1 => OpenOptions::new().write(true).open(&p),
+                    _ => OpenOptions::new().read(true).write(true).open(&p),
+                },
+            }
+            .map(OpenFile::Host)
+            .map_err(|e| io_code(&e)),
+            Target::Mem(key) => {
+                let Some(d) = self.mem_drive() else { return self.fail(E_PATH_NOT_FOUND) };
+                let (res, read, write) = match ah {
+                    0x3C | 0x5B => (d.create(&key, ah == 0x5B), true, true),
+                    _ => (d.open(&key), mode != 1, mode != 0),
+                };
+                res.map(|()| OpenFile::Mem { key, pos: 0, read, write })
+            }
         };
         match r {
             Ok(f) => {
@@ -488,7 +607,7 @@ impl Machine {
                 self.cpu.regs[AX] = h;
                 self.ok();
             }
-            Err(e) => self.fail(io_code(&e)),
+            Err(code) => self.fail(code),
         }
     }
 
@@ -529,20 +648,41 @@ impl Machine {
             self.dos.line = Some(line);
             return Svc::Block;
         }
-        let Some(f) = self.dos.files.get_mut(&h) else {
-            self.fail(E_HANDLE);
-            return Svc::Ret;
+        let r = match self.dos.files.get_mut(&h) {
+            None => Err(E_HANDLE),
+            Some(OpenFile::Host(f)) => {
+                let mut buf = vec![0u8; n];
+                f.read(&mut buf)
+                    .map(|got| {
+                        buf.truncate(got);
+                        buf
+                    })
+                    .map_err(|e| io_code(&e))
+            }
+            Some(OpenFile::Mem { read: false, .. }) => Err(E_ACCESS),
+            Some(OpenFile::Mem { key, pos, .. }) => match &self.dos.drive {
+                Some(DosDrive::Memory(d)) => match d.file(key) {
+                    Some(data) => {
+                        let start = (*pos as usize).min(data.len());
+                        let got = data[start..(start + n).min(data.len())].to_vec();
+                        *pos += got.len() as u64;
+                        Ok(got)
+                    }
+                    // Deleted while open.
+                    None => Err(E_ACCESS),
+                },
+                _ => Err(E_HANDLE),
+            },
         };
-        let mut buf = vec![0u8; n];
-        match f.read(&mut buf) {
-            Ok(got) => {
-                for (i, &b) in buf[..got].iter().enumerate() {
+        match r {
+            Ok(buf) => {
+                for (i, &b) in buf.iter().enumerate() {
                     self.sys.mem.write8(linear(ds, dx.wrapping_add(i as u16)), b);
                 }
-                self.cpu.regs[AX] = got as u16;
+                self.cpu.regs[AX] = buf.len() as u16;
                 self.ok();
             }
-            Err(e) => self.fail(io_code(&e)),
+            Err(code) => self.fail(code),
         }
         Svc::Ret
     }
@@ -565,15 +705,40 @@ impl Machine {
                 self.ok();
             }
             _ => {
-                let Some(f) = self.dos.files.get_mut(&h) else { return self.fail(E_HANDLE) };
-                // Writing 0 bytes truncates at the current position.
-                let r = if n == 0 { f.stream_position().and_then(|p| f.set_len(p)).map(|_| 0) } else { f.write(&data) };
+                let r = match self.dos.files.get_mut(&h) {
+                    None => Err(E_HANDLE),
+                    // Writing 0 bytes truncates at the current position.
+                    Some(OpenFile::Host(f)) => {
+                        if n == 0 { f.stream_position().and_then(|p| f.set_len(p)).map(|_| 0) } else { f.write(&data) }
+                            .map_err(|e| io_code(&e))
+                    }
+                    Some(OpenFile::Mem { write: false, .. }) => Err(E_ACCESS),
+                    Some(OpenFile::Mem { key, pos, .. }) => match &mut self.dos.drive {
+                        Some(DosDrive::Memory(d)) => match d.file_mut(key) {
+                            Some(file) => {
+                                let at = *pos as usize;
+                                if n == 0 {
+                                    file.resize(at, 0);
+                                } else {
+                                    if file.len() < at + n {
+                                        file.resize(at + n, 0);
+                                    }
+                                    file[at..at + n].copy_from_slice(&data);
+                                    *pos += n as u64;
+                                }
+                                Ok(n)
+                            }
+                            None => Err(E_ACCESS),
+                        },
+                        _ => Err(E_HANDLE),
+                    },
+                };
                 match r {
                     Ok(w) => {
                         self.cpu.regs[AX] = w as u16;
                         self.ok();
                     }
-                    Err(e) => self.fail(io_code(&e)),
+                    Err(code) => self.fail(code),
                 }
             }
         }
@@ -588,14 +753,34 @@ impl Machine {
             2 => SeekFrom::End(off as i32 as i64),
             _ => return self.fail(E_INVALID),
         };
-        let Some(f) = self.dos.files.get_mut(&h) else { return self.fail(E_HANDLE) };
-        match f.seek(whence) {
+        let r = match self.dos.files.get_mut(&h) {
+            None => Err(E_HANDLE),
+            Some(OpenFile::Host(f)) => f.seek(whence).map_err(|e| io_code(&e)),
+            Some(OpenFile::Mem { key, pos, .. }) => {
+                let len = match &self.dos.drive {
+                    Some(DosDrive::Memory(d)) => d.file(key).map_or(0, |f| f.len() as i64),
+                    _ => 0,
+                };
+                let new = match whence {
+                    SeekFrom::Start(o) => o as i64,
+                    SeekFrom::Current(o) => *pos as i64 + o,
+                    SeekFrom::End(o) => len + o,
+                };
+                if new < 0 {
+                    Err(E_ACCESS)
+                } else {
+                    *pos = new as u64;
+                    Ok(*pos)
+                }
+            }
+        };
+        match r {
             Ok(p) => {
                 self.cpu.regs[DX] = (p >> 16) as u16;
                 self.cpu.regs[AX] = p as u16;
                 self.ok();
             }
-            Err(e) => self.fail(io_code(&e)),
+            Err(code) => self.fail(code),
         }
     }
 
@@ -608,27 +793,35 @@ impl Machine {
                 Some(i) => (pat[..i].to_string(), pat[i + 1..].to_string()),
                 None => (String::new(), pat.clone()),
             };
-            let Some(hdir) = self.host_path(if dir.is_empty() { "." } else { &dir }) else {
-                return self.fail(E_PATH_NOT_FOUND);
-            };
             let mask = mask.to_ascii_uppercase();
-            let mut entries: Vec<(String, u64)> = std::fs::read_dir(hdir)
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .filter(|e| e.path().is_file())
-                        .filter_map(|e| {
-                            let name = e.file_name().to_string_lossy().to_ascii_uppercase();
-                            if !wildcard(&mask, &name) {
-                                return None;
-                            }
-                            let dos_path = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
-                            let path = self.host_path(&dos_path)?;
-                            let size = std::fs::metadata(path).ok()?.len();
-                            Some((name, size))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            let mut entries: Vec<(String, u64)> = match self.target(if dir.is_empty() { "." } else { &dir }) {
+                None => return self.fail(E_PATH_NOT_FOUND),
+                Some(Target::Host(hdir)) => std::fs::read_dir(hdir)
+                    .map(|rd| {
+                        rd.filter_map(|e| e.ok())
+                            .filter(|e| e.path().is_file())
+                            .filter_map(|e| {
+                                let name = e.file_name().to_string_lossy().to_ascii_uppercase();
+                                if !wildcard(&mask, &name) {
+                                    return None;
+                                }
+                                let dos_path = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
+                                let Target::Host(path) = self.target(&dos_path)? else { return None };
+                                let size = std::fs::metadata(path).ok()?.len();
+                                Some((name, size))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                Some(Target::Mem(key)) => {
+                    let list = match &self.dos.drive {
+                        Some(DosDrive::Memory(d)) => d.list(&key),
+                        _ => None,
+                    };
+                    let Some(list) = list else { return self.fail(E_PATH_NOT_FOUND) };
+                    list.into_iter().filter(|(name, _)| wildcard(&mask, name)).collect()
+                }
+            };
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             self.dos.find = Some((Arc::new(entries), 0));
         }

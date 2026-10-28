@@ -40,6 +40,9 @@ pub enum ThemeChoice {
 }
 
 /// Releases of RustEmu8086 (help -> check for an update).
+/// Storage key of the memory drive C: (see [`App::persist`]).
+const DRIVE_KEY: &str = "dos_drive";
+
 pub const RELEASES_URL: &str = "https://github.com/OlegDurandin/RustEmu8086/releases";
 
 /// Settings persisted between runs.
@@ -135,6 +138,8 @@ pub struct Windows {
     pub stop_condition: bool,
     pub flag_analyser: bool,
     pub value_viewer: bool,
+    /// Files of the memory drive C: (the browser).
+    pub drive: bool,
 }
 
 pub struct Message {
@@ -225,6 +230,10 @@ pub struct App {
     pub doc_name: Option<String>,
     /// A file to ask the browser for at the next frame (see `platform::request_upload`).
     pub pending_upload: Option<crate::platform::UploadFor>,
+    /// File of the memory drive shown in the "drive C:" window.
+    pub drive_preview: Option<String>,
+    /// "delete all" in the "drive C:" window waits for confirmation.
+    pub drive_confirm_clear: bool,
     pub text: String,
     pub saved_text: String,
     pub messages: Vec<Message>,
@@ -333,7 +342,10 @@ pub enum PendingAction {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, eframe::APP_KEY)).unwrap_or_default();
-        let app = Self::with_settings(settings);
+        let mut app = Self::with_settings(settings);
+        if let Some(storage) = cc.storage {
+            app.restore_drive(storage);
+        }
         crate::fonts::install(&cc.egui_ctx);
         app.apply_theme(&cc.egui_ctx);
         app
@@ -345,6 +357,8 @@ impl App {
             path: None,
             doc_name: None,
             pending_upload: None,
+            drive_preview: None,
+            drive_confirm_clear: false,
             text: String::new(),
             saved_text: String::new(),
             messages: Vec::new(),
@@ -421,7 +435,27 @@ impl App {
             Some(p) if p.exists() => app.open_path(&p),
             _ => app.load_example(0),
         }
+        // The browser has no file system: DOS programs get a drive in memory.
+        if crate::platform::is_web() {
+            app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+        }
         app
+    }
+
+    /// Restores the memory drive C: saved by [`App::persist`] (the browser keeps it in local
+    /// storage).
+    pub fn restore_drive(&mut self, storage: &dyn eframe::Storage) {
+        use base64::Engine;
+        if self.session.machine.dos_memory_drive().is_none() {
+            return;
+        }
+        let saved = storage
+            .get_string(DRIVE_KEY)
+            .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+            .and_then(|b| rustemu_core::memdrive::MemDrive::from_bytes(&b));
+        if let Some(drive) = saved {
+            self.session.machine.set_dos_memory_drive(drive);
+        }
     }
 
     pub fn apply_theme(&self, ctx: &egui::Context) {
@@ -542,17 +576,31 @@ impl App {
 
     /// Asks the browser for the requested file and opens the files that arrived.
     fn handle_uploads(&mut self, ctx: &egui::Context) {
+        use crate::platform::UploadFor;
         if let Some(purpose) = self.pending_upload.take() {
-            let filters: [crate::platform::Filter; 2] = [
-                ("Assembly or executable", &["asm", "nasm", "inc", "txt", "com", "exe", "bin"]),
-                ("All files", &["*"]),
-            ];
-            crate::platform::request_upload(ctx, purpose, &filters);
+            let filters: &[crate::platform::Filter] = match purpose {
+                UploadFor::Open => &[
+                    ("Assembly or executable", &["asm", "nasm", "inc", "txt", "com", "exe", "bin"]),
+                    ("All files", &["*"]),
+                ],
+                UploadFor::DriveFiles => &[],
+            };
+            crate::platform::request_upload(ctx, purpose, filters);
         }
         for u in crate::platform::take_uploads() {
             match u.purpose {
-                crate::platform::UploadFor::Open => self.open_upload(u),
+                UploadFor::Open => self.open_upload(u),
+                UploadFor::DriveFiles => self.add_drive_file(&u.name, u.bytes),
             }
+        }
+    }
+
+    /// Puts a file on the memory drive C: (an upload for DOS programs).
+    pub fn add_drive_file(&mut self, name: &str, bytes: Vec<u8>) {
+        let Some(drive) = self.session.machine.dos_memory_drive_mut() else { return };
+        match drive.write(name, bytes) {
+            Ok(key) => self.status = format!("C:\\{} added to drive C:", key.replace('/', "\\")),
+            Err(e) => self.notice("Drive C:", &e),
         }
     }
 
@@ -888,7 +936,9 @@ impl App {
         self.source_files = source_files;
         self.source_index = source_index;
         self.loaded_text = Some(self.text.clone());
-        self.session.machine.set_dos_root(root);
+        if let Some(root) = root {
+            self.session.machine.set_dos_root(root);
+        }
         if !same_image {
             self.clear_address_breakpoints();
         }
@@ -945,14 +995,17 @@ impl App {
         self.status = format!("Loaded - CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
     }
 
-    /// The directory DOS file functions see as drive C:.
-    fn vdrive(&self) -> PathBuf {
+    /// The directory DOS file functions see as drive C:; None for the memory drive (the browser).
+    fn vdrive(&self) -> Option<PathBuf> {
+        if self.session.machine.dos_memory_drive().is_some() {
+            return None;
+        }
         if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
-            return dir.to_path_buf();
+            return Some(dir.to_path_buf());
         }
         let d = crate::platform::data_dir().join("vdrive");
         std::fs::create_dir_all(&d).ok();
-        d
+        Some(d)
     }
 
     pub fn reload(&mut self) {
@@ -1662,8 +1715,12 @@ impl App {
 impl App {
     /// Saves the settings (`eframe::App::save` of the front ends).
     pub fn persist(&mut self, storage: &mut dyn eframe::Storage) {
+        use base64::Engine;
         self.store_settings();
         eframe::set_value(storage, eframe::APP_KEY, &self.settings);
+        if let Some(drive) = self.session.machine.dos_memory_drive() {
+            storage.set_string(DRIVE_KEY, base64::engine::general_purpose::STANDARD.encode(drive.to_bytes()));
+        }
     }
 
     /// Asks to save unsaved changes when the window is being closed.

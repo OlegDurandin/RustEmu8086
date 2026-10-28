@@ -351,6 +351,107 @@ buf   db 10 dup(0)
 }
 
 #[test]
+fn dos_files_on_the_memory_drive() {
+    // The browser's drive C: in memory: folders, the current directory, reading a file put there
+    // from outside, access rights, seek, rename, FindFirst and errors.
+    let src = "\
+org 100h
+    mov ah, 1Ah          ; DTA for FindFirst
+    mov dx, offset dta
+    int 21h
+    mov ah, 39h          ; mkdir sub
+    mov dx, offset dname
+    int 21h
+    jc fail
+    mov ah, 3Bh          ; chdir sub
+    int 21h
+    jc fail
+    mov ax, 3D00h        ; open ..\\in.txt for reading
+    mov dx, offset inname
+    int 21h
+    jc fail
+    mov bx, ax
+    mov ah, 3Fh
+    mov cx, 20
+    mov dx, offset buf
+    int 21h
+    mov si, ax           ; bytes read
+    mov ah, 40h          ; writing a read-only handle fails with 5
+    mov cx, 1
+    int 21h
+    jnc fail
+    cmp ax, 5
+    jne fail
+    mov ah, 3Eh
+    int 21h
+    mov ah, 3Ch          ; create out.txt (in sub)
+    xor cx, cx
+    mov dx, offset outname
+    int 21h
+    jc fail
+    mov bx, ax
+    mov ah, 40h
+    mov cx, si
+    mov dx, offset buf
+    int 21h
+    mov ax, 4200h        ; seek to 1
+    xor cx, cx
+    mov dx, 1
+    int 21h
+    mov ah, 40h          ; overwrite one byte
+    mov cx, 1
+    mov dx, offset bang
+    int 21h
+    mov ah, 3Eh
+    int 21h
+    mov ah, 56h          ; rename out.txt -> result.txt
+    mov dx, offset outname
+    mov di, offset newname
+    int 21h
+    jc fail
+    mov ah, 4Eh          ; find ..\\*.txt
+    xor cx, cx
+    mov dx, offset mask
+    int 21h
+    jc fail
+    cmp byte ptr dta[1Eh], 'I'
+    jne fail
+    mov ah, 41h          ; deleting a missing file fails with 2
+    mov dx, offset missing
+    int 21h
+    jnc fail
+    cmp ax, 2
+    jne fail
+    mov ax, 4C00h
+    int 21h
+fail:
+    mov ax, 4C01h
+    int 21h
+dname   db 'sub', 0
+inname  db '..\\in.txt', 0
+outname db 'out.txt', 0
+newname db 'result.txt', 0
+mask    db '..\\*.txt', 0
+missing db 'nope.txt', 0
+bang    db '!'
+buf     db 20 dup(0)
+dta     db 43 dup(0)
+";
+    let prog = rustemu_asm::assemble_str(src).unwrap();
+    let mut s = Session::new();
+    let mut drive = rustemu_core::memdrive::MemDrive::new();
+    drive.write("in.txt", b"hello".to_vec()).unwrap();
+    s.machine.set_dos_memory_drive(drive);
+    s.load_program(prog).unwrap();
+    let (s, ev) = finish(s, "");
+    assert_eq!(ev, Event::Terminated(0), "{:?}", s.machine.log);
+    let d = s.machine.dos_memory_drive().unwrap();
+    assert_eq!(d.read("sub/result.txt"), Some(&b"h!llo"[..]));
+    assert_eq!(d.read("sub/out.txt"), None);
+    assert_eq!(d.read("in.txt"), Some(&b"hello"[..]));
+}
+
+#[test]
 fn devices_ports() {
     let src = "org 100h\nmov ax, 0249h\nout 4, ax\nmov al, 'P'\nout 130, al\nmov ax, 1234\nout 199, ax\nret\n";
     let (s, _) = run_src(src, "");

@@ -212,8 +212,10 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [~] 6.8 Веб-версия (`rustemu-web`, trunk → GitHub Pages, задания `web`/`deploy-web` в CI): WebGPU с откатом на
       WebGL 2 (`rustemu_ui::wgpu_options`); время — `web-time` (std `Instant` в браузере паникует), часовой пояс —
       `js_sys::Date`; файлы — `platform::request_upload`/`take_uploads` (rfd `AsyncFileDialog`) и `download`;
-      `App::doc_name` — имя файла без пути, `Session::load_named` — загрузка из байтов. Не сделано: файловая
-      система DOS в памяти (сейчас файловые функции INT 21h возвращают ошибку), шрифт с ☻☼⌂ⁿ, PWA/офлайн
+      `App::doc_name` — имя файла без пути, `Session::load_named` — загрузка из байтов. Диск C: в браузере —
+      `rustemu_core::memdrive::MemDrive` (`Machine::set_dos_memory_drive`; в `dos.rs` диск — `DosDrive::Host`/`Memory`,
+      открытый файл — `OpenFile`), хранится в eframe storage (`App::persist`/`restore_drive`, base64), окно
+      `drive_ui.rs` (загрузка, просмотр, скачивание). Не сделано: шрифт с ☻☼⌂ⁿ, PWA/офлайн
 - [ ] 6.6 Синтаксис FASM (`#fasm#`) — не поддерживается
 - [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, масштаб экрана, задержка,
       открытые окна (положения хранит egui), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —

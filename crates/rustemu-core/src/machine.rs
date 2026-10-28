@@ -7,6 +7,7 @@ use crate::bus::{Bus, Memory, linear};
 use crate::cpu::{self, Cpu, StepResult, flags};
 use crate::devices::{Devices, DevicesSnapshot};
 use crate::dos::{DosSnapshot, DosState};
+use crate::memdrive::MemDrive;
 use crate::video::{self, Video};
 
 /// Number of floppy drives Emu8086 supports (FLOPPY_0..FLOPPY_3).
@@ -315,12 +316,35 @@ impl Machine {
 
     /// Directory that DOS file functions operate in (the virtual drive C:).
     pub fn set_dos_root(&mut self, root: PathBuf) {
-        self.dos.root = Some(root);
+        self.dos.drive = Some(crate::dos::DosDrive::Host(root));
+    }
+
+    /// Makes drive C: a drive in memory (the browser); see [`Machine::dos_memory_drive`].
+    pub fn set_dos_memory_drive(&mut self, drive: MemDrive) {
+        self.dos.files.clear();
+        self.dos.cwd.clear();
+        self.dos.drive = Some(crate::dos::DosDrive::Memory(drive));
+    }
+
+    /// The memory drive C:, if drive C: is one.
+    pub fn dos_memory_drive(&self) -> Option<&MemDrive> {
+        match self.dos.drive.as_ref()? {
+            crate::dos::DosDrive::Memory(d) => Some(d),
+            crate::dos::DosDrive::Host(_) => None,
+        }
+    }
+
+    /// The memory drive C: for changes from outside the program (uploads, deletions).
+    pub fn dos_memory_drive_mut(&mut self) -> Option<&mut MemDrive> {
+        match self.dos.drive.as_mut()? {
+            crate::dos::DosDrive::Memory(d) => Some(d),
+            crate::dos::DosDrive::Host(_) => None,
+        }
     }
 
     /// Cold boot: clears memory and installs the BIOS.
     pub fn reset(&mut self) {
-        let root = self.dos.root.take();
+        let drive = self.dos.drive.take();
         self.sys.mem.set_journaling(false);
         self.sys.mem.clear();
         // Devices are separate from the CPU (separate programs in Emu8086): the robot's room,
@@ -340,7 +364,7 @@ impl Machine {
         self.history_barrier = false;
         self.floppy_journal = None;
         self.loaded = None;
-        self.dos = DosState { root, ..DosState::default() };
+        self.dos = DosState { drive, ..DosState::default() };
         self.tick_instr = 0;
         self.tick_time = None;
         self.tick_frac = 0.0;

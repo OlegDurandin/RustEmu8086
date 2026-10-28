@@ -180,8 +180,12 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
         ui.close();
     }
     ui.separator();
+    let memory_drive = app.session.machine.dos_memory_drive().is_some();
     let w = &mut app.windows;
     ui.checkbox(&mut w.devices, "Virtual devices");
+    if memory_drive {
+        ui.checkbox(&mut w.drive, "Drive C: files");
+    }
     ui.checkbox(&mut w.vars, "Variables");
     ui.checkbox(&mut w.symbols, "Symbol table");
     ui.checkbox(&mut w.listing, "Listing");
