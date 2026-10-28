@@ -70,6 +70,9 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             {
                 app.download_source();
             }
+            if ui.button("Share link…").on_hover_text("A link that opens this program in the web version").clicked() {
+                app.share = Some(rustemu_ui::share::ShareDialog { run: false });
+            }
             if ui.button("Save compiled file   ⌘B").clicked() {
                 app.compile();
             }
@@ -358,19 +361,19 @@ fn messages(app: &mut App, ui: &mut Ui) {
             ui.weak("Press “emulate” (F9) to assemble and run the program, or “compile” (⌘B) to build an executable.");
         }
         let mut jump = None;
-        for m in &app.messages {
+        for (i, m) in app.messages.iter().enumerate() {
             let color = if m.error { rustemu_ui::colors::error(ui) } else { ui.visuals().text_color() };
             let r =
                 ui.add(egui::Label::new(RichText::new(&m.text).monospace().color(color)).sense(egui::Sense::click()));
-            if let Some((_, line)) = &m.loc {
+            if m.loc.is_some() {
                 if r.clicked() {
-                    jump = Some(*line);
+                    jump = Some(i);
                 }
                 r.on_hover_text("click to go to the line");
             }
         }
-        if jump.is_some() {
-            app.goto_line = jump;
+        if let Some(i) = jump {
+            app.jump_to_message(i);
         }
     });
 }

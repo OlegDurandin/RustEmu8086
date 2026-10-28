@@ -23,6 +23,7 @@ pub fn shared_windows(app: &mut App, ctx: &egui::Context) {
     options_window(app, &ctx);
     dialogs(app, &ctx);
     crate::programs::save_name_dialog(app, &ctx);
+    crate::share::share_dialog(app, &ctx);
 }
 
 /// "choose code template" (File -> New), like Emu8086.

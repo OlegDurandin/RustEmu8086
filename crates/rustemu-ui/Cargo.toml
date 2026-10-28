@@ -24,6 +24,8 @@ base64 = "0.22"
 ron = "0.12"
 # Open / save dialogs (src/platform.rs): native on the desktop, a file input in the browser.
 rfd = "0.17"
+# Share links: the program deflated into the link (src/share.rs).
+miniz_oxide = "0.8"
 # Feature `testing`: helpers for the UI tests of the front ends (src/testing.rs).
 egui_kittest = { workspace = true, optional = true }
 
