@@ -43,8 +43,12 @@ fn tablet_app() -> TabletApp {
 
 #[test]
 fn tablet_layout_snapshots() {
-    for (size, suffix) in [([1376.0, 1032.0], "landscape"), ([1032.0, 1376.0], "portrait"), ([700.0, 980.0], "narrow")]
-    {
+    for (size, suffix) in [
+        ([1376.0, 1032.0], "landscape"),
+        ([1180.0, 820.0], "landscape_11in"),
+        ([1032.0, 1376.0], "portrait"),
+        ([700.0, 980.0], "narrow"),
+    ] {
         let mut h = tablet_harness(tablet_app(), size);
         for (tab, name) in [(Tab::Editor, "editor"), (Tab::Debugger, "debugger"), (Tab::Memory, "memory")] {
             h.state_mut().state.tab = tab;
