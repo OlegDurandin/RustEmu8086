@@ -225,7 +225,12 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       окнах с текстом (таблица ASCII, дамп памяти). Ссылки «поделиться» — `share.rs`: `#name=…&code=<deflate
       (miniz_oxide), base64url>[&run]`, окно *share link* (File → Share link…, и на Mac — ведёт на `WEB_URL`);
       веб открывает ссылку при запуске и на `hashchange` (`App::open_link` → `PendingAction::Shared`, спрашивает про
-      несохранённое) и убирает её из адреса (`history.replaceState`)
+      несохранённое) и убирает её из адреса (`history.replaceState`). Размер загрузки: профиль cargo `web` (`opt-level="z"`, fat LTO,
+      `codegen-units=1`; `rustemu-core` — `opt-level=3`: с "z" ядро на ~40% медленнее, с LTO и 3 — быстрее прежнего),
+      `data-cargo-profile="web"` в `index.html`; эмодзи-шрифты egui в вебе — подмножества (`rustemu-ui/fonts/*-subset.ttf`,
+      `scripts/subset_emoji_fonts.py`, тест `fonts::tests::web_fonts_cover_the_ui`; на десктопе `monochrome_emoji_fonts`
+      включает `rustemu-ui` только для нативной цели). Итого wasm 10,3 → 7,2 МБ, gzip 4,0 → 2,7 МБ. Прогресс загрузки —
+      initializer trunk `progress.mjs`; trunk передаёт размер wasm до wasm-opt, хук `wasm_size.sh` (Trunk.toml) ставит настоящий
 - [ ] 6.6 Синтаксис FASM (`#fasm#`) — не поддерживается
 - [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, масштаб экрана, задержка,
       открытые окна (положения хранит egui), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —
