@@ -145,3 +145,17 @@ fn tool_windows_keep_their_size() {
     h.run_steps(30);
     assert_eq!(size(&h), before);
 }
+
+#[test]
+fn share_button_and_byte_registers() {
+    let mut h = tablet_harness(tablet_app(), [1376.0, 1032.0]);
+    h.run_steps(3);
+    // AX..DX as two byte boxes (AH | AL), the others as one word box.
+    assert_eq!(h.query_all_by_label("AX").count(), 2, "two byte boxes");
+    assert_eq!(h.query_all_by_label("SP").count(), 1, "a word box");
+    h.get_by_label("share link").click();
+    h.run_steps(3);
+    assert!(h.state().app.share.is_some());
+    assert!(h.query_by_label("copy").is_some());
+    save(&mut h, "30_tablet_share");
+}
