@@ -15,7 +15,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
 | `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, окна отладки/инструментов и диалоги (`windows::shared_windows`), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
 | `crates/rustemu-desktop` | Интерфейс Emu8086: библиотека (`DesktopApp`, главное окно с меню/тулбаром — `ui.rs`, окно эмулятора и исходника — `emulator.rs`; UI-тесты `ui_tests.rs`) + бинарь `RustEmu8086` (macOS). |
-| `crates/rustemu-tablet` | Интерфейс iPadOS/Android (см. 6.7): `TabletApp` + `TabletState`, библиотека с `run()` и `android_main` (cdylib) + бинарь `rustemu-tablet` (iPadOS; на Mac — для разработки). |
+| `crates/rustemu-tablet` | Интерфейс планшета (см. 6.7) — для веб-версии на iPad и сенсорных экранах: `TabletApp` + `TabletState`; бинарь `rustemu-tablet` — окно на Mac для разработки. Нативных сборок iPadOS/Android нет. |
 | `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`); `layout.rs` — `WebApp` с `DesktopApp` или `TabletApp`, переключение на лету (`App::switch_layout`, выбор в localStorage); раскладка по умолчанию — iPad (`MacIntel` + касания), `pointer: coarse` или узкое окно; `?ui=`, `?example=…&run`. |
 
 ### Ключевые решения
@@ -84,7 +84,6 @@ cargo run -p rustemu-desktop        # GUI (можно передать путь 
 cargo run -p rustemu-tablet         # интерфейс планшета в окне на Mac
 cargo test -p rustemu-desktop -p rustemu-tablet  # UI-тесты + PNG-снимки в target/ui-snapshots/
 ./scripts/bundle_macos.sh        # RustEmu8086.app
-./scripts/run_ios_sim.sh         # iPad-симулятор (rustup target add aarch64-apple-ios-sim)
 cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0.1:8080 (wasm32-unknown-unknown + trunk)
 ```
 
@@ -195,21 +194,17 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 ### Этап 6. Полировка
 - [x] 6.1 Сравнение с Emu8086: корпус из 84 оригинальных примеров (сборка + выполнение), устройства по
       исходникам оригинала, параметры командной строки, виртуальная дискета, шаблоны New
-- [~] 6.7 Планшеты (iPadOS, Android) — крейт `rustemu-tablet`: wgpu везде, зависимости по платформам (`rfd` и
-      clipboard — только desktop, в `rustemu-ui`; objc2 и android-native-activity — в `rustemu-tablet`),
-      `rustemu_ui::platform` (диалоги/буфер/URL/папка данных; на мобильных — заглушки). iPad-симулятор:
-      `scripts/run_ios_sim.sh` (Info.plist со сценой; `ios.rs`: окно winit привязывается к UIScene —
-      `attach_to_scene`, Enter системной клавиатуры — подмена `insertText:` в `catch_return_key`; лимиты wgpu ≤
-      адаптера в `rustemu_ui::native_options`). Android — только `cargo check`. Модули: `lib.rs` (`TabletApp`,
-      `TabletState`, `tablet_ui`), `theme.rs` (тёмная тема через `App::fixed_theme`), `widgets.rs` (иконки,
-      кнопки, карточки), `bars.rs` (верхняя панель Run/Pause/Step/Reset, вкладки, меню ⋮, статус), `tabs.rs`
-      (раскладка Editor / Debugger / Memory: альбомная — три колонки на всю высоту, `three_columns`; портретная —
-      две колонки и нижний ряд; узкое окно — стопкой, `left_width`), `cards.rs`, `memory.rs`
+- [x] 6.7 Интерфейс планшета — крейт `rustemu-tablet`, работает в веб-версии (iPad, сенсорные экраны, узкое
+      окно) и окном на Mac для разработки. **Нативные iPadOS/Android убраны** (решение 2026-10-28: без Apple
+      Developer ID; код — в локальной ветке `archive/native-tablet`, на GitHub не отправлять). Модули: `lib.rs`
+      (`TabletApp`, `TabletState`, `tablet_ui`), `theme.rs` (тёмная тема через `App::fixed_theme`), `widgets.rs`
+      (иконки, кнопки, карточки), `bars.rs` (верхняя панель Run/Pause/Step/Reset, вкладки, меню ⋮, статус),
+      `tabs.rs` (раскладка Editor / Debugger / Memory: альбомная — три колонки на всю высоту, `three_columns`;
+      портретная — две колонки и нижний ряд; узкое окно — стопкой, `left_width`), `cards.rs`, `memory.rs`
       (`MemoryView`: hex-редактор, инспектор, сегменты, стек, карта), `keypad.rs` (экранная клавиатура: US +
       Esc/Tab/Ctrl/стрелки/F1–F10/Ins…PgDn, Shift/Ctrl на одну клавишу, открывается при `is_waiting_input`;
       рядом экран `screen::Fit::Cursor`), `tests.rs` (снимки `30_tablet_*`, `31_tablet_keyboard*`). Трасса —
-      `Machine::history_cpus`. Не сделано: файлы и буфер на планшетах, стрелки системной клавиатуры в
-      редакторе (winit 0.30 шлёт только текст), подпись/NDK
+      `Machine::history_cpus`. Платформы в `rustemu_ui::platform` — только desktop (`rfd`) и wasm
 - [~] 6.8 Веб-версия (`rustemu-web`, trunk → GitHub Pages, задания `web`/`deploy-web` в CI): WebGPU с откатом на
       WebGL 2 (`rustemu_ui::wgpu_options`); время — `web-time` (std `Instant` в браузере паникует), часовой пояс —
       `js_sys::Date`; файлы — `platform::request_upload`/`take_uploads` (rfd `AsyncFileDialog`) и `download`;

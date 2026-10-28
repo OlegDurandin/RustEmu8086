@@ -135,7 +135,7 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
         app.guarded(PendingAction::New);
         ui.close();
     }
-    if rustemu_ui::platform::has_file_dialogs() && ui.button("Open…").clicked() {
+    if ui.button("Open…").clicked() {
         app.guarded(PendingAction::Open(None));
         ui.close();
     }
@@ -147,15 +147,13 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
             }
         }
     });
-    if rustemu_ui::platform::has_file_dialogs() {
-        if ui.button("Save").clicked() {
-            app.save();
-            ui.close();
-        }
-        if ui.button("Save as…").clicked() {
-            app.save_as();
-            ui.close();
-        }
+    if ui.button("Save").clicked() {
+        app.save();
+        ui.close();
+    }
+    if ui.button("Save as…").clicked() {
+        app.save_as();
+        ui.close();
     }
     ui.separator();
     if ui.button("Assemble and load").clicked() {
