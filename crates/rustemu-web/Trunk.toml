@@ -1,0 +1,6 @@
+# The progress bar (progress.mjs) needs the size of the wasm file; trunk passes it as it was
+# before wasm-opt, which makes it ~20% smaller.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["wasm_size.sh"]

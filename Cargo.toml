@@ -14,7 +14,9 @@ rustemu-session = { path = "crates/rustemu-session" }
 rustemu-ui = { path = "crates/rustemu-ui" }
 # GUI (rustemu-ui, rustemu-desktop, rustemu-tablet)
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "persistence"] }
-egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+# The emoji fonts (`monochrome_emoji_fonts`) are enabled by rustemu-ui on the desktop; the web
+# version has subsets of them (crates/rustemu-ui/src/fonts.rs).
+egui = "0.37"
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
@@ -23,3 +25,16 @@ opt-level = 2
 
 [profile.release]
 debug = 1
+
+# The web version (trunk, `data-cargo-profile` in crates/rustemu-web/index.html): the wasm is
+# downloaded on every first visit, so it is optimized for size, except the emulator core, which
+# runs millions of instructions per second (opt-level "z" there makes it ~40% slower).
+[profile.web]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+debug = 0
+
+[profile.web.package.rustemu-core]
+opt-level = 3
