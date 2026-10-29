@@ -1,0 +1,41 @@
+name: Wiki
+
+# Publishes the pages of wiki/ to the GitHub wiki of the repository. The wiki must exist first:
+# create any page once on GitHub (Wiki -> Create the first page); this job then replaces it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wiki/**"
+      - ".github/workflows/wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push wiki/ to the wiki repository
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki-repo
+          # The wiki is a copy of wiki/: pages removed there are removed here too.
+          find wiki-repo -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R wiki/. wiki-repo/
+          cd wiki-repo
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The wiki is up to date"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Wiki from ${GITHUB_SHA::7}"
+          git push
