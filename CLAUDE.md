@@ -144,7 +144,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 4.2 Интеграционные тесты на примерах
 
 ### Этап 5. GUI (eframe/egui 0.37)
-`rustemu-ui`: `app.rs` (состояние, файлы, compile/emulate, цикл выполнения, горячие клавиши), `windows.rs`
+`rustemu-ui`: `app.rs` (состояние `App`, `Settings`; команды — в `app/`: `files`, `session`, `build` — compile/emulate,
+`exec` — шаги и цикл выполнения, `emulator_cmds`, `shortcuts`, `storage` — persist), `windows.rs`
 (общие диалоги и инструменты), `editor.rs` + `highlight.rs`, `screen.rs`, `debug.rs` (+ начало дизассемблера
 `disasm_start`), `devices_ui.rs`, `examples.rs` (встроенные `examples/*.asm`), `help.rs`, `reference.rs` +
 `reference_ui.rs`, `debugger.rs`, `fonts.rs`. `rustemu-desktop`: `ui.rs` (меню, тулбар, сообщения, статус),
@@ -161,7 +162,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       переходов), переменные (hex/dec/signed/bin/ascii), таблица символов, листинг, журнал
 - [x] 5.5 Устройства (вкладки, выбор по `#start=..#`): светофор, шаговый двигатель, LED, термометр, принтер,
       робот (карта редактируется кликом)
-- [x] 5.6 Примеры (15 шт.) и справочник (`reference.rs` — данные, `reference_ui.rs` — окно): все инструкции
+- [x] 5.6 Примеры (15 шт.) и справочник (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
       (синтаксис, флаги ODITSZAPC, пример), директивы, прерывания BIOS/DOS по функциям, обзор синтаксиса NASM
       (`NASM_GUIDE`, вкладка *NASM syntax*, `Topic::Nasm`; примеры распознаются как NASM — тест); из редактора —
       подсказка при наведении, F1/⌘-клик открывает статью (для `INT nn` функция берётся из `mov ah, ..` выше).
