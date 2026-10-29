@@ -129,7 +129,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 ### Этап 3. BIOS/DOS HLE и загрузка программ
 - [x] 3.1 IVT + ROM-заглушки (BOP), BIOS Data Area
 - [x] 3.2 Загрузчики COM/EXE/BIN/BOOT, PSP
-- [x] 3.3 INT 10h: 00,01,02,03,05,06,07,08,09,0A,0C,0D,0E,0F,10h(DAC),13h; режимы 0-3, 13h
+- [x] 3.3 INT 10h: 00,01,02,03,05,06,07,08,09,0A,0C,0D,0E,0F,10h(DAC),13h; режимы 0-3, 7, 13h
 - [x] 3.4 INT 16h, 1Ah, 15h, 11h, 12h, 13h (дискеты FLOPPY_0..3 в `Machine::floppies`, DL = номер дисковода; INT 11h и INT 13h/08h сообщают их число;
       «create new floppy drive» — `Machine::add_floppy`; образы в памяти, загружаются/сохраняются явно)
 - [x] 3.5 INT 21h: консоль, 0Ah, векторы, дата/время, файлы (3Ch-42h, 39h-3Bh, 41h, 43h, 47h, 4Eh/4Fh, 56h),
@@ -162,7 +162,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       переходов), переменные (hex/dec/signed/bin/ascii), таблица символов, листинг, журнал
 - [x] 5.5 Устройства (вкладки, выбор по `#start=..#`): светофор, шаговый двигатель, LED, термометр, принтер,
       робот (карта редактируется кликом)
-- [x] 5.6 Примеры (15 шт.) и справочник (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
+- [x] 5.6 Примеры (17 шт.) и справочник (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
       (синтаксис, флаги ODITSZAPC, пример), директивы, прерывания BIOS/DOS по функциям, обзор синтаксиса NASM
       (`NASM_GUIDE`, вкладка *NASM syntax*, `Topic::Nasm`; примеры распознаются как NASM — тест); из редактора —
       подсказка при наведении, F1/⌘-клик открывает статью (для `INT nn` функция берётся из `mov ah, ..` выше).
