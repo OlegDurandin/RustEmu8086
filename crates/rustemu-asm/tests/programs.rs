@@ -338,3 +338,21 @@ fn data_is_limited_to_a_segment() {
     // Up to the end of the segment is fine.
     assert_eq!(bytes("org 100h\ndb 0FF00h dup(7)\n").len(), 0xFF00);
 }
+
+#[test]
+fn circular_equ_is_an_error() {
+    // Constants defined through each other have no value (they used to be 0 silently).
+    let e = err("org 100h\nx equ y\ny equ x\nmov ax, x\nret\n");
+    assert!(e.contains("'X' is defined through itself") && e.contains("'Y'"), "{e}");
+    assert!(err("org 100h\na = b + 1\nb = c\nc = a\nret\n").contains("circular EQU"));
+    assert!(err("org 100h\nz equ z\nret\n").contains("circular EQU"));
+    // Forward references resolve, however long the chain and whatever the value.
+    assert_eq!(
+        bytes(
+            "org 100h\na equ b\nb equ c\nc equ 0\nd = e + 1\ne = 7\nf equ lab\nmov ax, a\nmov bx, d\nmov cx, f\nlab: ret\n"
+        ),
+        [0xB8, 0x00, 0x00, 0xBB, 0x08, 0x00, 0xB9, 0x09, 0x01, 0xC3]
+    );
+    // A redefined `=` constant uses its previous value.
+    assert_eq!(bytes("org 100h\nn = 1\nn = n + 1\nmov al, n\n"), [0xB0, 0x02]);
+}
