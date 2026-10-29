@@ -173,9 +173,8 @@ pub fn open_url(url: &str) {
     }
 }
 
-/// Folder for files of unsaved programs (the DOS drive C:): `~/Documents/RustEmu8086/vdrive` on
-/// the desktop. The browser has no file system: its drive C: is in memory
-/// (`rustemu_core::memdrive`), the path only names it.
+/// Folder of the app's files on the desktop: `~/Documents/RustEmu8086`. The browser has no file
+/// system: its drive C: is in memory (`rustemu_core::memdrive`), the path only names it.
 pub fn data_dir() -> PathBuf {
     if cfg!(target_arch = "wasm32") {
         // std::env::temp_dir panics there.
@@ -183,4 +182,15 @@ pub fn data_dir() -> PathBuf {
     }
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     home.join("Documents").join("RustEmu8086")
+}
+
+/// Drive C: of DOS programs on the desktop, as `vdrive\C` of Emu8086:
+/// `~/Documents/RustEmu8086/vdrive/C`.
+pub fn vdrive_dir() -> PathBuf {
+    data_dir().join("vdrive").join("C")
+}
+
+/// Shows a folder in Finder (the file manager on other systems).
+pub fn open_folder(dir: &Path) {
+    open_url(&dir.to_string_lossy());
 }

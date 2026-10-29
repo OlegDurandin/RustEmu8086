@@ -342,6 +342,14 @@ impl Machine {
         }
     }
 
+    /// The host folder that is drive C:, if drive C: is one.
+    pub fn dos_host_root(&self) -> Option<&std::path::Path> {
+        match self.dos.drive.as_ref()? {
+            crate::dos::DosDrive::Host(root) => Some(root),
+            crate::dos::DosDrive::Memory(_) => None,
+        }
+    }
+
     /// Cold boot: clears memory and installs the BIOS.
     pub fn reset(&mut self) {
         let drive = self.dos.drive.take();
