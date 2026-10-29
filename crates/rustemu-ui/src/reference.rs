@@ -1455,7 +1455,7 @@ pub const INTERRUPTS: &[Interrupt] = &[
     Interrupt {
         number: 0x21,
         title: "DOS services",
-        description: "The operating system functions: console input/output, files, time, memory, program exit. File names are relative to the folder of the source file (the virtual drive C:). On errors file functions set CF = 1 and AX = error code.",
+        description: "The operating system functions: console input/output, files, time, memory, program exit. File names are relative to the virtual drive C:: ~/Documents/RustEmu8086/vdrive/C on the Mac (or the folder of the program, see options), a drive in the browser in the web version. On errors file functions set CF = 1 and AX = error code.",
         selector: "AH",
         functions: &[
             func!(0x01, "Read a character with echo", "", "AL = character (waits for a key)", "mov ah, 1\nint 21h"),

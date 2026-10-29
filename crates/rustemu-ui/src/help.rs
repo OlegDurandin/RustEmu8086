@@ -41,7 +41,8 @@ INT 21h (DOS)
   AH=07/08 read char (no echo)    AH=09 print DS:DX '$'  AH=0A buffered input DS:DX
   AH=0B input status              AH=0C flush + call AL  AH=25/35 set/get vector AL
   AH=2A date  AH=2C time          AH=30 version          AH=4C exit (AL = code)
-  files (drive C: = the folder of the source file; in the web version a drive in the browser,
+  files (drive C: = ~/Documents/RustEmu8086/vdrive/C, Emulator -> Virtual drive -> show drive C:
+  folder; options can make it the folder of the program; in the web version a drive in the browser,
   see Emulator -> Virtual drive -> drive C: files):
   AH=3C create 3D open 3E close 3F read 40 write 41 delete 42 seek 43 attributes
   AH=39 mkdir 3A rmdir 3B chdir 47 getcwd 4E/4F find first/next 56 rename
