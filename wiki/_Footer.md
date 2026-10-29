@@ -1,0 +1,1 @@
+[Веб-версия](https://olegdurandin.github.io/RustEmu8086/) · [Releases](https://github.com/OlegDurandin/RustEmu8086/releases) · [Issues](https://github.com/OlegDurandin/RustEmu8086/issues) · Страницы вики лежат в репозитории, в папке [`wiki/`](https://github.com/OlegDurandin/RustEmu8086/tree/main/wiki)
