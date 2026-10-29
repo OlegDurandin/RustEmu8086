@@ -249,5 +249,6 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 6.4 `.startup`/`.exit` (MASM 6), корпус примеров Emu8086
 - [x] 6.5 Git: ветка `main`, CI — `.github/workflows/ci.yml` (macOS: fmt, clippy -D warnings, тесты с NASM; задание
       `bundle` на `main` — универсальный .app в артефактах). `audit.yml` — `cargo audit` (база RustSec) при изменении
-      `Cargo.toml`/`Cargo.lock` и раз в неделю. `release.yml`: тег `vX.Y.Z` (= версии в Cargo.toml) →
+      `Cargo.toml`/`Cargo.lock` и раз в неделю. Вики — страницы в `wiki/` (русский, для пользователей), `wiki.yml`
+      копирует их в вики GitHub при push в `main` (вики должна быть создана один раз вручную); меняя поведение — правьте и вики. `release.yml`: тег `vX.Y.Z` (= версии в Cargo.toml) →
       GitHub Release с zip, описание — `release-notes/vX.Y.Z.md` (если есть). Без Developer ID и нотаризации (в README — как открыть при первом запуске)
