@@ -39,6 +39,8 @@ struct Draft {
     text: String,
     /// The text as last saved, when it differs.
     saved: Option<String>,
+    /// Opened from a link (and not saved since): runs on a temporary drive C:.
+    from_link: bool,
 }
 
 fn now() -> f64 {
@@ -74,6 +76,7 @@ impl App {
         self.example_key = None;
         self.program = Some(name.to_string());
         self.doc_name = Some(name.to_string());
+        self.opened_from_link = false;
         self.text = text;
         self.saved_text = self.text.clone();
         self.messages.clear();
@@ -125,6 +128,7 @@ impl App {
             example: self.example_key.clone(),
             text: self.text.clone(),
             saved: (self.saved_text != self.text).then(|| self.saved_text.clone()),
+            from_link: self.from_link(),
         };
         if let Ok(draft) = ron::ser::to_string(&draft) {
             self.put(storage, DRAFT_KEY, draft);
@@ -143,6 +147,8 @@ impl App {
         self.path = None;
         self.program = d.program.filter(|p| self.programs.contains_key(p));
         self.doc_name = d.name;
+        self.opened_from_link = d.from_link;
+        self.link_notice_pending = d.from_link;
         self.example_key = d.example;
         self.saved_text = d.saved.unwrap_or_else(|| d.text.clone());
         self.text = d.text;

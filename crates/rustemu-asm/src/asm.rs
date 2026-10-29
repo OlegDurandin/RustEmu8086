@@ -13,6 +13,8 @@ use crate::{
 const MAX_PASSES: usize = 40;
 /// From this pass on instructions may only grow (shrinking is padded with NOPs) to force convergence.
 const GROW_ONLY_PASS: usize = 12;
+/// Size of a segment: offsets are 16-bit.
+const SEG_LIMIT: i64 = 0x10000;
 
 struct Seg {
     name: String,
@@ -589,6 +591,9 @@ impl Assembler {
                         self.err(idx, format!("TIMES count {n} is out of range"));
                     }
                     for _ in 0..n.clamp(0, 0x10000) {
+                        if self.loc() > SEG_LIMIT {
+                            break;
+                        }
                         match inner.as_ref() {
                             StmtKind::Instr { prefixes, mnem, ops } => self.instruction(idx, prefixes, mnem, ops),
                             StmtKind::Data { size, items } => self.data(idx, *size, items),
@@ -698,6 +703,10 @@ impl Assembler {
             }
         }
 
+        // Reported at the statement that crosses the end of the segment.
+        if self.cur_seg == start_seg && start_loc <= SEG_LIMIT && self.loc() > SEG_LIMIT {
+            self.err(idx, "segment is larger than 64 KB");
+        }
         let len = (self.loc() - start_loc).max(0) as usize;
         if self.cur_seg == start_seg && len > 0 && !matches!(st.kind, StmtKind::Org(_)) {
             self.emitted.push((idx, start_seg, start_loc, len));
@@ -733,6 +742,10 @@ impl Assembler {
     }
 
     fn data(&mut self, idx: usize, size: u8, items: &[DataItem]) {
+        // Past the end of the segment (already reported): don't build data nobody gets.
+        if self.loc() > SEG_LIMIT {
+            return;
+        }
         let mut out = Vec::new();
         for it in items {
             self.data_item(idx, size, it, &mut out);
@@ -747,11 +760,11 @@ impl Assembler {
                 DataItem::Str(s) => s.len() as i64,
                 DataItem::Dup(c, inner) => {
                     let n = eval(c, self).map(|v| v.num).unwrap_or(1);
-                    n * self.count_items(inner)
+                    n.saturating_mul(self.count_items(inner))
                 }
                 _ => 1,
             })
-            .sum()
+            .fold(0i64, i64::saturating_add)
     }
 
     fn data_item(&mut self, idx: usize, size: u8, it: &DataItem, out: &mut Vec<u8>) {
@@ -778,6 +791,11 @@ impl Assembler {
                 let mut one = Vec::new();
                 for i in inner {
                     self.data_item(idx, size, i, &mut one);
+                }
+                // u64: the product does not fit in a 32-bit usize (wasm).
+                if out.len() as u64 + one.len() as u64 * n as u64 > SEG_LIMIT as u64 {
+                    self.err(idx, "DUP data is larger than 64 KB");
+                    return;
                 }
                 for _ in 0..n {
                     out.extend_from_slice(&one);
