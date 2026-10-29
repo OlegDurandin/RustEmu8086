@@ -763,6 +763,63 @@ text  db 'done'
     assert_eq!(h.state().drive_preview.as_deref(), Some("OUT.TXT"));
 }
 
+#[test]
+fn programs_from_links_get_a_temporary_drive() {
+    // A program from a link runs with an empty drive C: of its own: it doesn't see the user's
+    // files and what it writes is not kept; saved, it runs with the user's drive.
+    let mut app = app_with_example(0);
+    app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    app.add_drive_file("secret.txt", b"mine".to_vec());
+    let text = "org 100h
+    mov ax, 3D00h
+    mov dx, offset secret
+    int 21h
+    jc write
+    mov dx, offset seen
+    jmp create
+write:
+    mov dx, offset out
+create:
+    mov ah, 3Ch
+    xor cx, cx
+    int 21h
+    ret
+secret db 'secret.txt', 0
+seen   db 'seen.txt', 0
+out    db 'out.txt', 0
+";
+    app.open_link(rustemu_ui::share::Shared { name: "link.asm".into(), text: text.into(), run: true });
+    run_until_paused(&mut app);
+    let temporary = app.session.machine.dos_memory_drive().unwrap();
+    assert_eq!(temporary.files().map(|f| f.0).collect::<Vec<_>>(), ["OUT.TXT"], "{}", app.status);
+    assert_eq!(app.notice.as_ref().map(|n| n.0.as_str()), Some("Program from a link"));
+    // The user's drive is the one kept, untouched.
+    let mut storage = MemStorage::default();
+    app.persist(&mut storage);
+    let mut restarted = app_with_example(0);
+    restarted.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    restarted.restore_drive(&storage);
+    let own = restarted.session.machine.dos_memory_drive().unwrap();
+    assert_eq!(own.files().map(|f| f.0).collect::<Vec<_>>(), ["SECRET.TXT"]);
+
+    app.notice = None;
+    app.windows = Default::default();
+    app.windows.drive = true;
+    let mut h = harness(app);
+    h.run_steps(4);
+    save(&mut h, "24_drive_from_link");
+    let mut app = h.into_state();
+
+    // Saved, it is the user's program.
+    app.save_program("link.asm");
+    app.emulate();
+    app.start_run();
+    run_until_paused(&mut app);
+    let own = app.session.machine.dos_memory_drive().unwrap();
+    assert_eq!(own.files().map(|f| f.0).collect::<Vec<_>>(), ["SECRET.TXT", "SEEN.TXT"]);
+    assert!(app.notice.is_none());
+}
+
 /// Every CP437 character, grey and then in the colours of its own code.
 const CP437_SRC: &str = "org 100h
     mov ax, 0B800h

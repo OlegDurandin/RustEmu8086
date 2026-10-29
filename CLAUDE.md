@@ -36,6 +36,8 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 - **Ассемблер**: формат — по `#make_xxx#`, иначе COM при `ORG 100h`, EXE при наличии сегментов, иначе COM.
   Переменные (`x db ..`) — память с типом; метки (`x:`, в т.ч. `x: db ..`) — непосредственные адреса.
   Дальний Jcc → автоматически `J!cc +3 / JMP near` (как Emu8086). `shl ax, 3` → 3×`shl ax,1`.
+  Защита от «бомб»: сегмент (и COM) ≤ 64 КБ — ошибка на строке, выходящей за конец (`SEG_LIMIT`); `DUP` больше
+  64 КБ отвергается до построения; цикл `INCLUDE` — ошибка (стек открытых файлов, вложенность ≤ 32).
 - **Устройства** тикают порциями по 128 инструкций, время — по часам хоста (`DeviceClock`, см. ниже).
   **Порты устройств Emu8086**: 4 — светофор (word), 7 — шаговый двигатель, 9/10/11 — робот,
   125/127 — термометр/нагреватель, 130 — принтер, 199 — LED-дисплей. Плюс VGA DAC 3C8h/3C9h, 3DAh, 60h.
@@ -88,6 +90,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 ```
 
 ## План работ (статус: [ ] — не начато, [~] — в работе, [x] — готово)
+Найденные проблемы, недочёты и идеи фич — [TODO.md](TODO.md).
 
 ### Этап 1. Ядро CPU (`rustemu-core`)
 - [x] 1.1 Workspace, крейты
@@ -225,7 +228,10 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       окнах с текстом (таблица ASCII, дамп памяти). Ссылки «поделиться» — `share.rs`: `#name=…&code=<deflate
       (miniz_oxide), base64url>[&run]`, окно *share link* (File → Share link…, и на Mac — ведёт на `WEB_URL`);
       веб открывает ссылку при запуске и на `hashchange` (`App::open_link` → `PendingAction::Shared`, спрашивает про
-      несохранённое) и убирает её из адреса (`history.replaceState`). Размер загрузки: профиль cargo `web` (`opt-level="z"`, fat LTO,
+      несохранённое) и убирает её из адреса (`history.replaceState`). Программа из ссылки, пока не сохранена
+      (`App::from_link`, флаг в `Draft`), работает с пустым временным диском C: (`App::use_temporary_drive`; свой —
+      в `App::own_drive`, его и сохраняет `persist`), уведомление при первом запуске и в окне drive C:. Диск в памяти —
+      не больше `memdrive::CAPACITY` (2 МБ; `MemDrive::write_at` — неполная запись, как DOS на полном диске) и 1024 записей. Размер загрузки: профиль cargo `web` (`opt-level="z"`, fat LTO,
       `codegen-units=1`; `rustemu-core` — `opt-level=3`: с "z" ядро на ~40% медленнее, с LTO и 3 — быстрее прежнего),
       `data-cargo-profile="web"` в `index.html`; эмодзи-шрифты egui в вебе — подмножества (`rustemu-ui/fonts/*-subset.ttf`,
       `scripts/subset_emoji_fonts.py`, тест `fonts::tests::web_fonts_cover_the_ui`; на десктопе `monochrome_emoji_fonts`

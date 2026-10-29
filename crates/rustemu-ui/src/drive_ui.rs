@@ -29,7 +29,11 @@ fn dos_name(key: &str) -> String {
 }
 
 fn drive_ui(app: &mut App, ui: &mut Ui) {
-    ui.label("Files DOS programs see as drive C: (INT 21h). They are kept in this browser.");
+    if app.own_drive.is_some() {
+        ui.colored_label(crate::colors::warn(ui), crate::share::temporary_drive_text(&app.file_name()));
+    } else {
+        ui.label("Files DOS programs see as drive C: (INT 21h). They are kept in this browser.");
+    }
     let mut clear = false;
     ui.horizontal(|ui| {
         if ui.button("upload files…").on_hover_text("Files for a program to open, e.g. its input data").clicked() {
@@ -67,6 +71,7 @@ fn drive_ui(app: &mut App, ui: &mut Ui) {
         ui.weak("No files yet. Upload the files a program reads; the files it creates appear here too.");
         return;
     }
+    ui.weak(format!("{} KB of {} KB used", drive.used().div_ceil(1024), rustemu_core::memdrive::CAPACITY / 1024));
     let mut remove = None;
     let mut download = None;
     let preview_h = if app.drive_preview.is_some() { ui.available_height() * 0.5 } else { ui.available_height() };

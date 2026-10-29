@@ -714,19 +714,10 @@ impl Machine {
                     }
                     Some(OpenFile::Mem { write: false, .. }) => Err(E_ACCESS),
                     Some(OpenFile::Mem { key, pos, .. }) => match &mut self.dos.drive {
-                        Some(DosDrive::Memory(d)) => match d.file_mut(key) {
-                            Some(file) => {
-                                let at = *pos as usize;
-                                if n == 0 {
-                                    file.resize(at, 0);
-                                } else {
-                                    if file.len() < at + n {
-                                        file.resize(at + n, 0);
-                                    }
-                                    file[at..at + n].copy_from_slice(&data);
-                                    *pos += n as u64;
-                                }
-                                Ok(n)
+                        Some(DosDrive::Memory(d)) => match d.write_at(key, *pos, &data) {
+                            Some(w) => {
+                                *pos += w as u64;
+                                Ok(w)
                             }
                             None => Err(E_ACCESS),
                         },

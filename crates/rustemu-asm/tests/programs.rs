@@ -297,3 +297,44 @@ fn masm6_startup_and_exit() {
     assert_eq!(&p.image[c + 1..c + 6], &[0xB8, data as u8, (data >> 8) as u8, 0x8E, 0xD8]);
     assert!(p.image[c..].windows(5).any(|w| w == [0xB8, 0x03, 0x4C, 0xCD, 0x21]));
 }
+
+/// Include files from a table (name -> text).
+struct Files(&'static [(&'static str, &'static str)]);
+
+impl rustemu_asm::FileLoader for Files {
+    fn load(&mut self, name: &str, _from: &str) -> Option<(String, String)> {
+        self.0.iter().find(|f| f.0 == name).map(|f| (f.0.to_string(), f.1.to_string()))
+    }
+}
+
+#[test]
+fn include_cycles_are_errors() {
+    let asm = |files| rustemu_asm::assemble("m.asm", "include 'a.inc'\norg 100h\nret\n", &mut Files(files));
+    // A file includes itself, directly or through another one; the main file too.
+    for files in [
+        &[("a.inc", "include 'a.inc'")][..],
+        &[("a.inc", "include 'b.inc'"), ("b.inc", "nop\ninclude 'a.inc'")],
+        &[("a.inc", "include 'm.asm'"), ("m.asm", "")],
+    ] {
+        let e = asm(files).unwrap_err().to_string();
+        assert!(e.contains("includes itself"), "{e}");
+    }
+    // The same file twice, not nested, is fine.
+    let b =
+        rustemu_asm::assemble("m.asm", "org 100h\ninclude 'a.inc'\ninclude 'a.inc'\n", &mut Files(&[("a.inc", "nop")]));
+    assert_eq!(b.unwrap().image, [0x90, 0x90]);
+}
+
+#[test]
+fn data_is_limited_to_a_segment() {
+    // Gigabytes of DUP stop at once instead of being built.
+    assert!(err("org 100h\nx db 60000 dup(60000 dup(1))\n").contains("larger than 64 KB"));
+    let deep = format!("org 100h\ndb {}1{}\n", "2 dup(".repeat(40), ")".repeat(40));
+    assert!(err(&deep).contains("larger than 64 KB"));
+    // A COM program (or a segment) can't be over 64 KB.
+    assert!(err("org 100h\ndb 40000 dup(0)\ndb 40000 dup(0)\n").contains("segment is larger than 64 KB"));
+    assert!(err("org 100h\nrept 1000\ndb 65000 dup(0)\nendm\n").contains("segment is larger than 64 KB"));
+    assert!(err("data segment\nx db 0FFFFh dup(0)\ndw 1\ndata ends\ncode segment\nret\ncode ends\n").contains("64 KB"));
+    // Up to the end of the segment is fine.
+    assert_eq!(bytes("org 100h\ndb 0FF00h dup(7)\n").len(), 0xFF00);
+}
