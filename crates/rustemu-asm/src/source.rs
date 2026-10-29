@@ -62,7 +62,12 @@ pub struct Preprocessor<'a> {
     pub out: Vec<Line>,
     /// NASM dialect: `%` directives, `&` is an operator, backquoted strings.
     pub nasm: bool,
+    /// Files being processed, the outermost first (to catch an INCLUDE cycle).
+    open_files: Vec<String>,
 }
+
+/// Deepest INCLUDE nesting (a cycle through differently spelled names stops here).
+const MAX_INCLUDE_DEPTH: usize = 32;
 
 /// Words that begin/end blocks we must track while collecting macro bodies.
 fn first_words(text: &str) -> (String, String) {
@@ -245,6 +250,7 @@ impl<'a> Preprocessor<'a> {
             errors: Vec::new(),
             out: Vec::new(),
             nasm: false,
+            open_files: Vec::new(),
         }
     }
 
@@ -257,7 +263,9 @@ impl<'a> Preprocessor<'a> {
         self.files.push(name.to_string());
         self.sources.push(text.to_string());
         let lines = self.file_lines(idx, text, 0);
+        self.open_files.push(name.to_string());
         self.process(lines, 0);
+        self.open_files.pop();
     }
 
     /// The lines of a source file (NASM directives translated).
@@ -529,12 +537,20 @@ impl<'a> Preprocessor<'a> {
                     let name = code[7..].trim().trim_matches(['\'', '"', '<', '>']).trim().to_string();
                     let from = self.files.get(l.file).cloned().unwrap_or_default();
                     match self.loader.load(&name, &from) {
+                        Some((resolved, _)) if self.open_files.contains(&resolved) => {
+                            self.error(&l, format!("'{name}' includes itself"));
+                        }
+                        Some(_) if self.open_files.len() > MAX_INCLUDE_DEPTH => {
+                            self.error(&l, "INCLUDE nesting too deep");
+                        }
                         Some((resolved, text)) => {
                             let idx = self.files.len();
-                            self.files.push(resolved);
+                            self.files.push(resolved.clone());
                             self.sources.push(text.clone());
                             let inc = self.file_lines(idx, &text, depth);
+                            self.open_files.push(resolved);
                             self.process(inc, depth);
+                            self.open_files.pop();
                         }
                         None => self.error(&l, format!("cannot open include file '{name}'")),
                     }

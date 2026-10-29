@@ -95,6 +95,8 @@ impl App {
         self.program = None;
         self.example_key = None;
         self.doc_name = Some(s.name.clone());
+        self.opened_from_link = true;
+        self.link_notice_pending = true;
         self.text = s.text;
         self.saved_text = self.text.clone();
         self.messages.clear();
@@ -107,11 +109,39 @@ impl App {
         }
     }
 
+    /// The program in the editor came from a link and is not saved: it runs on an empty temporary
+    /// drive C:, so that somebody else's program can neither read nor change the user's files.
+    pub fn from_link(&self) -> bool {
+        self.opened_from_link && self.path.is_none() && self.program.is_none() && self.example_key.is_none()
+    }
+
+    /// Puts an empty temporary drive C: (for a program from a link) or the user's own one back
+    /// into the machine. Only the memory drive of the browser is swapped.
+    pub(crate) fn use_temporary_drive(&mut self, temporary: bool) {
+        let m = &mut self.session.machine;
+        if temporary && self.own_drive.is_none() {
+            let Some(own) = m.dos_memory_drive().cloned() else { return };
+            self.own_drive = Some(own);
+            m.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+        } else if !temporary && let Some(own) = self.own_drive.take() {
+            m.set_dos_memory_drive(own);
+        }
+    }
+
     /// Link to the program in the editor.
     pub fn share_link(&self, run: bool) -> String {
         let base = self.share_base.as_deref().unwrap_or(crate::app::WEB_URL);
         format!("{base}#{}", fragment(&self.file_name(), &self.text, run))
     }
+}
+
+/// What a program from a link may do with drive C: (the notice on its first run, the drive window).
+pub fn temporary_drive_text(name: &str) -> String {
+    format!(
+        "{name} was opened from a link, so it runs with an empty temporary drive C: instead of yours. \
+         It can neither see nor change your files, and what it writes there is not kept. To run it \
+         with your drive C:, save it first (File -> Save) and run it again."
+    )
 }
 
 /// "share link": the link to the program in the editor, to copy.

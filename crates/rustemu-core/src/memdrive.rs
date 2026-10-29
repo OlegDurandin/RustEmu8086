@@ -12,6 +12,13 @@ pub struct MemDrive {
     dirs: BTreeSet<String>,
 }
 
+/// Room on the drive for all its files: it is kept in browser storage (a few MB per site, as
+/// base64, next to the saved programs).
+pub const CAPACITY: usize = 2 * 1024 * 1024;
+
+/// Most files and folders a DOS program can make (a full drive gives "access denied", as DOS).
+const MAX_ENTRIES: usize = 1024;
+
 /// Header of [`MemDrive::to_bytes`].
 const MAGIC: &[u8; 8] = b"RE86DRV1";
 
@@ -64,6 +71,11 @@ impl MemDrive {
         self.dirs.iter().map(String::as_str)
     }
 
+    /// Bytes taken by the files.
+    pub fn used(&self) -> usize {
+        self.files.values().map(Vec::len).sum()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.files.is_empty() && self.dirs.is_empty()
     }
@@ -78,6 +90,15 @@ impl MemDrive {
         let key = Self::normalize(path).ok_or_else(|| format!("'{path}' is not a file name"))?;
         if self.dirs.contains(&key) {
             return Err(format!("{key} is a folder"));
+        }
+        let others = self.used() - self.files.get(&key).map_or(0, Vec::len);
+        if others + data.len() > CAPACITY {
+            return Err(format!(
+                "Not enough room for {key} ({} KB): drive C: holds {} KB, {} KB are free.",
+                data.len().div_ceil(1024),
+                CAPACITY / 1024,
+                CAPACITY.saturating_sub(others) / 1024
+            ));
         }
         let mut dir = String::new();
         for part in key.split('/').take(key.split('/').count() - 1) {
@@ -143,6 +164,10 @@ impl MemDrive {
 
     // ---- DOS operations (keys; errors are DOS error codes) ---------------------------------
 
+    fn full(&self) -> bool {
+        self.files.len() + self.dirs.len() >= MAX_ENTRIES
+    }
+
     fn parent(key: &str) -> &str {
         key.rsplit_once('/').map_or("", |(p, _)| p)
     }
@@ -155,8 +180,29 @@ impl MemDrive {
         self.files.get(key)
     }
 
-    pub(crate) fn file_mut(&mut self, key: &str) -> Option<&mut Vec<u8>> {
-        self.files.get_mut(key)
+    /// AH=40h: writes `data` at `at`, zero-filling a gap before it; empty `data` sets the length
+    /// to `at`. Only what fits on the drive is written (DOS writes fewer bytes when the disk is
+    /// full). Returns the number of bytes written; None when there is no such file.
+    pub(crate) fn write_at(&mut self, key: &str, at: u64, data: &[u8]) -> Option<usize> {
+        let used = self.used();
+        let file = self.files.get_mut(key)?;
+        // The longest this file may get.
+        let room = CAPACITY.saturating_sub(used - file.len()).max(file.len()) as u64;
+        if data.is_empty() {
+            let len = if at <= file.len() as u64 { at } else { at.min(room) };
+            file.resize(len as usize, 0);
+            return Some(0);
+        }
+        let end = (at + data.len() as u64).min(room);
+        if end <= at {
+            return Some(0);
+        }
+        let (at, end) = (at as usize, end as usize);
+        if file.len() < end {
+            file.resize(end, 0);
+        }
+        file[at..end].copy_from_slice(&data[..end - at]);
+        Some(end - at)
     }
 
     /// The error for a key that does not exist: its folder is missing too, or just the file.
@@ -183,6 +229,9 @@ impl MemDrive {
         if !self.is_dir(Self::parent(key)) {
             return Err(E_PATH_NOT_FOUND);
         }
+        if !self.files.contains_key(key) && self.full() {
+            return Err(E_ACCESS);
+        }
         self.files.insert(key.to_string(), Vec::new());
         Ok(())
     }
@@ -194,6 +243,9 @@ impl MemDrive {
         }
         if !self.is_dir(Self::parent(key)) {
             return Err(E_PATH_NOT_FOUND);
+        }
+        if self.full() {
+            return Err(E_ACCESS);
         }
         self.dirs.insert(key.to_string());
         Ok(())
@@ -283,6 +335,36 @@ mod tests {
         assert_eq!(d.list(""), Some(vec![]));
         assert!(d.remove("data"));
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn the_drive_has_a_capacity() {
+        let mut d = MemDrive::new();
+        d.create("A.TXT", false).unwrap();
+        // A write far past the end: only what fits, the gap zero-filled.
+        assert_eq!(d.write_at("A.TXT", 0x7FFF_FFFF, b"x"), Some(0));
+        assert_eq!(d.write_at("A.TXT", CAPACITY as u64 - 2, b"xyz"), Some(2));
+        assert_eq!(d.used(), CAPACITY);
+        assert_eq!(d.read("A.TXT").unwrap()[CAPACITY - 3..], [0, b'x', b'y']);
+        // Overwriting inside the file still works; growing another file does not.
+        assert_eq!(d.write_at("A.TXT", 0, b"ab"), Some(2));
+        d.create("B.TXT", false).unwrap();
+        assert_eq!(d.write_at("B.TXT", 0, b"b"), Some(0));
+        assert!(d.write("C.TXT", vec![1]).unwrap_err().contains("0 KB are free"));
+        // A zero-length write truncates (and can't extend past the capacity).
+        assert_eq!(d.write_at("A.TXT", 10, b""), Some(0));
+        assert_eq!(d.used(), 10);
+        assert_eq!(d.write_at("A.TXT", u32::MAX as u64, b""), Some(0));
+        assert_eq!(d.used(), CAPACITY);
+        assert_eq!(d.write_at("NONE", 0, b"x"), None);
+        // Files and folders: up to MAX_ENTRIES.
+        let mut d = MemDrive::new();
+        for i in 0..MAX_ENTRIES {
+            d.create(&format!("F{i}"), false).unwrap();
+        }
+        assert_eq!(d.create("ONE.MORE", false), Err(E_ACCESS));
+        assert_eq!(d.create_dir("DIR"), Err(E_ACCESS));
+        d.create("F0", false).unwrap();
     }
 
     #[test]
