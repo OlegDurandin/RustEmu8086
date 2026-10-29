@@ -44,7 +44,7 @@ mod web {
 
     /// Saves the app when the page is hidden or closed: eframe 0.37 listens for "onbeforeunload",
     /// which never fires, and Safari on iPadOS may discard a hidden page without any other event.
-    /// Without storage, closing the page with unsaved changes asks first.
+    /// Without storage (or when it is full), closing the page with unsaved changes asks first.
     fn save_on_leave(window: &web_sys::Window, runner: &eframe::WebRunner, storage_ok: bool) {
         use wasm_bindgen::JsCast;
         let runner = runner.clone();
@@ -57,7 +57,7 @@ mod web {
             if let Some(s) = local_storage() {
                 eframe::App::save(&mut *app, &mut LocalStore(s));
             }
-            if e.type_() == "beforeunload" && !storage_ok && app.app().dirty() {
+            if e.type_() == "beforeunload" && (!storage_ok || app.app().storage_failed()) && app.app().dirty() {
                 e.prevent_default();
             }
         });
@@ -192,6 +192,8 @@ mod web {
                             }
                         }
                         if !storage_ok {
+                            // Writes fail from now on; this notice says it already.
+                            app.storage_warned = true;
                             app.notice(
                                 "Browser storage",
                                 "This browser does not let the page keep data (private browsing?): programs, \

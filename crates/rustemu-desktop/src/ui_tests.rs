@@ -17,11 +17,13 @@ fn harness(app: App) -> Harness<'static, App> {
     h
 }
 
-/// eframe storage in memory; counts the values written.
+/// eframe storage in memory; counts the values written. With a quota it keeps the old value of a
+/// write that does not fit, as a browser's local storage does.
 #[derive(Default)]
 struct MemStorage {
     values: std::collections::HashMap<String, String>,
     writes: usize,
+    quota: Option<usize>,
 }
 
 impl eframe::Storage for MemStorage {
@@ -30,6 +32,12 @@ impl eframe::Storage for MemStorage {
     }
     fn set_string(&mut self, key: &str, value: String) {
         self.writes += 1;
+        if let Some(quota) = self.quota {
+            let others: usize = self.values.iter().filter(|(k, _)| *k != key).map(|(_, v)| v.len()).sum();
+            if others + value.len() > quota {
+                return;
+            }
+        }
         self.values.insert(key.to_string(), value);
     }
     fn remove_string(&mut self, key: &str) {
@@ -761,6 +769,70 @@ text  db 'done'
     h.get_by_label("C:\\OUT.TXT").click();
     h.run_steps(2);
     assert_eq!(h.state().drive_preview.as_deref(), Some("OUT.TXT"));
+}
+
+#[test]
+fn drive_c_is_a_folder_of_its_own() {
+    // As Emu8086's vdrive: a program's files go to drive C:, not next to its source; the option
+    // makes drive C: the program's folder.
+    let base = std::env::temp_dir().join(format!("rustemu_vdrive_{}", std::process::id()));
+    let (source_dir, drive) = (base.join("src"), base.join("vdrive").join("C"));
+    std::fs::create_dir_all(&source_dir).unwrap();
+    let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+    app.drive_dir = drive.clone();
+    app.path = Some(source_dir.join("make.asm"));
+    app.text = "org 100h
+    mov ah, 3Ch
+    xor cx, cx
+    mov dx, offset fname
+    int 21h
+    ret
+fname db 'made.txt', 0
+"
+    .into();
+    app.emulate();
+    app.start_run();
+    run_until_paused(&mut app);
+    assert!(drive.join("MADE.TXT").exists(), "{}", app.status);
+    assert!(!source_dir.join("MADE.TXT").exists());
+    assert_eq!(app.host_drive(), drive);
+
+    app.settings.drive_c_source_folder = true;
+    app.emulate();
+    app.start_run();
+    run_until_paused(&mut app);
+    assert!(source_dir.join("MADE.TXT").exists(), "{}", app.status);
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn full_storage_is_reported_and_retried() {
+    // The browser keeps the old value when its quota is full: the user is told once, the write is
+    // tried again on the next save and goes through once there is room.
+    let mut app = browser_app();
+    app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    let mut storage = MemStorage { quota: Some(64 * 1024), ..MemStorage::default() };
+    app.persist(&mut storage);
+    assert!(!app.storage_failed() && app.notice.is_none());
+
+    app.add_drive_file("big.bin", vec![0x55; 100 * 1024]);
+    app.persist(&mut storage);
+    assert!(app.storage_failed());
+    let notice = app.notice.take().expect("a notice");
+    assert_eq!(notice.0, "Browser storage is full");
+    assert!(notice.1.contains("drive C:"), "{}", notice.1);
+    let writes = storage.writes;
+    app.persist(&mut storage);
+    assert!(storage.writes > writes, "the failed value is written again");
+    assert!(app.notice.is_none(), "the notice is shown once");
+
+    storage.quota = None;
+    app.persist(&mut storage);
+    assert!(!app.storage_failed());
+    let mut restarted = browser_app();
+    restarted.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    restarted.restore_drive(&storage);
+    assert!(restarted.session.machine.dos_memory_drive().unwrap().read("big.bin").is_some());
 }
 
 #[test]

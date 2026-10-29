@@ -42,6 +42,33 @@ pub enum ThemeChoice {
 /// Storage key of the memory drive C: (see [`App::persist`]).
 const DRIVE_KEY: &str = "dos_drive";
 
+fn text_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
+/// What a storage key holds, for the user.
+fn storage_key_name(key: &str) -> &'static str {
+    match key {
+        DRIVE_KEY => "drive C:",
+        crate::programs::PROGRAMS_KEY => "my programs",
+        crate::programs::DRAFT_KEY => "the editor text",
+        _ => "settings",
+    }
+}
+
+fn storage_full_text(what: &[&str]) -> String {
+    format!(
+        "The browser refused to keep {}: its storage for this site (about 5 MB) is full. \
+         The last changes will be lost when the page is closed.\n\n\
+         Free some space: delete the files you do not need in the \"drive C: files\" window or old \
+         programs in Open, or download what you want to keep. Saving is tried again automatically.",
+        what.join(", ")
+    )
+}
+
 /// Releases of RustEmu8086 (help -> check for an update).
 pub const RELEASES_URL: &str = "https://github.com/OlegDurandin/RustEmu8086/releases";
 pub const REPO_URL: &str = "https://github.com/OlegDurandin/RustEmu8086";
@@ -67,6 +94,9 @@ pub struct Settings {
     pub syntax: SyntaxChoice,
     /// Debugging session of recently used files, most recent first.
     pub sessions: Vec<(String, FileSession)>,
+    /// Drive C: of DOS programs is the folder of the program instead of its own folder (the
+    /// desktop; programs can then change and delete the files next to the source).
+    pub drive_c_source_folder: bool,
 }
 
 /// What is remembered per source file between runs.
@@ -111,6 +141,7 @@ impl Default for Settings {
             vars_format: Default::default(),
             syntax: SyntaxChoice::Auto,
             sessions: Vec::new(),
+            drive_c_source_folder: false,
         }
     }
 }
@@ -359,6 +390,12 @@ pub struct App {
     pub share_base: Option<String>,
     /// Values last written to the storage, to skip unchanged ones (see [`App::persist`]).
     persisted: std::collections::HashMap<&'static str, u64>,
+    /// Drive C: of DOS programs on the desktop (default [`crate::platform::vdrive_dir`]).
+    pub drive_dir: PathBuf,
+    /// Keys whose last write did not reach the storage (the browser's quota is full).
+    unsaved_keys: std::collections::BTreeSet<&'static str>,
+    /// The storage refused data and the user was told; set again once everything is written.
+    pub storage_warned: bool,
     /// Colour of the current instruction in the editor (default: [`crate::colors::info`]).
     pub current_line_color: Option<egui::Color32>,
     /// The tablet layout is shown (set by the tablet front end).
@@ -479,6 +516,9 @@ impl App {
             share: None,
             share_base: None,
             persisted: Default::default(),
+            drive_dir: crate::platform::vdrive_dir(),
+            unsaved_keys: Default::default(),
+            storage_warned: false,
             current_line_color: None,
             tablet_layout: false,
             can_switch_layout: false,
@@ -1035,7 +1075,7 @@ impl App {
         let devices = p.emu.start.clone();
         let from_link = self.from_link();
         self.use_temporary_drive(from_link);
-        let root = self.vdrive();
+        let root = self.vdrive(self.path.as_deref());
         let same_image = self.session.program.as_ref().is_some_and(|old| old.file_bytes() == p.file_bytes());
         if let Err(e) = self.session.load_program(p) {
             self.build_failed = true;
@@ -1067,7 +1107,12 @@ impl App {
     /// Loads a binary executable without source.
     pub fn load_binary(&mut self, p: &Path) {
         match self.session.load_path(p) {
-            Ok(()) => self.after_binary_load(),
+            Ok(()) => {
+                if let Some(root) = self.vdrive(Some(p)) {
+                    self.session.machine.set_dos_root(root);
+                }
+                self.after_binary_load();
+            }
             Err(e) => self.notice("Load", &e),
         }
     }
@@ -1111,17 +1156,25 @@ impl App {
         self.status = format!("Loaded - CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
     }
 
-    /// The directory DOS file functions see as drive C:; None for the memory drive (the browser).
-    fn vdrive(&self) -> Option<PathBuf> {
+    /// The directory DOS file functions see as drive C: when `program` runs: a folder of its own,
+    /// as Emu8086's `vdrive\C` ([`App::drive_dir`]), or the program's folder with
+    /// [`Settings::drive_c_source_folder`]. None for the memory drive (the browser).
+    fn vdrive(&self, program: Option<&Path>) -> Option<PathBuf> {
         if self.session.machine.dos_memory_drive().is_some() {
             return None;
         }
-        if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
+        if self.settings.drive_c_source_folder
+            && let Some(dir) = program.and_then(Path::parent).filter(|d| !d.as_os_str().is_empty())
+        {
             return Some(dir.to_path_buf());
         }
-        let d = crate::platform::data_dir().join("vdrive");
-        std::fs::create_dir_all(&d).ok();
-        Some(d)
+        std::fs::create_dir_all(&self.drive_dir).ok();
+        Some(self.drive_dir.clone())
+    }
+
+    /// The folder that is drive C: on the desktop: the loaded program's, otherwise the default.
+    pub fn host_drive(&self) -> &Path {
+        self.session.machine.dos_host_root().unwrap_or(&self.drive_dir)
     }
 
     pub fn reload(&mut self) {
@@ -1844,16 +1897,34 @@ impl App {
         if self.browser {
             self.persist_browser(storage);
         }
+        if self.unsaved_keys.is_empty() {
+            self.storage_warned = false;
+        } else if !std::mem::replace(&mut self.storage_warned, true) {
+            let what: Vec<&str> = self.unsaved_keys.iter().map(|k| storage_key_name(k)).collect();
+            self.notice("Browser storage is full", &storage_full_text(&what));
+        }
     }
 
-    /// Writes `value` under `key` unless it is what was written last time.
+    /// Some data could not be written by the last [`App::persist`].
+    pub fn storage_failed(&self) -> bool {
+        !self.unsaved_keys.is_empty()
+    }
+
+    /// Writes `value` under `key` unless it is what was written last time. The value is read back:
+    /// a browser whose quota is full keeps the old one (eframe only logs the error). A failed
+    /// write is tried again next time.
     pub(crate) fn put(&mut self, storage: &mut dyn eframe::Storage, key: &'static str, value: String) {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        value.hash(&mut h);
-        let hash = h.finish();
-        if self.persisted.insert(key, hash) != Some(hash) {
-            storage.set_string(key, value);
+        let hash = text_hash(&value);
+        if self.persisted.get(key) == Some(&hash) {
+            return;
+        }
+        storage.set_string(key, value);
+        if storage.get_string(key).is_some_and(|v| text_hash(&v) == hash) {
+            self.persisted.insert(key, hash);
+            self.unsaved_keys.remove(key);
+        } else {
+            self.persisted.remove(key);
+            self.unsaved_keys.insert(key);
         }
     }
 

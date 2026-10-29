@@ -33,6 +33,9 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
   Файловые операции хоста — тоже барьер: их нельзя откатить.
 - **Загрузка**: PSP в `0700h`; COM в `0700:0100`; EXE — модуль с `0710h`, DS=ES=PSP; BIN — `#load_segment#`
   (по умолчанию `0100h`); BOOT — `0000:7C00`.
+- **Диск C: (INT 21h)**: в GUI на десктопе — своя папка `~/Documents/RustEmu8086/vdrive/C` (`App::drive_dir`,
+  как `vdrive\C` Emu8086), опция `Settings::drive_c_source_folder` — папка программы; CLI (`Session::load_path`) —
+  папка файла; веб — `MemDrive`. Буква диска в пути игнорируется.
 - **Ассемблер**: формат — по `#make_xxx#`, иначе COM при `ORG 100h`, EXE при наличии сегментов, иначе COM.
   Переменные (`x db ..`) — память с типом; метки (`x:`, в т.ч. `x: db ..`) — непосредственные адреса.
   Дальний Jcc → автоматически `J!cc +3 / JMP near` (как Emu8086). `shl ax, 3` → 3×`shl ax,1`.
@@ -221,7 +224,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       `drive_ui.rs` (загрузка, просмотр, скачивание). «Мои программы» — `programs.rs` (`App::browser` вместо
       `is_web()`, чтобы тестировать нативно; Save → `save_program`/диалог имени `SaveName`, Open → окно, загрузка
       исходника → `import_program`; черновик редактора `Draft` восстанавливается при следующем визите). `App::persist`
-      не пишет неизменённые значения (`App::put`); веб сохраняет каждые 10 с и сам — на `visibilitychange`/`pagehide`
+      не пишет неизменённые значения (`App::put`; записанное читается обратно — при переполнении квоты
+      ключ в `unsaved_keys`, повтор при следующем сохранении, одно предупреждение); веб сохраняет каждые 10 с и сам — на `visibilitychange`/`pagehide`
       через `WebRunner::app_mut` (eframe 0.37 слушает несуществующее `onbeforeunload`); без localStorage — notice и
       вопрос перед закрытием. Экран текстового режима — растровый шрифт 8×16 (`font::glyph8x16`, Unscii 16, public
       domain; 4 глифа нарисованы) через атлас с «sharp bilinear» (`screen.rs`). Не сделано: PWA/офлайн, ☻☼⌂ⁿ в
