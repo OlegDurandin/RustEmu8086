@@ -1,6 +1,6 @@
 //! Multi-pass assembler driver.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::encode::{Ctx, encode};
 use crate::expr::{Env, Expr, ForwardKind, SegId, SymVal, Val, eval};
@@ -57,6 +57,13 @@ struct Assembler {
     prev: HashMap<String, SymVal>,
     /// Symbols defined with EQU/labels in this pass (for duplicate detection).
     defined_here: HashMap<String, usize>,
+    /// Constants whose value is not known yet: their EQU / `=` used a symbol without a value.
+    /// They read as unknown (like forward references) until a later pass resolves them; in a
+    /// cycle (`x equ y`, `y equ x`) they never are.
+    unresolved: HashSet<String>,
+    prev_unresolved: HashSet<String>,
+    /// EQU / `=` statements of this pass whose value was unknown.
+    unknown_equs: Vec<(usize, String)>,
     cur_seg: SegId,
     seg_stack: Vec<SegId>,
     procs: Vec<(String, bool)>,
@@ -80,6 +87,10 @@ struct Assembler {
 
 impl Env for Assembler {
     fn lookup(&self, name: &str) -> Option<SymVal> {
+        let unresolved = if self.syms.contains_key(name) { &self.unresolved } else { &self.prev_unresolved };
+        if unresolved.contains(name) {
+            return None;
+        }
         self.syms.get(name).or_else(|| self.prev.get(name)).cloned()
     }
     fn is_forward(&self, name: &str) -> Option<ForwardKind> {
@@ -160,6 +171,9 @@ pub fn assemble(
         syms: HashMap::new(),
         prev: HashMap::new(),
         defined_here: HashMap::new(),
+        unresolved: HashSet::new(),
+        prev_unresolved: HashSet::new(),
+        unknown_equs: Vec::new(),
         cur_seg: 0,
         seg_stack: Vec::new(),
         procs: Vec::new(),
@@ -186,10 +200,14 @@ pub fn assemble(
     for pass in 1..=MAX_PASSES {
         a.pass = pass;
         a.run_pass();
-        let changed = a.syms != a.prev || a.new_layout() != a.layout || a.new_flat_bases() != a.flat_bases;
+        let changed = a.syms != a.prev
+            || a.unresolved != a.prev_unresolved
+            || a.new_layout() != a.layout
+            || a.new_flat_bases() != a.flat_bases;
         a.layout = a.new_layout();
         a.flat_bases = a.new_flat_bases();
         a.prev = std::mem::take(&mut a.syms);
+        a.prev_unresolved = std::mem::take(&mut a.unresolved);
         if !changed && pass >= 2 {
             a.syms = a.prev.clone();
             break;
@@ -198,6 +216,9 @@ pub fn assemble(
             a.syms = a.prev.clone();
             a.errors.push(AsmError { file: 0, line: 0, col: None, len: 0, msg: "assembly did not converge".into() });
         }
+    }
+    for (idx, name) in std::mem::take(&mut a.unknown_equs) {
+        a.err(idx, format!("'{name}' is defined through itself (circular EQU)"));
     }
     if a.fasm {
         errors.push(AsmError {
@@ -478,6 +499,7 @@ impl Assembler {
         self.relocs.clear();
         self.emitted.clear();
         self.defined_here.clear();
+        self.unknown_equs.clear();
         self.syms.clear();
         self.cur_seg = if self.flat { 0 } else { self.code_seg.unwrap_or(0) };
         self.seg_stack.clear();
@@ -605,17 +627,16 @@ impl Assembler {
                     }
                 }
             }
-            StmtKind::Equ(name, e) => match eval(e, self) {
+            StmtKind::Equ(name, e) | StmtKind::Assign(name, e) => match eval(e, self) {
                 Ok(v) => {
-                    let sv = equ_value(&v);
-                    self.define(idx, name, sv, false);
-                }
-                Err(m) => self.err(idx, m),
-            },
-            StmtKind::Assign(name, e) => match eval(e, self) {
-                Ok(v) => {
-                    let sv = equ_value(&v);
-                    self.define(idx, name, sv, true);
+                    let redefinable = matches!(st.kind, StmtKind::Assign(..));
+                    self.define(idx, name, equ_value(&v), redefinable);
+                    if v.unknown {
+                        self.unresolved.insert(name.clone());
+                        self.unknown_equs.push((idx, name.clone()));
+                    } else {
+                        self.unresolved.remove(name);
+                    }
                 }
                 Err(m) => self.err(idx, m),
             },
