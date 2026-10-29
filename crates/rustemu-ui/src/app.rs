@@ -234,6 +234,12 @@ pub struct App {
     pub path: Option<PathBuf>,
     /// Name of a file without a path (opened in the browser), shown and used for downloads.
     pub doc_name: Option<String>,
+    /// The program in the editor was opened from a link (see [`App::from_link`]).
+    pub(crate) opened_from_link: bool,
+    /// The notice about the temporary drive C: is still to be shown for the program from a link.
+    pub(crate) link_notice_pending: bool,
+    /// The user's memory drive C: while a program from a link runs on a temporary one.
+    pub(crate) own_drive: Option<rustemu_core::memdrive::MemDrive>,
     /// A file to ask the browser for at the next frame (see `platform::request_upload`).
     pub pending_upload: Option<crate::platform::UploadFor>,
     /// File of the memory drive shown in the "drive C:" window.
@@ -395,6 +401,9 @@ impl App {
             settings,
             path: None,
             doc_name: None,
+            opened_from_link: false,
+            link_notice_pending: false,
+            own_drive: None,
             pending_upload: None,
             drive_preview: None,
             drive_confirm_clear: false,
@@ -556,6 +565,7 @@ impl App {
         self.store_session();
         self.path = None;
         self.doc_name = None;
+        self.opened_from_link = false;
         self.program = None;
         self.example_key = None;
         self.clear_session();
@@ -593,6 +603,7 @@ impl App {
                 self.saved_text = self.text.clone();
                 self.path = Some(p.to_path_buf());
                 self.doc_name = None;
+                self.opened_from_link = false;
                 self.program = None;
                 self.messages.clear();
                 self.clear_errors();
@@ -717,6 +728,7 @@ impl App {
         self.store_session();
         self.path = None;
         self.doc_name = None;
+        self.opened_from_link = false;
         self.program = None;
         self.example_key = Some(format!("example:{name}"));
         self.text = src.to_string();
@@ -1021,6 +1033,8 @@ impl App {
         let source_index =
             source_files.iter().map(|(_, lines)| rustemu_asm::library::index(&lines.join("\n"))).collect();
         let devices = p.emu.start.clone();
+        let from_link = self.from_link();
+        self.use_temporary_drive(from_link);
         let root = self.vdrive();
         let same_image = self.session.program.as_ref().is_some_and(|old| old.file_bytes() == p.file_bytes());
         if let Err(e) = self.session.load_program(p) {
@@ -1042,6 +1056,12 @@ impl App {
             self.device_tab = d;
             self.windows.devices = true;
         }
+        if from_link && self.own_drive.is_some() {
+            self.status.push_str(" - on a temporary drive C:");
+            if std::mem::take(&mut self.link_notice_pending) {
+                self.notice("Program from a link", &crate::share::temporary_drive_text(&self.file_name()));
+            }
+        }
     }
 
     /// Loads a binary executable without source.
@@ -1054,6 +1074,7 @@ impl App {
 
     /// After loading code without debug information (binary file, boot from floppy).
     pub fn after_binary_load(&mut self) {
+        self.use_temporary_drive(false);
         self.clear_address_breakpoints();
         self.loaded_text = None;
         self.source_files.clear();
@@ -1816,7 +1837,7 @@ impl App {
         self.store_settings();
         let settings = ron::ser::to_string(&self.settings).unwrap_or_default();
         self.put(storage, eframe::APP_KEY, settings);
-        if let Some(drive) = self.session.machine.dos_memory_drive() {
+        if let Some(drive) = self.own_drive.as_ref().or(self.session.machine.dos_memory_drive()) {
             let drive = base64::engine::general_purpose::STANDARD.encode(drive.to_bytes());
             self.put(storage, DRIVE_KEY, drive);
         }

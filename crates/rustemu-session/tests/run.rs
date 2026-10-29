@@ -452,6 +452,43 @@ dta     db 43 dup(0)
 }
 
 #[test]
+fn memory_drive_full_is_a_short_write() {
+    // Seek to 2 GB and write: nothing fits, AX = 0 with CF clear (a full disk in DOS), and the
+    // drive doesn't try to grow the file to 2 GB.
+    let src = "org 100h
+    mov ah, 3Ch
+    xor cx, cx
+    mov dx, offset fname
+    int 21h
+    mov bx, ax
+    mov ax, 4200h
+    mov cx, 7FFFh
+    mov dx, 0FFFFh
+    int 21h
+    mov ah, 40h
+    mov cx, 1
+    mov dx, offset fname
+    int 21h
+    jc fail
+    or ax, ax
+    jnz fail
+    mov ax, 4C00h
+    int 21h
+fail:
+    mov ax, 4C01h
+    int 21h
+fname db 'big.dat', 0
+";
+    let prog = rustemu_asm::assemble_str(src).unwrap();
+    let mut s = Session::new();
+    s.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    s.load_program(prog).unwrap();
+    let (s, ev) = finish(s, "");
+    assert_eq!(ev, Event::Terminated(0), "{:?}", s.machine.log);
+    assert_eq!(s.machine.dos_memory_drive().unwrap().read("big.dat"), Some(&b""[..]));
+}
+
+#[test]
 fn devices_ports() {
     let src = "org 100h\nmov ax, 0249h\nout 4, ax\nmov al, 'P'\nout 130, al\nmov ax, 1234\nout 199, ax\nret\n";
     let (s, _) = run_src(src, "");
