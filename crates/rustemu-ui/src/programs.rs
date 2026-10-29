@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::{App, PendingAction};
 
-const PROGRAMS_KEY: &str = "programs";
-const DRAFT_KEY: &str = "draft";
+pub(crate) const PROGRAMS_KEY: &str = "programs";
+pub(crate) const DRAFT_KEY: &str = "draft";
 
 /// A program saved in the browser.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

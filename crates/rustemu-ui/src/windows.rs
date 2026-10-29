@@ -152,9 +152,31 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                     }
                 });
                 ui.end_row();
+                // The browser's drive C: is in memory.
+                if !app.browser {
+                    ui.label("drive C:");
+                    ui.vertical(|ui| {
+                        let own = app.drive_dir.display().to_string();
+                        ui.radio_value(&mut app.settings.drive_c_source_folder, false, "a folder of its own")
+                            .on_hover_text(own);
+                        ui.radio_value(&mut app.settings.drive_c_source_folder, true, "the folder of the program")
+                            .on_hover_text("Programs can change and delete the files next to the source");
+                        ui.weak("Takes effect when a program is loaded.");
+                        if ui.button("show drive C:").clicked() {
+                            open_drive_folder(app);
+                        }
+                    });
+                    ui.end_row();
+                }
             });
         });
     app.options_open = open;
+}
+
+/// Opens the folder DOS programs see as drive C: (of the loaded program, otherwise the default).
+fn open_drive_folder(app: &App) {
+    std::fs::create_dir_all(app.host_drive()).ok();
+    crate::platform::open_folder(app.host_drive());
 }
 
 /// Virtual drive menu (main Emulator menu and the emulator window), as in Emu8086. There is one
@@ -165,6 +187,13 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
     if app.session.machine.dos_memory_drive().is_some() {
         if ui.button("drive C: files…").on_hover_text("Files DOS programs read and write (INT 21h)").clicked() {
             app.windows.drive = true;
+            ui.close();
+        }
+        ui.separator();
+    } else if !app.browser {
+        let dir = app.host_drive().display().to_string();
+        if ui.button("show drive C: folder").on_hover_text(dir).clicked() {
+            open_drive_folder(app);
             ui.close();
         }
         ui.separator();
