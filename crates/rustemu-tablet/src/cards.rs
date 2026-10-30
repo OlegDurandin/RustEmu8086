@@ -267,6 +267,10 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
             toggle = Some(a);
         }
         shown += 1;
+        // The list ends with its segment.
+        if ip as u32 + ins.len > 0xFFFF {
+            break;
+        }
         a += ins.len;
         ip = ip.wrapping_add(ins.len as u16);
     }

@@ -60,57 +60,60 @@ impl Device {
 }
 
 pub fn devices_window(app: &mut App, ctx: &egui::Context) {
+    if app.panels() {
+        return;
+    }
     let mut open = app.windows.devices;
     egui::Window::new("virtual devices")
         .id(egui::Id::unique("devices_window"))
         .open(&mut open)
         .default_pos(pos2(760.0, 120.0))
         .resizable(false)
-        .show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (d, name) in Device::ALL {
-                    ui.selectable_value(&mut app.device_tab, d, name);
-                }
-            });
-            ui.separator();
-            match app.device_tab {
-                Device::TrafficLights => {
-                    ui.label(RichText::new("Traffic lights — port 4 (word)").strong());
-                    traffic_lights(app, ui);
-                }
-                Device::Stepper => {
-                    ui.label(RichText::new("Stepper motor — port 7").strong());
-                    stepper(app, ui);
-                }
-                Device::Led => {
-                    ui.label(RichText::new("LED display — port 199").strong());
-                    led(app, ui);
-                }
-                Device::Thermometer => {
-                    ui.label(RichText::new("Thermometer — port 125 (in), heater — port 127 (out)").strong());
-                    thermometer(app, ui);
-                }
-                Device::Printer => {
-                    ui.label(RichText::new("Printer — port 130").strong());
-                    printer(app, ui);
-                }
-                Device::Robot => {
-                    ui.label(RichText::new("Robot — ports 9 (command), 10 (data), 11 (status)").strong());
-                    robot(app, ui);
-                }
-                Device::SimpleIo => {
-                    ui.label(RichText::new("Simple I/O — port 110 (byte), port 112 (word)").strong());
-                    simple_io(app, ui);
-                }
-                Device::VgaState => {
-                    ui.label(
-                        RichText::new("VGA state — port 3DAh (vertical retrace), DAC palette 3C8h / 3C9h").strong(),
-                    );
-                    vga_state(app, ui);
-                }
-            }
-        });
+        .show(ctx, |ui| devices_ui(app, ui));
     app.windows.devices = open;
+}
+
+pub(crate) fn devices_ui(app: &mut App, ui: &mut Ui) {
+    ui.horizontal_wrapped(|ui| {
+        for (d, name) in Device::ALL {
+            ui.selectable_value(&mut app.device_tab, d, name);
+        }
+    });
+    ui.separator();
+    match app.device_tab {
+        Device::TrafficLights => {
+            ui.label(RichText::new("Traffic lights — port 4 (word)").strong());
+            traffic_lights(app, ui);
+        }
+        Device::Stepper => {
+            ui.label(RichText::new("Stepper motor — port 7").strong());
+            stepper(app, ui);
+        }
+        Device::Led => {
+            ui.label(RichText::new("LED display — port 199").strong());
+            led(app, ui);
+        }
+        Device::Thermometer => {
+            ui.label(RichText::new("Thermometer — port 125 (in), heater — port 127 (out)").strong());
+            thermometer(app, ui);
+        }
+        Device::Printer => {
+            ui.label(RichText::new("Printer — port 130").strong());
+            printer(app, ui);
+        }
+        Device::Robot => {
+            ui.label(RichText::new("Robot — ports 9 (command), 10 (data), 11 (status)").strong());
+            robot(app, ui);
+        }
+        Device::SimpleIo => {
+            ui.label(RichText::new("Simple I/O — port 110 (byte), port 112 (word)").strong());
+            simple_io(app, ui);
+        }
+        Device::VgaState => {
+            ui.label(RichText::new("VGA state — port 3DAh (vertical retrace), DAC palette 3C8h / 3C9h").strong());
+            vga_state(app, ui);
+        }
+    }
 }
 
 fn traffic_lights(app: &App, ui: &mut Ui) {

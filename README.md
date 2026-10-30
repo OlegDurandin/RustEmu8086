@@ -82,7 +82,7 @@ git push origin v0.2.0
   сенсорных устройствах и в узком окне — [интерфейс планшета](#интерфейс-планшета). Переключить можно прямо в
   приложении, без потери программы: окно **options** → *layout*, в интерфейсе планшета — меню ⋮ →
   *Desktop layout*; выбор запоминается в браузере. Для одного посещения: `?ui=desktop` или `?ui=tablet` в адресе.
-- Ссылка на пример: `?example=bubble_sort.asm` открывает встроенный пример, `&run` сразу его запускает
+- Ссылка на пример: `?example=palindrome.asm` открывает встроенный пример, `&run` сразу его запускает
   (например, `…/RustEmu8086/?example=hello.asm&run`).
 - **Поделиться программой** — кнопка **share** на панели (или **File → Share link…**; в интерфейсе планшета —
   значок «поделиться» рядом с клавиатурой): ссылка, которая открывает
@@ -206,7 +206,9 @@ cargo run -p rustemu-tablet
    При ошибках сборки они появятся внизу с номером строки и колонки (`hello.asm (4:9): value 300 out of byte
    range`), а в редакторе место ошибки подчёркнуто волнистой линией — неизвестное имя, операнд, выходящее за
    пределы значение; клик по ошибке выделяет это место.
-3. В окне **emulator**:
+3. В окне **emulator** (по умолчанию инструменты — плавающие окна, как в Emu8086; в **options → windows** можно
+   выбрать панели-вкладки, которые не перекрывают друг друга, **Emulator → Reset window layout** возвращает
+   раскладку по умолчанию):
    - **Single step** (F8) — одна инструкция;
    - **Step back** (⇧F8) — откат на шаг назад;
    - **Step over** (F10) — выполнить текущую строку целиком (макрос, `CALL`, `INT`);
@@ -417,6 +419,8 @@ RustEmu8086 повторяет Emu8086 по языку ассемблера и �
 
 ### Работает иначе
 
+- **Окна**: по умолчанию — плавающие, как в Emu8086; в **options → windows** можно включить панели-вкладки
+  главного окна, которые не перекрывают друг друга.
 - **Горячие клавиши** частично свои:
 
   | Действие | Emu8086 | RustEmu8086 |
@@ -444,7 +448,6 @@ RustEmu8086 повторяет Emu8086 по языку ассемблера и �
   история обрезается, потому что такие изменения откатить нельзя.
 - **`emu8086.inc`** — собственная реализация: те же макросы и процедуры с тем же видимым поведением, но не
   исходный файл Emu8086.
-- **Встроенные примеры** — 17 своих программ. Примеры из поставки Emu8086 можно открыть как обычные файлы.
 - **VGA_STATE не нужен**: бит обратного хода луча в порту 3DAh переключается всегда. Вкладка *VGA state*
   показывает этот бит, видеорежим и палитру.
 - **Аппаратный таймер.** Счётчик тиков BIOS (0040:006C) идёт всегда, а прерывание IRQ0 (INT 08h → INT 1Ch)
@@ -471,11 +474,11 @@ RustEmu8086 повторяет Emu8086 по языку ассемблера и �
 ```sh
 cargo build --release -p rustemu-cli        # бинарь: target/release/rustemu
 
-target/release/rustemu run examples/hello.asm                     # собрать и выполнить
-target/release/rustemu run examples/calc.asm --input '12\n30\n'   # с вводом с клавиатуры
+target/release/rustemu run examples/hello.asm --input x          # собрать и выполнить (x — клавиша в конце)
+target/release/rustemu run examples/calc.asm --input '12\n30\nx' # с вводом с клавиатуры
 target/release/rustemu run prog.asm --args "p1 p2"              # параметры командной строки (PSP:80h)
 target/release/rustemu run examples/colors.asm --input 'x' --screen   # показать итоговый экран
-target/release/rustemu asm examples/hello_exe.asm -l -s           # собрать .exe + листинг + символы
+target/release/rustemu asm examples/exetest.asm -l -s            # собрать .exe + листинг + символы
 target/release/rustemu asm examples/hello.asm                     # → examples/hello.com
 target/release/rustemu asm boot.asm --syntax nasm                 # NASM (обычно определяется сам)
 target/release/rustemu disasm examples/hello.com                  # дизассемблировать
@@ -493,9 +496,8 @@ cargo test --workspace
 
 - сверка кодировок с NASM выполняется автоматически, если установлен `nasm` (`brew install nasm`); тест
   `nasm_dialect` при этом собирает NASM-программы обоими ассемблерами и сравнивает результат байт в байт;
-- совместимость с примерами Emu8086: если Emu8086 установлен (переменная `EMU8086_DIR` или стандартный путь
-  CrossOver), `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` собирает и запускает все
-  его примеры;
+- совместимость с примерами Emu8086: `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture`
+  собирает и запускает все его примеры (папка `examples`);
 - проверка процессора на тестах с реального 8088 (SingleStepTests): скачать `v2/*.json.gz`
   и `v2/metadata.json` из https://github.com/SingleStepTests/8088 в `testdata/8088/`, затем
   `cargo test -p rustemu-core --release --test singlestep -- --ignored`.
@@ -503,3 +505,13 @@ cargo test --workspace
 ## Лицензия
 
 MIT — см. файл [LICENSE](LICENSE).
+
+На материалы Emu8086 (эмулятор 8086, выходил на emu8086.com; сайта и фирмы больше нет) лицензия MIT не
+распространяется:
+
+- **примеры** в папке `examples/` (кроме `hello_nasm.asm` и `boot_nasm.asm`) — файлы из поставки Emu8086 без
+  изменений (у `thermometer.asm` только перекодирован текст), принадлежат авторам Emu8086;
+- **библиотека `emu8086.inc`** (`crates/rustemu-asm/inc/`) повторяет библиотеку Emu8086: её макросы и процедуры,
+  их имена, параметры и поведение принадлежат авторам Emu8086; текст файла написан для RustEmu8086.
+
+Подробнее — в конце файла [LICENSE](LICENSE).

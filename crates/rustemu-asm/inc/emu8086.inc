@@ -1,5 +1,6 @@
 ; emu8086.inc - macro and procedure library compatible with the Emu8086 one.
-; Written for RustEmu8086.
+; The library (its macros and procedures, their names, parameters and behaviour)
+; belongs to the authors of Emu8086; this text was written for RustEmu8086.
 ;
 ; How to use:
 ;       include 'emu8086.inc'
