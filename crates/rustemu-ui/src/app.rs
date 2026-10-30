@@ -259,6 +259,8 @@ pub struct App {
     pub drive_confirm_clear: bool,
     pub text: String,
     pub saved_text: String,
+    /// Syntax highlighting of `text`, kept between frames.
+    pub(crate) highlighter: crate::highlight::Highlighter,
     pub messages: Vec<Message>,
     /// Error lines of the current file (1-based).
     pub error_lines: Vec<u32>,
@@ -426,6 +428,7 @@ impl App {
             drive_confirm_clear: false,
             text: String::new(),
             saved_text: String::new(),
+            highlighter: Default::default(),
             messages: Vec::new(),
             error_lines: Vec::new(),
             error_spans: Vec::new(),

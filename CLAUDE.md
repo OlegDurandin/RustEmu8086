@@ -146,7 +146,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 ### Этап 5. GUI (eframe/egui 0.37)
 `rustemu-ui`: `app.rs` (состояние `App`, `Settings`; команды — в `app/`: `files`, `session`, `build` — compile/emulate,
 `exec` — шаги и цикл выполнения, `emulator_cmds`, `shortcuts`, `storage` — persist), `windows.rs`
-(общие диалоги и инструменты), `editor.rs` + `highlight.rs`, `screen.rs`, `debug.rs` (+ начало дизассемблера
+(общие диалоги и инструменты), `editor.rs` + `highlight.rs` (`Highlighter` — подсветка по строкам с кешем между кадрами), `screen.rs`, `debug.rs` (+ начало дизассемблера
 `disasm_start`), `devices_ui.rs`, `examples.rs` (встроенные `examples/*.asm`), `help.rs`, `reference.rs` +
 `reference_ui.rs`, `debugger.rs`, `fonts.rs`. `rustemu-desktop`: `ui.rs` (меню, тулбар, сообщения, статус),
 `emulator.rs` (окно эмулятора и исходника), `ui_tests.rs` (kittest, PNG-снимки в `target/ui-snapshots/`).
