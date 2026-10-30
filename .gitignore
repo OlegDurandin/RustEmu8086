@@ -2,3 +2,6 @@
 /testdata
 .DS_Store
 /crates/rustemu-web/dist
+
+# The course is kept outside the repository
+/course/
