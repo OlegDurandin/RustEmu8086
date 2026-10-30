@@ -99,6 +99,9 @@ fn editor_and_emulate_hello() {
     h.get_by_label("▶ emulate").click();
     h.run();
     assert!(h.state().loaded());
+    // The string after RET is shown as data, with its name.
+    h.get_by_label("DB 'Hello, World!', 0Dh, 0Ah, '$'");
+    h.get_by_label("MSG:");
     // Run the program to completion.
     h.state_mut().start_run();
     for _ in 0..20 {
@@ -110,6 +113,8 @@ fn editor_and_emulate_hello() {
     let out = String::from_utf8_lossy(&h.state().session.machine.output).into_owned();
     assert_eq!(out, "Hello, World!\r\n");
     assert!(h.state().session.machine.screen_text().starts_with("Hello, World!"));
+    // CS:IP is in the PSP now: the disassembler says the program has ended instead.
+    h.get_by_label("The program has terminated (exit code 0).");
     save(&mut h, "02_emulator_hello");
 }
 

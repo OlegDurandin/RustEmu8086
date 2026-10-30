@@ -1,8 +1,7 @@
 //! Emulator window (controls, registers, memory, disassembly) and the source window.
 
-use egui::{Color32, DragValue, FontId, RichText, Ui, pos2};
+use egui::{Color32, DragValue, FontId, RichText, Ui, pos2, vec2};
 use rustemu_core::cpu::{self, REG16_NAMES, SREG_NAMES};
-use rustemu_core::disasm::disassemble;
 
 use rustemu_ui::app::{App, RunMode};
 
@@ -420,6 +419,22 @@ fn registers(app: &mut App, ui: &mut Ui) {
 
 fn code_view(app: &mut App, ui: &mut Ui) {
     let rows = 22;
+    let font = FontId::monospace(12.5);
+    if let Some(code) = app.session.machine.terminated
+        && !app.code_view_pinned
+    {
+        // CS:IP is left in the PSP or the DOS stub: nothing there is the program's code. The
+        // banner takes the place of the list, so that the window keeps its size.
+        let row_h = ui.fonts_mut(|f| f.row_height(&font)) + 1.0;
+        ui.vertical(|ui| {
+            ui.set_min_size(vec2(420.0, rows as f32 * row_h));
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label(RichText::new(format!("The program has terminated (exit code {code}).")).strong());
+                ui.weak("Step back to see its last instructions, or reload it to run it again.");
+            });
+        });
+        return;
+    }
     let start = rustemu_ui::debug::disasm_start(app, rows);
     let m = &app.session.machine;
     let pc = m.cpu.pc();
@@ -429,13 +444,15 @@ fn code_view(app: &mut App, ui: &mut Ui) {
         _ => (m.cpu.cs(), m.cpu.ip.wrapping_sub(pc.wrapping_sub(start) as u16)),
     };
     let mut a = start;
-    let font = FontId::monospace(12.5);
     let mut clicked_bp: Option<u32> = None;
     let mut select: Option<(u16, u16)> = None;
     let selected = app.selected_addr();
     let sel_bg = ui.visuals().selection.bg_fill.gamma_multiply(0.45);
     let label_color =
         if ui.visuals().dark_mode { Color32::from_rgb(220, 220, 150) } else { Color32::from_rgb(120, 90, 20) };
+    let data_color =
+        if ui.visuals().dark_mode { Color32::from_rgb(130, 200, 170) } else { Color32::from_rgb(20, 120, 90) };
+    let show_data = app.settings.disasm_data;
     let session = &app.session;
     egui::Grid::new("disasm").num_columns(4).spacing([8.0, 1.0]).show(ui, |ui| {
         for _ in 0..rows {
@@ -447,14 +464,19 @@ fn code_view(app: &mut App, ui: &mut Ui) {
                 ui.end_row();
             }
             let bytes = m.sys.mem.slice(a, 8).to_vec();
-            let ins = disassemble(&bytes, ip);
+            let ins = session.code_row(a, ip, show_data);
             let current = a == pc;
             let bp = m.breakpoints.contains(&a);
             let marker = if bp { "●" } else { " " };
             if ui.label(RichText::new(marker).color(Color32::from_rgb(220, 40, 40)).font(font.clone())).clicked() {
                 clicked_bp = Some(a);
             }
-            let hex: String = bytes[..ins.len.min(6)].iter().map(|b| format!("{b:02X}")).collect();
+            // Data rows can be long: their first bytes and an ellipsis fit the column.
+            let n = if ins.data { 4 } else { 6 };
+            let mut hex: String = bytes[..(ins.len as usize).min(n)].iter().map(|b| format!("{b:02X}")).collect();
+            if ins.len as usize > n {
+                hex.push('…');
+            }
             let addr = format!("{cs:04X}:{ip:04X}");
             let is_selected = selected == Some(a) && !current;
             let mk = |s: String| {
@@ -480,18 +502,25 @@ fn code_view(app: &mut App, ui: &mut Ui) {
                 Some(name) => format!("{}  ; {name}", ins.text),
                 None => ins.text.clone(),
             };
-            let r = ui.add(egui::Label::new(mk(text)).sense(egui::Sense::click()));
+            let text = if ins.data && !current { mk(text).color(data_color) } else { mk(text) };
+            let r = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
             if r.double_clicked() {
                 clicked_bp = Some(a);
             } else if r.clicked() {
                 select = Some((cs, row_ip));
             }
             ui.end_row();
-            a += ins.len as u32;
+            a += ins.len;
             ip = ip.wrapping_add(ins.len as u16);
         }
     });
-    ui.weak("click: select (debug menu), double-click: toggle a breakpoint");
+    ui.horizontal(|ui| {
+        ui.weak("click: select (debug menu), double-click: toggle a breakpoint");
+        ui.checkbox(&mut app.settings.disasm_data, "data as DB").on_hover_text(
+            "Show the program's data (DB, DW, ...) as data and the zeros after the program as DUP, \
+             not as instructions",
+        );
+    });
     if let Some(s) = select {
         app.code_selected = Some(s);
     }

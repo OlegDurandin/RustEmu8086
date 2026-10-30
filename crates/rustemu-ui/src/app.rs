@@ -68,6 +68,8 @@ pub struct Settings {
     pub windows: Windows,
     pub screen_zoom: f32,
     pub show_macro_code: bool,
+    /// The disassembler shows the program's data as `DB`/`DW` and the zeros after it as `DUP`.
+    pub disasm_data: bool,
     pub follow_source: bool,
     pub vars_format: crate::debug::NumFormat,
     /// Assembler syntax: detected, Emu8086/MASM or NASM.
@@ -117,6 +119,7 @@ impl Default for Settings {
             windows: Windows::default(),
             screen_zoom: 13.0,
             show_macro_code: true,
+            disasm_data: true,
             follow_source: true,
             vars_format: Default::default(),
             syntax: SyntaxChoice::Auto,

@@ -11,7 +11,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 |---|---|
 | `crates/rustemu-core` | Эмулятор: CPU 8086 (`cpu.rs`), шина/память 1 MiB с журналом (`bus.rs`), `Machine` (загрузчики, шаг/run/шаг назад, точки останова — `machine.rs`), BIOS (`bios.rs`: INT 10h/13h/15h/16h/1Ah/33h), DOS (`dos.rs`: INT 21h, файлы в песочнице), видео (`video.rs`), порты и виртуальные устройства (`devices.rs`), шрифт/CP437 (`font.rs`), скан-коды (`keyboard.rs`), дизассемблер (`disasm.rs`). Без зависимостей от GUI. |
 | `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
-| `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT). |
+| `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT), строки дизассемблера (`code.rs`: `Session::code_row` — данные программы как `DB`/`DW`/`DD` по `LineInfo::is_code`/`data_size`, нули вне кода — `DB n DUP (0)`; инструкция на CS:IP — всегда код). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
 | `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, окна отладки/инструментов и диалоги (`windows::shared_windows`), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
 | `crates/rustemu-desktop` | Интерфейс Emu8086: библиотека (`DesktopApp`, главное окно с меню/тулбаром — `ui.rs`, окно эмулятора и исходника — `emulator.rs`; UI-тесты `ui_tests.rs`) + бинарь `RustEmu8086` (macOS). |
@@ -195,6 +195,9 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       reset / aux (memory, ALU, FPU — нет, stop on condition, symbol table, listing + наши окна) / vars (с константами) /
       debug (журнал состояния в стиле DEBUG.EXE после каждой остановки) / stack (от SS:FFFE, SP выделен) /
       flags (0/1, кнопка analyse → «lexical flag analyser»); подсказки кнопок — тексты оригинала
+- [x] 5.17 Дизассемблер различает данные (`Session::code_row`, настройка `Settings::disasm_data`, галочка **data as DB**):
+      строки и переменные — `DB 'Hello', 0Dh, 0Ah, '$'` с именем переменной (`symbol_at` знает и переменные), нули после
+      программы — `DUP`; после завершения программы — плашка вместо дизассемблера (CS:IP уже в PSP). Консоль `u` — как DEBUG, без этого
 - [x] 5.16 Меню окна эмулятора (Emu8086): file (load executable, reload, examples, reset emulator and ram —
       `Session::unload`, command line, save/load the emulator's state — `Machine/Session::save_state` в памяти, без
       открытых файлов хоста, недавние файлы, close), math, debug (шаги, stop on condition, run until / set break point /

@@ -163,6 +163,14 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
         b.label(RichText::new("Press Run or Step to assemble and load the program.").color(pal::WEAK));
         return;
     }
+    if let Some(code) = app.session.machine.terminated
+        && !app.code_view_pinned
+    {
+        // CS:IP is left in the PSP or the DOS stub: nothing there is the program's code.
+        b.label(RichText::new(format!("The program has terminated (exit code {code}).")).color(pal::TEXT).strong());
+        b.label(RichText::new("Step back to see its last instructions, or Reset to run it again.").color(pal::WEAK));
+        return;
+    }
     let font = FontId::monospace(14.5);
     let char_w = b.fonts_mut(|f| f.glyph_width(&font, '0'));
     let width = b.available_width();
@@ -213,7 +221,7 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
             }
         }
         let bytes = m.sys.mem.slice(a, 8).to_vec();
-        let ins = disassemble(&bytes, ip);
+        let ins = app.session.code_row(a, ip, app.settings.disasm_data);
         let (r, resp) = b.allocate_exact_size(vec2(width, ROW_H), Sense::click());
         let p = b.painter();
         let current = a == pc;
@@ -232,17 +240,23 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
         let addr_color = if current { pal::AMBER } else { pal::WEAK };
         p.text(pos2(r.left() + x_addr, y), Align2::LEFT_CENTER, format!("{ip:04X}:"), font.clone(), addr_color);
         if show_bytes {
-            let hex: String = bytes[..ins.len.min(6)].iter().map(|b| format!("{b:02X} ")).collect();
+            // Data rows can be long: their first bytes and an ellipsis fit the column.
+            let n = if ins.data { 3 } else { 6 };
+            let mut hex: String = bytes[..(ins.len as usize).min(n)].iter().map(|b| format!("{b:02X} ")).collect();
+            if ins.len as usize > n {
+                hex.push('…');
+            }
             p.text(pos2(r.left() + x_bytes, y), Align2::LEFT_CENTER, hex.trim_end(), font.clone(), pal::TEXT);
         }
         let (mnem, ops) = ins.text.split_once(' ').unwrap_or((&ins.text, ""));
-        p.text(pos2(r.left() + x_mnem, y), Align2::LEFT_CENTER, mnem, font.clone(), pal::LINK);
+        let (mnem_color, ops_color) = if ins.data { (pal::WEAK, pal::TEAL) } else { (pal::LINK, pal::TEXT) };
+        p.text(pos2(r.left() + x_mnem, y), Align2::LEFT_CENTER, mnem, font.clone(), mnem_color);
         let ops = match rustemu_ui::debug::jump_target(&ins.text).and_then(|off| app.session.symbol_at(linear(cs, off)))
         {
             Some(name) => format!("{ops}  ; {name}"),
             None => ops.to_string(),
         };
-        p.text(pos2(r.left() + x_ops, y), Align2::LEFT_CENTER, ops, font.clone(), pal::TEXT);
+        p.text(pos2(r.left() + x_ops, y), Align2::LEFT_CENTER, ops, font.clone(), ops_color);
         if resp.clicked() {
             match resp.interact_pointer_pos() {
                 Some(pos) if pos.x < r.left() + x_addr => toggle = Some(a),
@@ -253,7 +267,7 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
             toggle = Some(a);
         }
         shown += 1;
-        a += ins.len as u32;
+        a += ins.len;
         ip = ip.wrapping_add(ins.len as u16);
     }
     if let Some(s) = select {

@@ -391,15 +391,14 @@ pub fn disasm_start(app: &mut App, rows: usize) -> u32 {
     let m = &app.session.machine;
     let pc = m.cpu.pc();
     let mut a = app.code_view_start;
-    let ip0 = m.cpu.ip.wrapping_sub(pc.wrapping_sub(a) as u16);
-    let mut ip = ip0;
+    let mut ip = m.cpu.ip.wrapping_sub(pc.wrapping_sub(a) as u16);
     for _ in 0..rows.saturating_sub(3) {
         if a == pc {
             return app.code_view_start;
         }
-        let ins = rustemu_core::disasm::disassemble(m.sys.mem.slice(a, 8), ip);
-        a += ins.len as u32;
-        ip = ip.wrapping_add(ins.len as u16);
+        let len = app.session.code_row(a, ip, app.settings.disasm_data).len;
+        a += len;
+        ip = ip.wrapping_add(len as u16);
         if a > pc {
             break;
         }
