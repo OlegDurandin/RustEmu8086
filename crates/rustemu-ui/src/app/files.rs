@@ -182,13 +182,19 @@ impl App {
 
     pub fn load_example(&mut self, i: usize) {
         let (name, src) = EXAMPLES[i];
+        self.load_example_text(name, src);
+    }
+
+    /// Opens `src` as the built-in example `name` (it has no file; Save asks for one).
+    pub fn load_example_text(&mut self, name: &str, src: &str) {
         self.store_session();
         self.path = None;
         self.doc_name = None;
         self.opened_from_link = false;
         self.program = None;
         self.example_key = Some(format!("example:{name}"));
-        self.text = src.to_string();
+        // Emu8086's files have DOS line ends.
+        self.text = src.replace("\r\n", "\n");
         self.saved_text = self.text.clone();
         self.messages.clear();
         self.clear_errors();

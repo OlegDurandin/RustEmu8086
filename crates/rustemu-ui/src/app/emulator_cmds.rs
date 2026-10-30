@@ -42,6 +42,51 @@ impl App {
         self.code_view_start = self.session.machine.cpu.pc();
     }
 
+    /// Offset of the first row of the disassembly in the code segment (None: it shows another segment).
+    pub fn disasm_offset(&self) -> Option<u16> {
+        let base = rustemu_core::linear(self.session.machine.cpu.cs(), 0);
+        self.code_view_start.checked_sub(base).filter(|&o| o <= 0xFFFF).map(|o| o as u16)
+    }
+
+    /// Shows the disassembly from `off` in the code segment, from the row the byte belongs to.
+    /// Decoding from a little earlier falls in step with the instructions.
+    pub fn show_disasm_at(&mut self, off: u16) {
+        let cs = self.session.machine.cpu.cs();
+        let mut o = off.saturating_sub(256) as u32;
+        let mut row = o;
+        while o <= off as u32 {
+            row = o;
+            o += self
+                .session
+                .code_row(rustemu_core::linear(cs, o as u16), o as u16, self.settings.disasm_data)
+                .len
+                .max(1);
+        }
+        self.code_view_start = rustemu_core::linear(cs, row as u16);
+        self.code_view_pinned = true;
+    }
+
+    /// Scrolls the disassembly by `rows` rows (negative: up) within the code segment. The list
+    /// stays there until the next execution command or "show current instruction".
+    pub fn scroll_disasm(&mut self, rows: i32) {
+        let Some(mut off) = self.disasm_offset() else { return };
+        let cs = self.session.machine.cpu.cs();
+        for _ in 0..rows.unsigned_abs() {
+            if rows > 0 {
+                let len = self.session.code_row(rustemu_core::linear(cs, off), off, self.settings.disasm_data).len;
+                if off as u32 + len > 0xFFFF {
+                    break;
+                }
+                off += len as u16;
+            } else if off > 0 {
+                self.show_disasm_at(off - 1);
+                off = self.disasm_offset().unwrap_or(0);
+            }
+        }
+        self.code_view_start = rustemu_core::linear(cs, off);
+        self.code_view_pinned = true;
+    }
+
     /// Debug -> show current break point: shows the next breakpoint after the shown one.
     pub fn show_next_breakpoint(&mut self) {
         let mut bps: Vec<u32> = self.session.machine.breakpoints.iter().copied().collect();

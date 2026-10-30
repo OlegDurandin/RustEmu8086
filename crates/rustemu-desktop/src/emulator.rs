@@ -4,10 +4,14 @@ use egui::{Color32, DragValue, FontId, RichText, Ui, pos2, vec2};
 use rustemu_core::cpu::{self, REG16_NAMES, SREG_NAMES};
 
 use rustemu_ui::app::{App, RunMode};
+use rustemu_ui::workspace::Tool;
 
 const CHANGED: Color32 = Color32::from_rgb(0xFF, 0x50, 0x50);
 
 pub fn emulator_window(app: &mut App, ctx: &egui::Context) {
+    if app.panels() {
+        return;
+    }
     let mut open = app.windows.emulator;
     egui::Window::new("emulator")
         .id(egui::Id::unique("emulator_window"))
@@ -16,6 +20,16 @@ pub fn emulator_window(app: &mut App, ctx: &egui::Context) {
         .default_width(660.0)
         .show(ctx, |ui| emulator_ui(app, ui));
     app.windows.emulator = open;
+}
+
+/// Bodies of the tools of this interface for the panels layout.
+pub fn tool_ui(app: &mut App, ui: &mut Ui, tool: Tool) -> bool {
+    match tool {
+        Tool::Emulator => emulator_ui(app, ui),
+        Tool::Source => source_ui(app, ui),
+        _ => return false,
+    }
+    true
 }
 
 /// Warning shown while the loaded program is older than the editor text.
@@ -139,13 +153,7 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
         app.reload();
     }
     ui.separator();
-    ui.menu_button("examples", |ui| {
-        for (i, (name, _)) in rustemu_ui::examples::EXAMPLES.iter().enumerate() {
-            if ui.button(*name).clicked() {
-                app.emulate_example(i);
-            }
-        }
-    });
+    ui.menu_button("examples", |ui| rustemu_ui::windows::examples_menu(app, ui, true));
     ui.separator();
     if item(ui, true, "reset emulator and ram", "") {
         app.reset_emulator_and_ram();
@@ -396,18 +404,18 @@ fn registers(app: &mut App, ui: &mut Ui) {
     ui.add_space(4.0);
     let f = c.flags;
     ui.horizontal(|ui| {
-        use cpu::flags::*;
-        for (n, b) in [("C", CF), ("Z", ZF), ("S", SF), ("O", OF), ("P", PF), ("A", AF), ("I", IF), ("D", DF)] {
+        for (b, name, desc) in rustemu_ui::debug::FLAG_ROWS {
             let on = f & b != 0;
             let changed = (f ^ prev.flags) & b != 0;
-            let t = RichText::new(format!("{n}{}", on as u8)).monospace();
+            let t = RichText::new(format!("{}{}", &name[..1], on as u8)).monospace();
             ui.label(if changed {
                 t.color(CHANGED)
             } else if on {
                 t.strong()
             } else {
                 t.weak()
-            });
+            })
+            .on_hover_text(format!("{name} = {}: {desc}", on as u8));
         }
     });
     ui.add_space(4.0);
@@ -418,14 +426,16 @@ fn registers(app: &mut App, ui: &mut Ui) {
 }
 
 fn code_view(app: &mut App, ui: &mut Ui) {
-    let rows = 22;
     let font = FontId::monospace(12.5);
+    // Rows are clickable labels: as high as the text or a clickable widget, plus the grid spacing.
+    let row_h = ui.fonts_mut(|f| f.row_height(&font)).max(ui.spacing().interact_size.y) + 1.0;
+    // The window has 22 rows; a panel as many as fit above the buttons under the list.
+    let rows = if app.panels() { ((ui.available_height() - 64.0) / row_h).clamp(6.0, 80.0) as usize } else { 22 };
     if let Some(code) = app.session.machine.terminated
         && !app.code_view_pinned
     {
         // CS:IP is left in the PSP or the DOS stub: nothing there is the program's code. The
         // banner takes the place of the list, so that the window keeps its size.
-        let row_h = ui.fonts_mut(|f| f.row_height(&font)) + 1.0;
         ui.vertical(|ui| {
             ui.set_min_size(vec2(420.0, rows as f32 * row_h));
             egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -453,68 +463,122 @@ fn code_view(app: &mut App, ui: &mut Ui) {
     let data_color =
         if ui.visuals().dark_mode { Color32::from_rgb(130, 200, 170) } else { Color32::from_rgb(20, 120, 90) };
     let show_data = app.settings.disasm_data;
+    let offset = app.disasm_offset();
+    let mut scroll_to: Option<u16> = None;
     let session = &app.session;
-    egui::Grid::new("disasm").num_columns(4).spacing([8.0, 1.0]).show(ui, |ui| {
-        for _ in 0..rows {
-            if let Some(name) = session.symbol_at(a) {
-                ui.label("");
-                ui.label("");
-                ui.label("");
-                ui.label(RichText::new(format!("{name}:")).font(font.clone()).color(label_color));
-                ui.end_row();
-            }
-            let bytes = m.sys.mem.slice(a, 8).to_vec();
-            let ins = session.code_row(a, ip, show_data);
-            let current = a == pc;
-            let bp = m.breakpoints.contains(&a);
-            let marker = if bp { "●" } else { " " };
-            if ui.label(RichText::new(marker).color(Color32::from_rgb(220, 40, 40)).font(font.clone())).clicked() {
-                clicked_bp = Some(a);
-            }
-            // Data rows can be long: their first bytes and an ellipsis fit the column.
-            let n = if ins.data { 4 } else { 6 };
-            let mut hex: String = bytes[..(ins.len as usize).min(n)].iter().map(|b| format!("{b:02X}")).collect();
-            if ins.len as usize > n {
-                hex.push('…');
-            }
-            let addr = format!("{cs:04X}:{ip:04X}");
-            let is_selected = selected == Some(a) && !current;
-            let mk = |s: String| {
-                let t = RichText::new(s).font(font.clone());
-                if current {
-                    t.background_color(Color32::from_rgb(40, 90, 160)).color(Color32::WHITE)
-                } else if is_selected {
-                    t.background_color(sel_bg)
-                } else {
-                    t
+    let list = ui
+        .horizontal_top(|ui| {
+            let list = egui::Grid::new("disasm").num_columns(4).spacing([8.0, 1.0]).show(ui, |ui| {
+                // Label rows count as rows, so that the list keeps its height.
+                let mut shown = 0;
+                while shown < rows {
+                    if let Some(name) = session.symbol_at(a) {
+                        ui.label("");
+                        ui.label("");
+                        ui.label("");
+                        ui.label(RichText::new(format!("{name}:")).font(font.clone()).color(label_color));
+                        ui.end_row();
+                        shown += 1;
+                        if shown == rows {
+                            break;
+                        }
+                    }
+                    shown += 1;
+                    let bytes = m.sys.mem.slice(a, 8).to_vec();
+                    let ins = session.code_row(a, ip, show_data);
+                    let current = a == pc;
+                    let bp = m.breakpoints.contains(&a);
+                    let marker = if bp { "●" } else { " " };
+                    if ui
+                        .label(RichText::new(marker).color(Color32::from_rgb(220, 40, 40)).font(font.clone()))
+                        .clicked()
+                    {
+                        clicked_bp = Some(a);
+                    }
+                    // Long rows show their first bytes and an ellipsis.
+                    let n = 4;
+                    let mut hex: String =
+                        bytes[..(ins.len as usize).min(n)].iter().map(|b| format!("{b:02X}")).collect();
+                    if ins.len as usize > n {
+                        hex.push('…');
+                    }
+                    let addr = format!("{cs:04X}:{ip:04X}");
+                    let is_selected = selected == Some(a) && !current;
+                    let mk = |s: String| {
+                        let t = RichText::new(s).font(font.clone());
+                        if current {
+                            t.background_color(Color32::from_rgb(40, 90, 160)).color(Color32::WHITE)
+                        } else if is_selected {
+                            t.background_color(sel_bg)
+                        } else {
+                            t
+                        }
+                    };
+                    let row_ip = ip;
+                    if ui.add(egui::Label::new(mk(addr).weak()).sense(egui::Sense::click())).clicked() {
+                        select = Some((cs, row_ip));
+                    }
+                    if ui.add(egui::Label::new(mk(format!("{hex:<9}"))).sense(egui::Sense::click())).clicked() {
+                        select = Some((cs, row_ip));
+                    }
+                    let text = match rustemu_ui::debug::jump_target(&ins.text)
+                        .and_then(|off| session.symbol_at(rustemu_core::linear(cs, off)))
+                    {
+                        Some(name) => format!("{}  ; {name}", ins.text),
+                        None => ins.text.clone(),
+                    };
+                    let text = if ins.data && !current { mk(text).color(data_color) } else { mk(text) };
+                    let r = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                    if r.double_clicked() {
+                        clicked_bp = Some(a);
+                    } else if r.clicked() {
+                        select = Some((cs, row_ip));
+                    }
+                    ui.end_row();
+                    // The list ends with its segment.
+                    if ip as u32 + ins.len > 0xFFFF {
+                        break;
+                    }
+                    a += ins.len;
+                    ip = ip.wrapping_add(ins.len as u16);
                 }
-            };
-            let row_ip = ip;
-            if ui.add(egui::Label::new(mk(addr).weak()).sense(egui::Sense::click())).clicked() {
-                select = Some((cs, row_ip));
+            });
+            // A scroll bar over the code segment, as in Emu8086 (the top is offset 0).
+            if let Some(off) = offset {
+                let mut top = 0xFFFF - off as u32;
+                ui.spacing_mut().slider_width = rows as f32 * row_h;
+                let r = ui
+                    .add(egui::Slider::new(&mut top, 0..=0xFFFF).vertical().show_value(false))
+                    .on_hover_text(format!("{cs:04X}:{off:04X}: scroll through the code segment"));
+                if r.changed() {
+                    scroll_to = Some((0xFFFF - top) as u16);
+                }
             }
-            if ui.add(egui::Label::new(mk(format!("{hex:<10}"))).sense(egui::Sense::click())).clicked() {
-                select = Some((cs, row_ip));
-            }
-            let text = match rustemu_ui::debug::jump_target(&ins.text)
-                .and_then(|off| session.symbol_at(rustemu_core::linear(cs, off)))
-            {
-                Some(name) => format!("{}  ; {name}", ins.text),
-                None => ins.text.clone(),
-            };
-            let text = if ins.data && !current { mk(text).color(data_color) } else { mk(text) };
-            let r = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-            if r.double_clicked() {
-                clicked_bp = Some(a);
-            } else if r.clicked() {
-                select = Some((cs, row_ip));
-            }
-            ui.end_row();
-            a += ins.len;
-            ip = ip.wrapping_add(ins.len as u16);
+            list.response.rect
+        })
+        .inner;
+    // The mouse wheel over the list scrolls the code, not the panel around it.
+    if offset.is_some() && ui.rect_contains_pointer(list) {
+        let dy = ui.input(|i| i.smooth_scroll_delta.y);
+        if dy != 0.0 {
+            ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
+            app.code_wheel += dy;
         }
-    });
+    }
+    let wheel_rows = (app.code_wheel / row_h).trunc();
+    if wheel_rows != 0.0 {
+        app.code_wheel -= wheel_rows * row_h;
+        app.scroll_disasm(-wheel_rows as i32);
+    }
+    if let Some(off) = scroll_to {
+        app.show_disasm_at(off);
+    }
     ui.horizontal(|ui| {
+        if app.code_view_pinned
+            && ui.small_button("⌖ CS:IP").on_hover_text("Show the current instruction again (F7)").clicked()
+        {
+            app.show_current_instruction();
+        }
         ui.weak("click: select (debug menu), double-click: toggle a breakpoint");
         ui.checkbox(&mut app.settings.disasm_data, "data as DB").on_hover_text(
             "Show the program's data (DB, DW, ...) as data and the zeros after the program as DUP, \
@@ -530,6 +594,9 @@ fn code_view(app: &mut App, ui: &mut Ui) {
 }
 
 pub fn source_window(app: &mut App, ctx: &egui::Context) {
+    if app.panels() {
+        return;
+    }
     let mut open = app.windows.source;
     egui::Window::new("original source code")
         .id(egui::Id::unique("source_window"))

@@ -16,11 +16,13 @@ rustemu-session.workspace = true
 # wgpu renderer: Metal on macOS, WebGPU (or WebGL 2) in the browser.
 eframe = { workspace = true }
 egui = { workspace = true }
+egui_tiles = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 web-time = "1"
 # The memory drive C: in browser storage (text values).
 base64 = "0.22"
-# "my programs" and the editor draft in browser storage (the format eframe stores settings in).
+# "my programs", the editor draft in browser storage and the arrangement of the panels (the format
+# eframe stores settings in).
 ron = "0.12"
 # Open / save dialogs (src/platform.rs): native on the desktop, a file input in the browser.
 rfd = "0.17"

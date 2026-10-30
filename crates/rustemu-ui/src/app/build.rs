@@ -226,6 +226,9 @@ impl App {
         self.run = RunMode::Paused;
         self.begin_exec();
         self.source_file_idx = 0;
+        if let Some(tools) = self.deferred_tools.take() {
+            self.windows.open_also(tools);
+        }
         self.windows.emulator = true;
         self.windows.screen = true;
         self.windows.source = !self.source_files.is_empty();
