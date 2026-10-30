@@ -1009,6 +1009,10 @@ impl Assembler {
                         image_offset: io as u32,
                         len: len as u32,
                         is_code: matches!(st.stmt.kind, StmtKind::Instr { .. }),
+                        data_size: match st.stmt.kind {
+                            StmtKind::Data { size, .. } => size,
+                            _ => 0,
+                        },
                         origin: l.origin(),
                         chain: l.chain.clone(),
                     });

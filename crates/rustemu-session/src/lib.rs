@@ -1,5 +1,6 @@
 //! Glue between the assembler and the emulator: loading programs, source-level debugging info.
 
+pub mod code;
 pub mod expr;
 
 use std::collections::HashMap;
@@ -17,7 +18,7 @@ pub struct Session {
     loaded: Option<(Loadable, Vec<u8>)>,
     /// DOS command line parameters given to the program (PSP:80h) on every load.
     pub command_line: String,
-    /// Physical address -> label/procedure name of the loaded program.
+    /// Physical address -> procedure, label or variable name of the loaded program.
     symbols_by_addr: HashMap<u32, String>,
     /// Indices into `program.lines` sorted by image offset (for binary search).
     lines_sorted: Vec<usize>,
@@ -337,29 +338,30 @@ impl Session {
         self.symbols_by_addr.clear();
         let (Some(p), Some(info)) = (&self.program, &self.machine.loaded) else { return };
         let exe = info.kind == rustemu_core::LoadKind::Exe;
+        // Several names at one address: procedures win over labels, labels over variables,
+        // global names over macro locals.
+        let mut ranks: HashMap<u32, u8> = HashMap::new();
         for s in &p.symbols {
-            if !matches!(s.kind, SymbolKind::Label | SymbolKind::Proc) {
-                continue;
-            }
+            let rank = match s.kind {
+                SymbolKind::Proc => 3,
+                SymbolKind::Label => 2,
+                SymbolKind::Variable => 1,
+                _ => continue,
+            } * 2
+                + !s.is_macro_local() as u8;
             let addr = if exe {
                 linear(info.load_segment.wrapping_add(s.segment.unwrap_or(0)), s.value as u16)
             } else {
                 info.image_base.wrapping_add((s.value as u32).wrapping_sub(p.origin as u32))
             };
-            // Procedures win over plain labels at the same address.
-            // Procedures win over plain labels at the same address, global labels over macro locals.
-            let replace = match self.symbols_by_addr.get(&addr) {
-                None => true,
-                Some(_) if s.kind == SymbolKind::Proc => true,
-                Some(old) => old.contains("??") && !s.is_macro_local(),
-            };
-            if replace {
+            if ranks.get(&addr).is_none_or(|&r| rank > r) {
+                ranks.insert(addr, rank);
                 self.symbols_by_addr.insert(addr, s.name.clone());
             }
         }
     }
 
-    /// Label or procedure name at a physical address (macro-local labels without their suffix).
+    /// Procedure, label or variable name at a physical address (macro-local labels without their suffix).
     pub fn symbol_at(&self, addr: u32) -> Option<&str> {
         self.symbols_by_addr.get(&addr).map(|n| n.split("??").next().unwrap_or(n))
     }
