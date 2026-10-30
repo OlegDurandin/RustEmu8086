@@ -3,7 +3,12 @@ use std::path::PathBuf;
 use rustemu_core::Event;
 use rustemu_session::{Loadable, Session};
 
+/// Our test programs (`tests/programs`); the NASM examples are in `examples` with Emu8086's.
 fn examples() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs")
+}
+
+fn nasm_examples_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples")
 }
 
@@ -976,11 +981,14 @@ count dw 0
 
 #[test]
 fn nasm_examples() {
-    let (out, ev) = run_example("hello_nasm.asm", "");
+    let mut s = Session::new();
+    s.load_path(&nasm_examples_dir().join("hello_nasm.asm")).unwrap();
+    let (s, ev) = finish(s, "");
+    let out = String::from_utf8_lossy(&s.machine.output).into_owned();
     assert_eq!(out, "Hello from NASM!\r\n".repeat(3));
     assert_eq!(ev, Event::Terminated(0));
     let mut s = Session::new();
-    s.load_path(&examples().join("boot_nasm.asm")).unwrap();
+    s.load_path(&nasm_examples_dir().join("boot_nasm.asm")).unwrap();
     assert_eq!(s.program.as_ref().unwrap().format, rustemu_asm::Format::Boot);
     assert_eq!(s.machine.run(100_000), Event::Halted);
     assert!(s.machine.screen_text().contains("Booted from a NASM boot sector!"));

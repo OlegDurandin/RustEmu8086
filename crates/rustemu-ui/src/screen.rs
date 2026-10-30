@@ -46,6 +46,9 @@ pub const CGA: [Color32; 16] = [
 ];
 
 pub fn screen_window(app: &mut App, ctx: &egui::Context) {
+    if app.panels() {
+        return;
+    }
     let mut open = app.windows.screen;
     let title = match app.session.machine.sys.mem.read8(video::BDA_MODE) {
         0x13 => "emulator screen (320x200, 256 colours)".to_string(),
@@ -172,8 +175,11 @@ pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
     resp
 }
 
-fn screen_ui(app: &mut App, ui: &mut Ui) {
-    let focused = screen_view(app, ui, Fit::Zoom).has_focus();
+pub(crate) fn screen_ui(app: &mut App, ui: &mut Ui) {
+    // A panel shows the whole screen in the space it has; the window has a zoom.
+    let panel = app.panels();
+    let fit = if panel { Fit::Whole((ui.available_size() - vec2(0.0, 28.0)).max(vec2(80.0, 50.0))) } else { Fit::Zoom };
+    let focused = screen_view(app, ui, fit).has_focus();
     ui.horizontal(|ui| {
         let waiting = app.session.machine.is_waiting_input();
         if waiting {
@@ -200,7 +206,9 @@ fn screen_ui(app: &mut App, ui: &mut Ui) {
                 let mode = Video::mode(m);
                 Video::set_mode(m, mode);
             }
-            ui.add(egui::Slider::new(&mut app.screen.font_size, 10.0..=22.0).show_value(false).text("zoom"));
+            if !panel {
+                ui.add(egui::Slider::new(&mut app.screen.font_size, 10.0..=22.0).show_value(false).text("zoom"));
+            }
             let n = app.session.machine.sys.keys.len();
             if n > 0 {
                 ui.weak(format!("{n} key(s) buffered"));

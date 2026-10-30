@@ -17,6 +17,7 @@ eframe = { version = "0.37", default-features = false, features = ["default_font
 # The emoji fonts (`monochrome_emoji_fonts`) are enabled by rustemu-ui on the desktop; the web
 # version has subsets of them (crates/rustemu-ui/src/fonts.rs).
 egui = "0.37"
+egui_tiles = "0.18"
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 

@@ -48,7 +48,9 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 ## Совместимость с Emu8086 (сверено с оригиналом)
 Установка Emu8086 пользователя (CrossOver): `~/Library/Application Support/CrossOver/Bottles/Assembly/drive_c/emu8086/`
 (`examples/`, `inc/emu8086.inc`, `documentation/*.html`, исходники устройств на VB в `devices/DEVELOPER/sources/`).
-Используется только как справочник и корпус тестов — **в репозиторий не копировать** (чужие файлы).
+Используется как справочник. Исключение — примеры: папка `examples/` репозитория — 84 файла из `examples/` Emu8086
+без изменений (решение владельца 2026-10-30; `thermometer.asm` перекодирован из cp1252 в UTF-8, CRLF сохранены) +
+наши `hello_nasm.asm`/`boot_nasm.asm`. Остальное (документацию, устройства, `emu8086.inc`) не копировать.
 - Ассемблер: размер `[mem], imm` без типа — байт, если значение влезает в 8 бит; регистр важнее типа
   переменной/`ptr`; `msg: db` (с двоеточием) — метка-адрес; формат: `ORG 100h` → COM (даже с `.data/.code`,
   код раньше данных), иначе сегменты → EXE; `JCXZ` далеко → `OR CX,CX`+`JZ`; `<<`/`>>`; текстовые `EQU`;
@@ -63,10 +65,10 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 
 ## Тестирование
 - `cargo test --workspace` — юнит-тесты CPU, ассемблера (в т.ч. `nasm_compare`: ~18 000 кодировок
-  сверяются с NASM, если он установлен; `nasm_dialect`: NASM-программы целиком против `nasm -f bin`), сквозные тесты `rustemu-session/tests/run.rs` на `examples/`.
+  сверяются с NASM, если он установлен; `nasm_dialect`: NASM-программы целиком против `nasm -f bin`), сквозные тесты `rustemu-session/tests/run.rs` на наших программах `tests/programs/` (их же грузят UI-тесты:
+  `rustemu_ui::testing::PROGRAMS`, `app_with_example(i)`).
 - **Корпус Emu8086**: `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` — собирает и
-  прогоняет все 84 примера из установки Emu8086 (`$EMU8086_DIR` или путь CrossOver; без установки — пропуск),
-  плюс загрузка micro-os с виртуальной дискеты. Сейчас: всё собирается и выполняется без ошибок
+  прогоняет все примеры `examples/` (84 из Emu8086 + 2 NASM), плюс загрузка micro-os с виртуальной дискеты. Сейчас: всё собирается и выполняется без ошибок
   (кроме `fasm_compatibility.asm` — синтаксис FASM не поддерживается).
 - **Курс** (`course/` — только локально, в .gitignore, на GitHub не отправлять; без папки тест пропускается; уроки по-русски, программы `course/programs/*.asm` со строками проверки `;! input/output/screen/endless`):
   `cargo test -p rustemu-ui --test course` запускает программы и сверяет ссылки «▶ Открыть в эмуляторе» (`share::fragment`)
@@ -85,9 +87,9 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 ```sh
 cargo build --workspace
 cargo test --workspace
-cargo run -p rustemu-cli -- run examples/hello.asm
-cargo run -p rustemu-cli -- run examples/calc.asm --input '12\n30\n'
-cargo run -p rustemu-cli -- asm examples/hello_exe.asm -l -s
+cargo run -p rustemu-cli -- run examples/hello.asm --input x
+cargo run -p rustemu-cli -- run examples/calc.asm --input '12\n30\nx'
+cargo run -p rustemu-cli -- asm examples/exetest.asm -l -s
 cargo run -p rustemu-desktop        # GUI (можно передать путь к .asm)
 cargo run -p rustemu-tablet         # интерфейс планшета в окне на Mac
 cargo test -p rustemu-desktop -p rustemu-tablet  # UI-тесты + PNG-снимки в target/ui-snapshots/
@@ -149,8 +151,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 ### Этап 5. GUI (eframe/egui 0.37)
 `rustemu-ui`: `app.rs` (состояние `App`, `Settings`; команды — в `app/`: `files`, `session`, `build` — compile/emulate,
 `exec` — шаги и цикл выполнения, `emulator_cmds`, `shortcuts`, `storage` — persist), `windows.rs`
-(общие диалоги и инструменты), `editor.rs` + `highlight.rs` (`Highlighter` — подсветка по строкам с кешем между кадрами), `screen.rs`, `debug.rs` (+ начало дизассемблера
-`disasm_start`), `devices_ui.rs`, `examples.rs` (встроенные `examples/*.asm`), `help.rs`, `reference.rs` +
+(общие диалоги и инструменты), `workspace.rs` (панели / классические окна), `editor.rs` + `highlight.rs` (`Highlighter` — подсветка по строкам с кешем между кадрами), `screen.rs`, `debug.rs` (+ начало дизассемблера
+`disasm_start`), `devices_ui.rs`, `examples.rs` (встроенные `examples/*.asm`, меню `MENU` — пункты Examples Emu8086), `help.rs`, `reference.rs` +
 `reference_ui.rs`, `debugger.rs`, `fonts.rs`. `rustemu-desktop`: `ui.rs` (меню, тулбар, сообщения, статус),
 `emulator.rs` (окно эмулятора и исходника), `ui_tests.rs` (kittest, PNG-снимки в `target/ui-snapshots/`).
 `rustemu-tablet` — см. 6.7.
@@ -165,7 +167,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       переходов), переменные (hex/dec/signed/bin/ascii), таблица символов, листинг, журнал
 - [x] 5.5 Устройства (вкладки, выбор по `#start=..#`): светофор, шаговый двигатель, LED, термометр, принтер,
       робот (карта редактируется кликом)
-- [x] 5.6 Примеры (17 шт.) и справочник (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
+- [x] 5.6 Примеры (все из Emu8086: меню Examples с подписями оригинала + NASM, *more examples...* — окно со списком
+      `EXAMPLES`, `windows::examples_menu`) и справочник (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
       (синтаксис, флаги ODITSZAPC, пример), директивы, прерывания BIOS/DOS по функциям, обзор синтаксиса NASM
       (`NASM_GUIDE`, вкладка *NASM syntax*, `Topic::Nasm`; примеры распознаются как NASM — тест); из редактора —
       подсказка при наведении, F1/⌘-клик открывает статью (для `INT nn` функция берётся из `mov ah, ..` выше).
@@ -195,6 +198,17 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       reset / aux (memory, ALU, FPU — нет, stop on condition, symbol table, listing + наши окна) / vars (с константами) /
       debug (журнал состояния в стиле DEBUG.EXE после каждой остановки) / stack (от SS:FFFE, SP выделен) /
       flags (0/1, кнопка analyse → «lexical flag analyser»); подсказки кнопок — тексты оригинала
+- [x] 5.18 Два режима окон (`workspace.rs`, `Settings::layout`, options → windows): **классические окна Emu8086** (по умолчанию — минимум отличий от оригинала) и **панели** (`egui_tiles` —
+      `egui_dock` для egui 0.37 нет). Флаги `App::windows` (+ `library.open`, `reference.open`)
+      — единственный источник «что открыто»: в панелях `workspace::sync` добавляет вкладку в группу инструмента (`Group`:
+      Text/Debug слева, Emulator/Inspect (memory, watch, ALU) посередине, Screen/Aside справа — под экраном vars, stack,
+      debug log, log, устройства, диск; нет группы — новая колонка или половина колонки
+      по раскладке по умолчанию), крестик снимает флаг. Окна-инструменты: `xxx_window` не рисует окно при `App::panels()`,
+      тело — `xxx_ui(app, ui)`, вызывается из `workspace::tool_ui` (эмулятор и исходник — из `rustemu-desktop`, `emulator::tool_ui`).
+      Диалоги, flags (+ flag analyser) и таблица ASCII всплывают в обоих режимах; планшет — всегда окна.
+      Дизассемблер листается колесом и полосой справа от списка (`App::scroll_disasm`/`show_disasm_at`, в пределах CS;
+      назад — декодирование с 256 байт раньше), до следующего шага или ⌖ CS:IP / F7. Раскладка — `App::panels`, в настройках строкой RON
+      (`Settings::panels`, нечитаемая отбрасывается); `workspace::reset_layout` (Emulator → Reset window layout)
 - [x] 5.17 Дизассемблер различает данные (`Session::code_row`, настройка `Settings::disasm_data`, галочка **data as DB**):
       строки и переменные — `DB 'Hello', 0Dh, 0Ah, '$'` с именем переменной (`symbol_at` знает и переменные), нули после
       программы — `DUP`; после завершения программы — плашка вместо дизассемблера (CS:IP уже в PSP). Консоль `u` — как DEBUG, без этого
@@ -250,7 +264,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       initializer trunk `progress.mjs`; trunk передаёт размер wasm до wasm-opt, хук `wasm_size.sh` (Trunk.toml) ставит настоящий
 - [ ] 6.6 Синтаксис FASM (`#fasm#`) — не поддерживается
 - [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, масштаб экрана, задержка,
-      открытые окна (положения хранит egui), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —
+      открытые окна (положения хранит egui; окна программы — эмулятор, экран, память… — при запуске закрыты, как в
+      Emu8086, и открываются при первом emulate: `App::deferred_tools`, `Windows::take_program_tools`), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —
       путь или `example:имя`): точки останова с условиями (в т.ч. в `emu8086.inc` — по имени файла, `pending_breakpoints`),
       watch, закладки, stop on condition, строка курсора. Буфер обмена: фича eframe `clipboard` (⌘C/⌘V во всех
       полях), экран эмулятора — вставка как ввод с клавиатуры и копирование текста экрана

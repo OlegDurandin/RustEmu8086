@@ -3,7 +3,6 @@
 use egui::{RichText, Ui};
 
 use rustemu_ui::app::{App, PendingAction, RunMode};
-use rustemu_ui::examples::EXAMPLES;
 
 pub fn main_ui(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
@@ -16,7 +15,13 @@ pub fn main_ui(app: &mut App, ui: &mut Ui) {
     if app.find.open {
         egui::Panel::top("findbar").show(ui, |ui| rustemu_ui::find::find_bar(app, ui));
     }
-    egui::CentralPanel::default().show(ui, |ui| rustemu_ui::editor::editor(app, ui));
+    if app.panels() {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(ui.visuals().faint_bg_color))
+            .show(ui, |ui| rustemu_ui::workspace::panels_ui(app, ui, &mut crate::emulator::tool_ui));
+    } else {
+        egui::CentralPanel::default().show(ui, |ui| rustemu_ui::editor::editor(app, ui));
+    }
 
     crate::emulator::emulator_window(app, &ctx);
     rustemu_ui::screen::screen_window(app, &ctx);
@@ -216,17 +221,16 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
 }
 
 fn examples_menu(app: &mut App, ui: &mut Ui) {
-    for (i, (name, _)) in EXAMPLES.iter().enumerate() {
-        if ui.button(*name).clicked() {
-            app.guarded(PendingAction::Example(i));
-        }
-    }
+    rustemu_ui::windows::examples_menu(app, ui, false);
 }
 
 fn emulator_menu(app: &mut App, ui: &mut Ui) {
     let loaded = app.loaded();
     if ui.button("Show emulator").clicked() {
         app.windows.emulator = true;
+    }
+    if ui.button("Reset window layout").clicked() {
+        rustemu_ui::workspace::reset_layout(app, ui.ctx());
     }
     if ui.add_enabled(loaded, egui::Button::new("Run / Stop          F5")).clicked() {
         if app.run == RunMode::Paused { app.start_run() } else { app.stop() }

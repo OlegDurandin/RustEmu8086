@@ -1,18 +1,16 @@
-//! Compatibility corpus: the examples shipped with Emu8086.
-//!
-//! The files are not part of the repository. The test looks for an Emu8086 installation in
-//! `$EMU8086_DIR` or in the default CrossOver location and is skipped when none is found.
+//! Compatibility corpus: the examples shipped with Emu8086 (the repository's `examples`, as they
+//! are in Emu8086's `examples` folder).
 //! Run: `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture`
 
 use std::path::PathBuf;
 
-fn emu8086_dir() -> Option<PathBuf> {
-    if let Ok(d) = std::env::var("EMU8086_DIR") {
-        return Some(PathBuf::from(d));
-    }
-    let home = std::env::var_os("HOME")?;
-    let d = PathBuf::from(home).join("Library/Application Support/CrossOver/Bottles/Assembly/drive_c/emu8086");
-    d.exists().then_some(d)
+fn examples_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples")
+}
+
+/// Our emu8086.inc (`include 'emu8086.inc'`).
+fn inc_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rustemu-asm/inc")
 }
 
 /// Examples that need FASM syntax (`#fasm#`), which is not supported.
@@ -20,11 +18,7 @@ const UNSUPPORTED: &[&str] = &["fasm_compatibility.asm"];
 
 #[test]
 fn all_examples_assemble() {
-    let Some(dir) = emu8086_dir() else {
-        eprintln!("Emu8086 installation not found, skipping");
-        return;
-    };
-    let mut files: Vec<_> = std::fs::read_dir(dir.join("examples"))
+    let mut files: Vec<_> = std::fs::read_dir(examples_dir())
         .unwrap()
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm")))
@@ -37,7 +31,7 @@ fn all_examples_assemble() {
             continue;
         }
         let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).into_owned();
-        let mut loader = rustemu_asm::FsLoader { include_dirs: vec![dir.join("inc")] };
+        let mut loader = rustemu_asm::FsLoader { include_dirs: vec![inc_dir()] };
         if let Err(e) = rustemu_asm::assemble(&f.to_string_lossy(), &text, &mut loader) {
             let first: Vec<String> = e.errors.iter().take(3).map(|x| format!("({}) {}", x.line, x.msg)).collect();
             failed.push(format!("{name}: {}", first.join(" | ")));
@@ -56,11 +50,7 @@ fn all_examples_assemble() {
 fn all_examples_run() {
     use rustemu_core::Event;
     use rustemu_session::Session;
-    let Some(dir) = emu8086_dir() else {
-        eprintln!("Emu8086 installation not found, skipping");
-        return;
-    };
-    let mut files: Vec<_> = std::fs::read_dir(dir.join("examples"))
+    let mut files: Vec<_> = std::fs::read_dir(examples_dir())
         .unwrap()
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm")))
@@ -75,7 +65,7 @@ fn all_examples_run() {
             continue;
         }
         let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).into_owned();
-        let mut loader = rustemu_asm::FsLoader { include_dirs: vec![dir.join("inc")] };
+        let mut loader = rustemu_asm::FsLoader { include_dirs: vec![inc_dir()] };
         let Ok(prog) = rustemu_asm::assemble(&f.to_string_lossy(), &text, &mut loader) else { continue };
         let mut s = Session::new();
         s.machine.instant_waits = true;
@@ -140,11 +130,10 @@ fn all_examples_run() {
 fn micro_os_boots_from_floppy() {
     use rustemu_core::Event;
     use rustemu_session::Session;
-    let Some(dir) = emu8086_dir() else { return };
     let build = |name: &str| {
-        let path = dir.join("examples").join(name);
+        let path = examples_dir().join(name);
         let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
-        let mut loader = rustemu_asm::FsLoader { include_dirs: vec![dir.join("inc")] };
+        let mut loader = rustemu_asm::FsLoader { include_dirs: vec![inc_dir()] };
         rustemu_asm::assemble(&path.to_string_lossy(), &text, &mut loader).unwrap()
     };
     let boot = build("micro-os_loader.asm");
