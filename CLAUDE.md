@@ -168,7 +168,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 5.5 Устройства (вкладки, выбор по `#start=..#`): светофор, шаговый двигатель, LED, термометр, принтер,
       робот (карта редактируется кликом)
 - [x] 5.6 Примеры (все из Emu8086: меню Examples с подписями оригинала + NASM, *more examples...* — окно со списком
-      `EXAMPLES`, `windows::examples_menu`) и справочник (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
+      `EXAMPLES` и описаниями `examples::description`, `windows::examples_menu`; `examples::index` — без учёта регистра,
+      старые имена → `FORMER`; ключ сессии примера — `EXAMPLE_KEY` = `emu8086-example:`, старые `example:` не применяются) и справочник (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
       (синтаксис, флаги ODITSZAPC, пример), директивы, прерывания BIOS/DOS по функциям, обзор синтаксиса NASM
       (`NASM_GUIDE`, вкладка *NASM syntax*, `Topic::Nasm`; примеры распознаются как NASM — тест); из редактора —
       подсказка при наведении, F1/⌘-клик открывает статью (для `INT nn` функция берётся из `mov ah, ..` выше).

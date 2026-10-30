@@ -622,7 +622,7 @@ impl App {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .or_else(|| self.doc_name.clone())
-            .or_else(|| self.example_key.as_ref().and_then(|k| k.strip_prefix("example:")).map(str::to_string))
+            .or_else(|| self.example_key.as_ref().and_then(|k| k.strip_prefix(files::EXAMPLE_KEY)).map(str::to_string))
             .unwrap_or_else(|| "untitled.asm".into())
     }
 
