@@ -985,3 +985,44 @@ fn nasm_examples() {
     assert_eq!(s.machine.run(100_000), Event::Halted);
     assert!(s.machine.screen_text().contains("Booted from a NASM boot sector!"));
 }
+
+/// Rows of the disassembly from the entry point (`data`: data-aware).
+fn code_rows(s: &Session, n: usize, data: bool) -> Vec<String> {
+    let mut a = s.machine.cpu.pc();
+    let mut ip = s.machine.cpu.ip;
+    (0..n)
+        .map(|_| {
+            let r = s.code_row(a, ip, data);
+            a += r.len;
+            ip = ip.wrapping_add(r.len as u16);
+            r.text
+        })
+        .collect()
+}
+
+#[test]
+fn disassembly_shows_data_as_data() {
+    let src = "include 'emu8086.inc'\norg 100h\n print 'First number: '\n mov dx, offset msg\n mov ah, 9\n \
+               int 21h\n ret\nmsg db 'Hello', 0Dh, 0Ah, '$'\nbuf dw 3 dup(1234h)\n";
+    let mut s = Session::new();
+    s.load_program(rustemu_asm::assemble_str(src).unwrap()).unwrap();
+    let rows = code_rows(&s, 22, true);
+    assert_eq!(rows[..4], ["PUSH AX", "PUSH SI", "JMP 0113h", "DB 'First number: ', 0"]);
+    // The zeros after the program, up to the end of the segment.
+    assert_eq!(rows[17..21], ["RET", "DB 'Hello', 0Dh, 0Ah, '$'", "DW 1234h, 1234h, 1234h", "DB 65219 DUP (0)"]);
+    let msg = s.machine.cpu.pc() - 0x100 + 0x12F;
+    assert_eq!(s.symbol_at(msg), Some("MSG"));
+    // Without data awareness the string is decoded as instructions.
+    assert_eq!(code_rows(&s, 4, false)[3], "INC SI");
+
+    // Executing data: the instruction at CS:IP is decoded, the data row before it stops there.
+    let src = "org 100h\n jmp code\nd db 1, 2, 90h, 90h\ncode: mov ax, offset d + 2\n jmp ax\n";
+    let mut s = Session::new();
+    s.load_program(rustemu_asm::assemble_str(src).unwrap()).unwrap();
+    s.machine.run(3);
+    let start = s.machine.cpu.pc() - 2;
+    let row = |a: u32| s.code_row(a, (a - 0x7000) as u16, true);
+    assert_eq!((row(start).text.as_str(), row(start).len), ("DB 1, 2", 2));
+    assert_eq!(row(start + 2).text, "NOP");
+    assert!(!row(start + 2).data && row(start + 3).data);
+}
