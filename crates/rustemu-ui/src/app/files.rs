@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// Session key prefix of the built-in examples. The examples were ours before they became
+/// Emu8086's (some with the same names): sessions saved under the former "example:" belong to
+/// other texts and are not restored.
+pub(crate) const EXAMPLE_KEY: &str = "emu8086-example:";
+
 impl App {
     pub fn new_from_template(&mut self, i: usize) {
         self.new_from(crate::examples::TEMPLATES.get(i).map(|t| t.1).unwrap_or(""));
@@ -192,7 +197,7 @@ impl App {
         self.doc_name = None;
         self.opened_from_link = false;
         self.program = None;
-        self.example_key = Some(format!("example:{name}"));
+        self.example_key = Some(format!("{EXAMPLE_KEY}{name}"));
         // Emu8086's files have DOS line ends.
         self.text = src.replace("\r\n", "\n");
         self.saved_text = self.text.clone();

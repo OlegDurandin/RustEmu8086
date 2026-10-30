@@ -407,15 +407,11 @@ fn registers(app: &mut App, ui: &mut Ui) {
         for (b, name, desc) in rustemu_ui::debug::FLAG_ROWS {
             let on = f & b != 0;
             let changed = (f ^ prev.flags) & b != 0;
-            let t = RichText::new(format!("{}{}", &name[..1], on as u8)).monospace();
-            ui.label(if changed {
-                t.color(CHANGED)
-            } else if on {
-                t.strong()
-            } else {
-                t.weak()
-            })
-            .on_hover_text(format!("{name} = {}: {desc}", on as u8));
+            // Readable at a glance: set flags bold, changed ones red (as the registers).
+            let t = RichText::new(format!("{}{}", &name[..1], on as u8)).monospace().size(13.5);
+            let t = if on { t.strong() } else { t };
+            ui.label(if changed { t.color(CHANGED) } else { t })
+                .on_hover_text(format!("{name} = {}: {desc}", on as u8));
         }
     });
     ui.add_space(4.0);

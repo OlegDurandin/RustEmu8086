@@ -67,29 +67,34 @@ fn more_examples_window(app: &mut App, ctx: &egui::Context) {
     egui::Window::new("more examples")
         .open(&mut open)
         .default_pos(egui::pos2(160.0, 100.0))
-        .default_size([360.0, 480.0])
+        .default_size([620.0, 480.0])
         .show(ctx, |ui| {
             ui.add(
-                egui::TextEdit::singleline(&mut app.examples_filter).hint_text("filter").desired_width(f32::INFINITY),
+                egui::TextEdit::singleline(&mut app.examples_filter)
+                    .hint_text("filter: name or description")
+                    .desired_width(f32::INFINITY),
             );
             let filter = app.examples_filter.to_lowercase();
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                 for (i, (name, src)) in crate::examples::EXAMPLES.iter().enumerate() {
-                    if !name.to_lowercase().contains(&filter) {
+                    // The name and what the example does (whole in the tooltip); the filter looks
+                    // at both.
+                    let about = crate::examples::description(name, src);
+                    if !name.to_lowercase().contains(&filter) && !about.to_lowercase().contains(&filter) {
                         continue;
                     }
-                    // The comment at the top says what the example does.
-                    let about: Vec<&str> = src
-                        .lines()
-                        .map(str::trim)
-                        .skip_while(|l| l.is_empty())
-                        .take_while(|l| l.starts_with(';'))
-                        .map(|l| l.trim_start_matches(';').trim())
-                        .filter(|l| !l.is_empty())
-                        .take(3)
-                        .collect();
-                    let r = ui.add(egui::Button::new(RichText::new(*name).monospace()).frame(false));
-                    let r = if about.is_empty() { r } else { r.on_hover_text(about.join("\n")) };
+                    let r = ui
+                        .horizontal(|ui| {
+                            let name = ui.add(
+                                egui::Label::new(RichText::new(*name).monospace().strong()).sense(egui::Sense::click()),
+                            );
+                            let text = ui.add(
+                                egui::Label::new(RichText::new(&about).weak()).truncate().sense(egui::Sense::click()),
+                            );
+                            name.union(text)
+                        })
+                        .inner
+                        .on_hover_text(&about);
                     if r.clicked() {
                         chosen = Some(i);
                     }
