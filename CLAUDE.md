@@ -68,6 +68,9 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
   прогоняет все 84 примера из установки Emu8086 (`$EMU8086_DIR` или путь CrossOver; без установки — пропуск),
   плюс загрузка micro-os с виртуальной дискеты. Сейчас: всё собирается и выполняется без ошибок
   (кроме `fasm_compatibility.asm` — синтаксис FASM не поддерживается).
+- **Курс** (`course/` — только локально, в .gitignore, на GitHub не отправлять; без папки тест пропускается; уроки по-русски, программы `course/programs/*.asm` со строками проверки `;! input/output/screen/endless`):
+  `cargo test -p rustemu-ui --test course` запускает программы и сверяет ссылки «▶ Открыть в эмуляторе» (`share::fragment`)
+  и тексты программ в уроках (после `<!-- program: имя -->`); `COURSE_UPDATE_LINKS=1` — обновить их.
 - **SingleStepTests 8088** (эталон с реального железа, ~2.9 млн тестов): данные в `testdata/8088/`
   (в .gitignore; скачать `v2/*.json.gz` + `metadata.json` из github.com/SingleStepTests/8088), запуск:
   `cargo test -p rustemu-core --release --test singlestep -- --ignored` (`SST_FILTER=F6` — подмножество).
