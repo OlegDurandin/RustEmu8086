@@ -157,7 +157,8 @@ mod web {
             _ => auto_tablet(&window),
         };
         // ?example=hello.asm opens a built-in example, &run also runs it.
-        let example = param("example").and_then(|n| rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == n));
+        let example_name = param("example");
+        let example = example_name.as_deref().and_then(rustemu_ui::examples::index);
         let run = param("run").is_some();
         let link = take_link(&window);
         let location = window.location();
@@ -190,6 +191,11 @@ mod web {
                                     app.start_run();
                                 }
                             }
+                        } else if let Some(name) = &example_name {
+                            app.notice(
+                                "example not found",
+                                &format!("There is no example \"{name}\". The Examples menu lists them all."),
+                            );
                         }
                         if !storage_ok {
                             // Writes fail from now on; this notice says it already.

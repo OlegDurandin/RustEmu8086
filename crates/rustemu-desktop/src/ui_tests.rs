@@ -1241,7 +1241,7 @@ fn examples_menu_and_more_examples() {
     save(&mut h, "46_examples_menu");
     h.get_by_label("compare numbers").click();
     h.run_steps(4);
-    assert_eq!(h.state().example_key.as_deref(), Some("example:4_sample.asm"));
+    assert_eq!(h.state().example_key.as_deref(), Some("emu8086-example:4_sample.asm"));
     assert!(h.state().text.starts_with("name \"flags\"\n"), "DOS line ends are gone");
     // "more examples..." lists every file of Emu8086's examples folder.
     h.get_by_label("📚 examples").click();
@@ -1254,7 +1254,7 @@ fn examples_menu_and_more_examples() {
     save(&mut h, "47_more_examples");
     h.get_by_label("palindrome.asm").click();
     h.run_steps(4);
-    assert_eq!(h.state().example_key.as_deref(), Some("example:palindrome.asm"));
+    assert_eq!(h.state().example_key.as_deref(), Some("emu8086-example:palindrome.asm"));
     assert_eq!(h.state().more_examples, None);
 }
 
