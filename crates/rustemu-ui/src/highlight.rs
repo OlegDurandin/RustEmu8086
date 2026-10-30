@@ -1,9 +1,11 @@
 //! Syntax highlighting for 8086 assembly.
 
 use egui::text::{LayoutJob, TextFormat};
+use std::collections::HashMap;
+
 use egui::{Color32, FontId};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
     Plain,
     Comment,
@@ -16,6 +18,7 @@ enum Kind {
     Emu,
 }
 
+#[derive(Clone, PartialEq)]
 pub struct Palette {
     plain: Color32,
     comment: Color32,
@@ -151,81 +154,171 @@ fn word_kind(word: &str, first: bool, next_is_colon: bool) -> Kind {
 /// Builds a coloured layout for `text`.
 pub fn highlight(text: &str, font: FontId, pal: &Palette) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let mut push = |s: &str, k: Kind| {
-        if !s.is_empty() {
-            job.append(s, 0.0, TextFormat { font_id: font.clone(), color: pal.color(k), ..Default::default() });
-        }
-    };
     for line in text.split_inclusive('\n') {
-        let b = line.as_bytes();
-        if line.trim_start().starts_with('#') {
-            push(line, Kind::Emu);
-            continue;
-        }
-        let mut i = 0;
-        let mut first_word = true;
-        while i < b.len() {
-            let c = b[i];
-            let start = i;
-            if c == b';' {
-                push(&line[i..], Kind::Comment);
-                break;
-            }
-            if c == b'%' && b.get(i + 1).is_some_and(|n| n.is_ascii_alphabetic()) {
-                i += 1;
-                while i < b.len() && b[i].is_ascii_alphanumeric() {
-                    i += 1;
-                }
-                let word = &line[start..i];
-                let k =
-                    if NASM_PP.contains(&word.to_ascii_uppercase().as_str()) { Kind::Directive } else { Kind::Plain };
-                first_word = false;
-                push(word, k);
-                continue;
-            }
-            if c == b'\'' || c == b'"' || c == b'`' {
-                i += 1;
-                while i < b.len() && b[i] != c && b[i] != b'\n' {
-                    i += 1;
-                }
-                i = (i + 1).min(b.len());
-                push(&line[start..i], Kind::Str);
-                continue;
-            }
-            if c.is_ascii_digit() {
-                while i < b.len() && b[i].is_ascii_alphanumeric() {
-                    i += 1;
-                }
-                push(&line[start..i], Kind::Number);
-                continue;
-            }
-            if c.is_ascii_alphabetic() || matches!(c, b'_' | b'@' | b'.' | b'?') {
-                i += 1;
-                while i < b.len() && (b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'@' | b'?' | b'$')) {
-                    i += 1;
-                }
-                if i < b.len() && b[i] == b'.' && i - start == 1 {
-                    i += 1;
-                }
-                let word = &line[start..i];
-                let next_colon = b.get(i) == Some(&b':');
-                let k = word_kind(word, first_word, next_colon);
-                first_word = false;
-                push(word, k);
-                continue;
-            }
-            // Run of other characters.
-            while i < b.len()
-                && !(b[i].is_ascii_alphanumeric()
-                    || matches!(b[i], b'_' | b'@' | b'.' | b'?' | b';' | b'\'' | b'"' | b'`' | b'%'))
-            {
-                i += 1;
-            }
-            if i == start {
-                i += 1;
-            }
-            push(&line[start..i], Kind::Plain);
-        }
+        append_line(&mut job, line, &line_spans(line), &font, pal);
     }
     job
+}
+
+/// Highlighting of the editor, kept between frames: unchanged text reuses the last layout, an
+/// edit highlights only the lines that were not there before.
+#[derive(Default)]
+pub struct Highlighter {
+    last: Option<(LayoutJob, FontId, Palette)>,
+    lines: HashMap<String, Spans>,
+}
+
+impl Highlighter {
+    pub fn job(&mut self, text: &str, font: &FontId, pal: &Palette) -> LayoutJob {
+        if let Some((job, f, p)) = &self.last
+            && job.text == text
+            && f == font
+            && p == pal
+        {
+            return job.clone();
+        }
+        // Spans of the lines that are gone are dropped.
+        let mut old = std::mem::take(&mut self.lines);
+        let mut job = LayoutJob::default();
+        for line in text.split_inclusive('\n') {
+            if !self.lines.contains_key(line) {
+                let (k, v) = old.remove_entry(line).unwrap_or_else(|| (line.to_owned(), line_spans(line)));
+                self.lines.insert(k, v);
+            }
+            append_line(&mut job, line, &self.lines[line], font, pal);
+        }
+        self.last = Some((job.clone(), font.clone(), pal.clone()));
+        job
+    }
+}
+
+/// Coloured parts of a line, back to back: (end byte, kind).
+type Spans = Vec<(usize, Kind)>;
+
+fn append_line(job: &mut LayoutJob, line: &str, spans: &Spans, font: &FontId, pal: &Palette) {
+    let mut start = 0;
+    for &(end, k) in spans {
+        job.append(
+            &line[start..end],
+            0.0,
+            TextFormat { font_id: font.clone(), color: pal.color(k), ..Default::default() },
+        );
+        start = end;
+    }
+}
+
+fn line_spans(line: &str) -> Spans {
+    let mut spans: Spans = Vec::new();
+    // The part of the line from the end of the previous one up to `end` is of kind `k`.
+    let mut push = |end: usize, k: Kind| match spans.last_mut() {
+        Some(last) if last.1 == k => last.0 = end,
+        _ => spans.push((end, k)),
+    };
+    let b = line.as_bytes();
+    if line.trim_start().starts_with('#') {
+        push(b.len(), Kind::Emu);
+        return spans;
+    }
+    let mut i = 0;
+    let mut first_word = true;
+    while i < b.len() {
+        let c = b[i];
+        let start = i;
+        if c == b';' {
+            push(b.len(), Kind::Comment);
+            break;
+        }
+        if c == b'%' && b.get(i + 1).is_some_and(|n| n.is_ascii_alphabetic()) {
+            i += 1;
+            while i < b.len() && b[i].is_ascii_alphanumeric() {
+                i += 1;
+            }
+            let word = &line[start..i];
+            let k = if NASM_PP.contains(&word.to_ascii_uppercase().as_str()) { Kind::Directive } else { Kind::Plain };
+            first_word = false;
+            push(i, k);
+            continue;
+        }
+        if c == b'\'' || c == b'"' || c == b'`' {
+            i += 1;
+            while i < b.len() && b[i] != c && b[i] != b'\n' {
+                i += 1;
+            }
+            i = (i + 1).min(b.len());
+            push(i, Kind::Str);
+            continue;
+        }
+        if c.is_ascii_digit() {
+            while i < b.len() && b[i].is_ascii_alphanumeric() {
+                i += 1;
+            }
+            push(i, Kind::Number);
+            continue;
+        }
+        if c.is_ascii_alphabetic() || matches!(c, b'_' | b'@' | b'.' | b'?') {
+            i += 1;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'@' | b'?' | b'$')) {
+                i += 1;
+            }
+            if i < b.len() && b[i] == b'.' && i - start == 1 {
+                i += 1;
+            }
+            let word = &line[start..i];
+            let next_colon = b.get(i) == Some(&b':');
+            let k = word_kind(word, first_word, next_colon);
+            first_word = false;
+            push(i, k);
+            continue;
+        }
+        // Run of other characters.
+        while i < b.len()
+            && !(b[i].is_ascii_alphanumeric()
+                || matches!(b[i], b'_' | b'@' | b'.' | b'?' | b';' | b'\'' | b'"' | b'`' | b'%'))
+        {
+            i += 1;
+        }
+        if i == start {
+            i += 1;
+        }
+        push(i, Kind::Plain);
+    }
+    spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn colors(job: &LayoutJob) -> Vec<(String, Color32)> {
+        // Neighbouring sections of one colour are merged, so compare the colour of each byte.
+        let mut out = Vec::new();
+        for s in &job.sections {
+            for ch in job.text[s.byte_range.start.0..s.byte_range.end.0].chars() {
+                out.push((ch.to_string(), s.format.color));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn cached_highlighting_matches_and_follows_edits() {
+        let font = FontId::monospace(14.0);
+        let pal = Palette::for_theme(false);
+        let mut h = Highlighter::default();
+        let mut text =
+            String::from("#make_com#\norg 100h\nstart: mov ax, 5 ; five\n  db 'hi', 0Dh\n%define X 1\n\nret");
+        for edit in ["", "\nnop", "\n\nret"] {
+            text.push_str(edit);
+            let job = h.job(&text, &font, &pal);
+            assert_eq!(job.text, text);
+            assert_eq!(colors(&job), colors(&highlight(&text, font.clone(), &pal)));
+        }
+        // Lines that are gone are not kept.
+        text = "nop".into();
+        h.job(&text, &font, &pal);
+        assert_eq!(h.lines.len(), 1);
+        // Another theme is not served from the cache.
+        let dark = Palette::for_theme(true);
+        assert_eq!(colors(&h.job(&text, &font, &dark)), colors(&highlight(&text, font.clone(), &dark)));
+    }
 }

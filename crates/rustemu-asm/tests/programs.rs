@@ -356,3 +356,14 @@ fn circular_equ_is_an_error() {
     // A redefined `=` constant uses its previous value.
     assert_eq!(bytes("org 100h\nn = 1\nn = n + 1\nmov al, n\n"), [0xB0, 0x02]);
 }
+
+#[test]
+fn deeply_nested_if_is_fast() {
+    // Nesting depth does not slow down each line (this took seconds when every line checked the
+    // whole stack of conditions).
+    let n = 100_000;
+    let src = format!("org 100h\n{}nop\n{}if 0\nret\nelse\nint 20h\nendif\n", "if 1\n".repeat(n), "endif\n".repeat(n));
+    let t = std::time::Instant::now();
+    assert_eq!(bytes(&src), [0x90, 0xCD, 0x20]);
+    assert!(t.elapsed().as_secs_f32() < 3.0, "{:?}", t.elapsed());
+}

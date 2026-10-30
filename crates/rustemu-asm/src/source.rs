@@ -380,8 +380,9 @@ impl<'a> Preprocessor<'a> {
             }
             return;
         }
-        // Conditional assembly stack: (active, any_branch_taken)
-        let mut cond: Vec<(bool, bool)> = Vec::new();
+        // Conditional assembly stack: (active, any_branch_taken, enclosing_active). An inner
+        // level is active only if the enclosing one is, so the top decides alone.
+        let mut cond: Vec<(bool, bool, bool)> = Vec::new();
         let mut i = 0;
         while i < lines.len() {
             let l = lines[i].clone();
@@ -395,7 +396,7 @@ impl<'a> Preprocessor<'a> {
             }
             let code = strip_comment(&l.text).trim().to_string();
             let (w1, w2) = first_words(&code);
-            let active = cond.iter().all(|c| c.0);
+            let active = cond.last().is_none_or(|c| c.0);
 
             // Conditionals are evaluated even in inactive regions to keep nesting right.
             match w1.as_str() {
@@ -416,17 +417,14 @@ impl<'a> Preprocessor<'a> {
                             }
                         }
                     };
-                    cond.push((v, v));
+                    cond.push((v, v, active));
                     continue;
                 }
                 "ELSEIF" | "ELSEIFDEF" | "ELSEIFNDEF" => {
-                    let n = cond.len();
-                    if n == 0 {
+                    let Some(&(_, taken, parent)) = cond.last() else {
                         self.error(&l, "ELSEIF without IF");
                         continue;
-                    }
-                    let parent = cond[..n - 1].iter().all(|c| c.0);
-                    let taken = cond[n - 1].1;
+                    };
                     let v = parent && !taken && {
                         let rest = code[w1.len()..].trim();
                         match w1.as_str() {
@@ -440,21 +438,16 @@ impl<'a> Preprocessor<'a> {
                             }
                         }
                     };
-                    cond[n - 1] = (v, taken || v);
+                    *cond.last_mut().unwrap() = (v, taken || v, parent);
                     continue;
                 }
                 "ELSE" => {
                     match cond.last_mut() {
                         Some(c) => {
-                            c.0 = !c.1;
+                            c.0 = c.2 && !c.1;
                             c.1 = true;
                         }
                         None => self.error(&l, "ELSE without IF"),
-                    }
-                    // Parent conditions still apply.
-                    let n = cond.len();
-                    if n > 1 && !cond[..n - 1].iter().all(|c| c.0) {
-                        cond[n - 1].0 = false;
                     }
                     continue;
                 }
