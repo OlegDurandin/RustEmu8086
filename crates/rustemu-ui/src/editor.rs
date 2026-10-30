@@ -1,10 +1,10 @@
 //! Source editor with syntax highlighting, line numbers and error markers.
 
-use egui::text::{CCursor, CCursorRange};
+use egui::text::{CCursor, CCursorRange, CharIndex};
 use egui::{Align, Color32, FontId, Rect, RichText, Sense, Stroke, TextEdit, Ui, pos2, vec2};
 
 use crate::app::App;
-use crate::highlight::{Palette, highlight};
+use crate::highlight::Palette;
 
 pub fn editor(app: &mut App, ui: &mut Ui) {
     let font = FontId::monospace(app.settings.font_size);
@@ -24,8 +24,6 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
     let select = app.pending_select.take();
     // Line of the current instruction (strong) or of the statement that called the macro (soft).
     let exec_line = exec_line(app);
-    // Text before this frame's edit, to move breakpoints and bookmarks with their lines.
-    let old_text = (!app.bp_lines.is_empty() || !app.bookmarks.is_empty()).then(|| app.text.clone());
 
     egui::ScrollArea::both().id_salt("editor_scroll").auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
@@ -34,10 +32,12 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                 ui.allocate_exact_size(vec2(gutter_w, row_h * lines as f32 + 8.0), Sense::click());
 
             let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
-                let job = highlight(buf.as_str(), font.clone(), &pal);
+                let job = app.highlighter.job(buf.as_str(), &font, &pal);
                 ui.fonts_mut(|f| f.layout_job(job))
             };
-            let out = TextEdit::multiline(&mut app.text)
+            let marks = !app.bp_lines.is_empty() || !app.bookmarks.is_empty();
+            let mut text = Tracked { text: &mut app.text, before: None, track: marks };
+            let out = TextEdit::multiline(&mut text)
                 .id(id)
                 .font(font.clone())
                 .code_editor()
@@ -48,6 +48,8 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                 .frame(egui::Frame::NONE)
                 .layouter(&mut layouter)
                 .show(ui);
+            // Text before this frame's edit, to move breakpoints and bookmarks with their lines.
+            let old_text = text.before;
 
             // Line numbers aligned with the text rows.
             let painter = ui.painter_at(Rect::from_min_max(
@@ -200,6 +202,46 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
 }
 
 /// A wavy line from `x0` to `x1` along `y` (an error underline).
+/// The editor text that copies itself on the first change of the frame (to move breakpoints and
+/// bookmarks with their lines) instead of being copied every frame.
+struct Tracked<'a> {
+    text: &'a mut String,
+    before: Option<String>,
+    track: bool,
+}
+
+impl Tracked<'_> {
+    fn keep(&mut self) {
+        if self.track && self.before.is_none() {
+            self.before = Some(self.text.clone());
+        }
+    }
+}
+
+impl egui::TextBuffer for Tracked<'_> {
+    fn is_mutable(&self) -> bool {
+        true
+    }
+
+    fn as_str(&self) -> &str {
+        self.text
+    }
+
+    fn insert_text(&mut self, text: &str, char_index: CharIndex) -> usize {
+        self.keep();
+        self.text.insert_text(text, char_index)
+    }
+
+    fn delete_char_range(&mut self, char_range: std::ops::Range<CharIndex>) {
+        self.keep();
+        self.text.delete_char_range(char_range);
+    }
+
+    fn type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<Tracked<'static>>()
+    }
+}
+
 fn wavy_line(x0: f32, x1: f32, y: f32, color: Color32) -> egui::Shape {
     const STEP: f32 = 2.0;
     let points = (0..=((x1 - x0) / STEP).ceil().max(1.0) as usize)

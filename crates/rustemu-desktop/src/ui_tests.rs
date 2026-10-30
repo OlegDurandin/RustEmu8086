@@ -378,6 +378,23 @@ fn breakpoints_follow_edited_lines() {
 }
 
 #[test]
+fn typing_moves_breakpoints_and_bookmarks() {
+    let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
+    app.text = "nop\nnop\nret\nhlt".into();
+    app.toggle_breakpoint_at_line(0, 3);
+    app.bookmarks.insert(4);
+    app.pending_select = Some((0, 0));
+    let mut h = harness(app);
+    h.run();
+    h.event(egui::Event::Text("mov ax, 1\n".into()));
+    h.run();
+    let app = h.state();
+    assert!(app.text.starts_with("mov ax, 1\nnop"), "{:?}", app.text);
+    assert!(app.bp_lines.contains_key(&(0, 4)) && app.bp_lines.len() == 1);
+    assert_eq!(app.bookmarks.iter().copied().collect::<Vec<_>>(), [5]);
+}
+
+#[test]
 fn debugger_windows_snapshot() {
     let src = "org 100h
     mov ax, 7
