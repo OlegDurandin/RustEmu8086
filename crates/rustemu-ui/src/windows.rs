@@ -1,5 +1,6 @@
 //! Tool windows and dialogs shared by the desktop and tablet front ends: new file, options, virtual
-//! drive, command line, unsaved changes, notices, ASCII codes, base converter, about.
+//! drive, command line, unsaved changes, notices, ASCII codes, base converter, about, the Examples
+//! menu and "more examples...".
 
 use egui::{RichText, Ui};
 
@@ -17,13 +18,90 @@ pub fn shared_windows(app: &mut App, ctx: &egui::Context) {
     crate::find::goto_dialog(app, &ctx);
     crate::console::console_window(app, &ctx);
     crate::library_ui::library_window(app, &ctx);
-    crate::reference_ui::reference_window(&mut app.reference, &ctx);
+    if !app.panels() {
+        crate::reference_ui::reference_window(&mut app.reference, &ctx);
+    }
     crate::calc::calculator_window(&mut app.calculator, &ctx);
     new_dialog(app, &ctx);
     options_window(app, &ctx);
     dialogs(app, &ctx);
     crate::programs::save_name_dialog(app, &ctx);
     crate::share::share_dialog(app, &ctx);
+    more_examples_window(app, &ctx);
+}
+
+/// The Examples menu, as in Emu8086 (plus NASM): from the emulator (`emulate`) the example is
+/// assembled and loaded at once.
+pub fn examples_menu(app: &mut App, ui: &mut Ui, emulate: bool) {
+    for &(caption, file) in crate::examples::MENU {
+        if file == "hello_nasm.asm" {
+            ui.separator();
+        }
+        if ui.button(caption).on_hover_text(file).clicked() {
+            if let Some(i) = crate::examples::index(file) {
+                open_example(app, i, emulate);
+            }
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button("more examples...").clicked() {
+        app.more_examples = Some(emulate);
+        ui.close();
+    }
+}
+
+fn open_example(app: &mut App, i: usize, emulate: bool) {
+    if emulate {
+        app.emulate_example(i);
+    } else {
+        app.guarded(PendingAction::Example(i));
+    }
+}
+
+/// "more examples...": every example file (Emu8086 opens its examples folder).
+fn more_examples_window(app: &mut App, ctx: &egui::Context) {
+    let Some(emulate) = app.more_examples else { return };
+    let mut open = true;
+    let mut chosen = None;
+    egui::Window::new("more examples")
+        .open(&mut open)
+        .default_pos(egui::pos2(160.0, 100.0))
+        .default_size([360.0, 480.0])
+        .show(ctx, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.examples_filter).hint_text("filter").desired_width(f32::INFINITY),
+            );
+            let filter = app.examples_filter.to_lowercase();
+            egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                for (i, (name, src)) in crate::examples::EXAMPLES.iter().enumerate() {
+                    if !name.to_lowercase().contains(&filter) {
+                        continue;
+                    }
+                    // The comment at the top says what the example does.
+                    let about: Vec<&str> = src
+                        .lines()
+                        .map(str::trim)
+                        .skip_while(|l| l.is_empty())
+                        .take_while(|l| l.starts_with(';'))
+                        .map(|l| l.trim_start_matches(';').trim())
+                        .filter(|l| !l.is_empty())
+                        .take(3)
+                        .collect();
+                    let r = ui.add(egui::Button::new(RichText::new(*name).monospace()).frame(false));
+                    let r = if about.is_empty() { r } else { r.on_hover_text(about.join("\n")) };
+                    if r.clicked() {
+                        chosen = Some(i);
+                    }
+                }
+            });
+        });
+    if let Some(i) = chosen {
+        app.more_examples = None;
+        open_example(app, i, emulate);
+    } else if !open {
+        app.more_examples = None;
+    }
 }
 
 /// "choose code template" (File -> New), like Emu8086.
@@ -104,6 +182,11 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                             app.switch_layout = true;
                         }
                     });
+                    ui.end_row();
+                }
+                if !app.tablet_layout {
+                    ui.label("windows");
+                    crate::workspace::layout_options(app, ui);
                     ui.end_row();
                 }
                 // The tablet layout has a theme of its own.
@@ -395,22 +478,30 @@ fn finish(app: &mut App, ctx: &egui::Context, action: PendingAction) {
     }
 }
 
-fn tools(app: &mut App, ctx: &egui::Context) {
-    let mut open = app.windows.ascii;
-    egui::Window::new("ASCII codes").open(&mut open).default_width(520.0).show(ctx, |ui| {
-        egui::Grid::new("ascii").num_columns(16).spacing([4.0, 2.0]).show(ui, |ui| {
-            for row in 0..16u8 {
-                for col in 0..16u8 {
-                    let b = row * 16 + col;
-                    let c = rustemu_core::font::cp437_to_char(b);
-                    ui.label(RichText::new(c.to_string()).monospace().size(16.0))
-                        .on_hover_text(format!("{b} = {b:02X}h = {b:08b}b"));
-                }
-                ui.end_row();
+/// The table of characters (code page 437).
+fn ascii_ui(ui: &mut Ui) {
+    egui::Grid::new("ascii").num_columns(16).spacing([4.0, 2.0]).show(ui, |ui| {
+        for row in 0..16u8 {
+            for col in 0..16u8 {
+                let b = row * 16 + col;
+                let c = rustemu_core::font::cp437_to_char(b);
+                ui.label(RichText::new(c.to_string()).monospace().size(16.0))
+                    .on_hover_text(format!("{b} = {b:02X}h = {b:08b}b"));
             }
-        });
-        ui.weak("hover a character to see its code (code page 437)");
+            ui.end_row();
+        }
     });
+    ui.weak("hover a character to see its code (code page 437)");
+}
+
+fn tools(app: &mut App, ctx: &egui::Context) {
+    // A floating window in both layouts, as in Emu8086: it stays open while you work with the emulator.
+    let mut open = app.windows.ascii;
+    egui::Window::new("ASCII codes")
+        .open(&mut open)
+        .default_pos(egui::pos2(160.0, 100.0))
+        .default_width(520.0)
+        .show(ctx, ascii_ui);
     app.windows.ascii = open;
 
     let mut open = app.windows.converter;

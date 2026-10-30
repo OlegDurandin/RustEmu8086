@@ -11,26 +11,28 @@ pub fn debugger_windows(app: &mut App, ctx: &egui::Context) {
     let w = &app.windows;
     let (mut bps, mut watch, mut calls, mut alu, mut cond) =
         (w.breakpoints, w.watch, w.call_stack, w.alu, w.stop_condition);
-    egui::Window::new("breakpoints")
-        .open(&mut bps)
-        .default_pos(pos2(700.0, 560.0))
-        .default_width(560.0)
-        .show(ctx, |ui| breakpoints_ui(app, ui));
-    egui::Window::new("watch")
-        .open(&mut watch)
-        .default_pos(pos2(1060.0, 110.0))
-        .default_width(460.0)
-        .show(ctx, |ui| watch_ui(app, ui));
-    egui::Window::new("call stack")
-        .open(&mut calls)
-        .default_pos(pos2(1060.0, 360.0))
-        .default_width(520.0)
-        .show(ctx, |ui| call_stack_ui(app, ui));
-    egui::Window::new("ALU")
-        .open(&mut alu)
-        .default_pos(pos2(240.0, 600.0))
-        .default_width(520.0)
-        .show(ctx, |ui| alu_ui(app, ui));
+    if !app.panels() {
+        egui::Window::new("breakpoints")
+            .open(&mut bps)
+            .default_pos(pos2(700.0, 560.0))
+            .default_width(560.0)
+            .show(ctx, |ui| breakpoints_ui(app, ui));
+        egui::Window::new("watch")
+            .open(&mut watch)
+            .default_pos(pos2(1060.0, 110.0))
+            .default_width(460.0)
+            .show(ctx, |ui| watch_ui(app, ui));
+        egui::Window::new("call stack")
+            .open(&mut calls)
+            .default_pos(pos2(1060.0, 360.0))
+            .default_width(520.0)
+            .show(ctx, |ui| call_stack_ui(app, ui));
+        egui::Window::new("ALU")
+            .open(&mut alu)
+            .default_pos(pos2(240.0, 600.0))
+            .default_width(520.0)
+            .show(ctx, |ui| alu_ui(app, ui));
+    }
     egui::Window::new("stop on condition")
         .open(&mut cond)
         .default_pos(pos2(700.0, 420.0))
@@ -80,7 +82,7 @@ pub fn source_text(app: &App, file: usize, line: u32) -> String {
 
 // ---- breakpoints ----------------------------------------------------------------------------
 
-fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
     if app.bp_lines.is_empty() {
         ui.weak("No breakpoints. Click the margin left of a line number in the editor (or press ⌘F8).");
     }
@@ -250,7 +252,7 @@ fn signed(v: i64, bits: u32) -> i64 {
     }
 }
 
-fn watch_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn watch_ui(app: &mut App, ui: &mut Ui) {
     let loaded = app.loaded() && app.session.program.is_some();
     let font = FontId::monospace(12.5);
     let changed_color = Color32::from_rgb(0xE0, 0x40, 0x40);
@@ -426,7 +428,7 @@ fn bin(v: u32, bits: u32) -> String {
     s.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" ")
 }
 
-fn alu_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn alu_ui(app: &mut App, ui: &mut Ui) {
     let t = app.session.machine.cpu.alu_trace;
     if t.op == AluOp::None {
         ui.weak("No arithmetic or logic instruction executed yet.");

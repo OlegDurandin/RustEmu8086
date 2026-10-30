@@ -5,16 +5,45 @@ use egui_kittest::Harness;
 
 use crate::app::{App, Settings};
 
-/// An app with built-in example `i` loaded and default settings (no last file).
+macro_rules! program {
+    ($dir:literal, $name:literal) => {
+        ($name, include_str!(concat!("../../../", $dir, "/", $name)))
+    };
+}
+
+/// The test programs (`tests/programs`, ours; the examples are Emu8086's) and the NASM examples.
+pub const PROGRAMS: &[(&str, &str)] = &[
+    program!("tests/programs", "hello.asm"),
+    program!("tests/programs", "hello_exe.asm"),
+    program!("tests/programs", "echo.asm"),
+    program!("tests/programs", "calc.asm"),
+    program!("tests/programs", "factorial.asm"),
+    program!("tests/programs", "bubble_sort.asm"),
+    program!("tests/programs", "keyboard.asm"),
+    program!("tests/programs", "colors.asm"),
+    program!("tests/programs", "graphics.asm"),
+    program!("tests/programs", "traffic_lights.asm"),
+    program!("tests/programs", "stepper_motor.asm"),
+    program!("tests/programs", "led_display.asm"),
+    program!("tests/programs", "thermometer.asm"),
+    program!("tests/programs", "printer.asm"),
+    program!("tests/programs", "robot.asm"),
+    program!("examples", "hello_nasm.asm"),
+    program!("examples", "boot_nasm.asm"),
+];
+
+/// An app with test program `i` ([`PROGRAMS`]) open as an example and default settings (no last
+/// file).
 pub fn app_with_example(i: usize) -> App {
     let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
-    app.load_example(i);
+    let (name, src) = PROGRAMS[i];
+    app.load_example_text(name, src);
     app
 }
 
-/// Index of the built-in example `name`.
+/// Index of the test program `name` in [`PROGRAMS`].
 pub fn example(name: &str) -> usize {
-    crate::examples::EXAMPLES.iter().position(|e| e.0 == name).unwrap()
+    PROGRAMS.iter().position(|e| e.0 == name).unwrap()
 }
 
 /// Renders the harness to `target/ui-snapshots/<name>.png`.

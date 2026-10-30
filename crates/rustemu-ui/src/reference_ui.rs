@@ -19,6 +19,8 @@ pub enum Tab {
 #[derive(Default)]
 pub struct RefState {
     pub open: bool,
+    /// Bring the reference to the front (the panels layout shows it as a tab).
+    pub raise: bool,
     pub tab: Tab,
     pub search: String,
     pub topic: Option<Topic>,
@@ -30,6 +32,7 @@ impl RefState {
     /// Opens the window at the article `t`.
     pub fn show(&mut self, t: Topic) {
         self.open = true;
+        self.raise = true;
         self.tab = match t {
             Topic::Instr(_) => Tab::Instructions,
             Topic::Directive(_) => Tab::Directives,
@@ -43,6 +46,7 @@ impl RefState {
 
     pub fn show_tab(&mut self, tab: Tab) {
         self.open = true;
+        self.raise = true;
         self.tab = tab;
     }
 }
@@ -60,7 +64,7 @@ pub fn reference_window(st: &mut RefState, ctx: &egui::Context) {
     st.open = open;
 }
 
-fn reference_ui(st: &mut RefState, ui: &mut Ui) {
+pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
     ui.horizontal(|ui| {
         for (t, n) in [
             (Tab::Instructions, "instructions"),

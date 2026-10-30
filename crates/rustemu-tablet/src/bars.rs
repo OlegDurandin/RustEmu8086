@@ -142,14 +142,7 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
         app.guarded(PendingAction::Open(None));
         ui.close();
     }
-    ui.menu_button("Examples", |ui| {
-        for (i, (name, _)) in rustemu_ui::examples::EXAMPLES.iter().enumerate() {
-            if ui.button(*name).clicked() {
-                app.guarded(PendingAction::Example(i));
-                ui.close();
-            }
-        }
-    });
+    ui.menu_button("Examples", |ui| rustemu_ui::windows::examples_menu(app, ui, false));
     if ui.button("Save").clicked() {
         app.save();
         ui.close();

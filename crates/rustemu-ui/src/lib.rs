@@ -30,6 +30,7 @@ pub mod share;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod windows;
+pub mod workspace;
 
 /// Window options of the desktop applications.
 #[cfg(not(target_arch = "wasm32"))]

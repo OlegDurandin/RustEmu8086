@@ -59,7 +59,7 @@ fn run_does_not_start_after_assembly_failure() {
 
     // A failed rebuild keeps the previous machine available for inspection,
     // but F5 must not start that stale image.
-    app.load_example(0);
+    app.load_example_text(rustemu_ui::testing::PROGRAMS[0].0, rustemu_ui::testing::PROGRAMS[0].1);
     app.emulate();
     assert!(app.loaded());
     let cpu = app.session.machine.cpu.clone();
@@ -163,7 +163,7 @@ fn graphics_and_devices() {
     h.run();
     save(&mut h, "05_graphics");
 
-    let robot = rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == "robot.asm").unwrap();
+    let robot = rustemu_ui::testing::example("robot.asm");
     let mut h = harness(app_with_example(robot));
     h.run();
     h.state_mut().emulate();
@@ -192,7 +192,7 @@ fn editing_a_device_clears_step_back_history() {
 
 #[test]
 fn stepping_into_library_macros() {
-    let calc = rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == "calc.asm").unwrap();
+    let calc = rustemu_ui::testing::example("calc.asm");
     let mut h = harness(app_with_example(calc));
     h.run();
     h.state_mut().emulate();
@@ -512,7 +512,12 @@ fn session_is_restored_after_restart() {
     let mut app = App::with_settings(saved);
     assert_eq!(app.path.as_deref(), Some(b.as_path()));
     assert!(app.bp_lines.contains_key(&(0, 4)) && app.bp_lines.len() == 1);
-    assert!(app.windows.watch && app.windows.alu);
+    // As in Emu8086 the editor is alone at the start: the tools open with the emulator.
+    assert!(!app.windows.watch && !app.windows.alu && !app.windows.emulator);
+    app.store_settings();
+    assert!(app.settings.windows.watch && app.settings.windows.alu, "kept while not shown");
+    app.emulate();
+    assert!(app.windows.watch && app.windows.alu && app.windows.emulator);
     assert_eq!(app.screen.font_size, 17.0);
     // Back to a.asm: everything is there again.
     app.open_path(&a);
@@ -533,7 +538,7 @@ fn session_is_restored_after_restart() {
 #[test]
 fn screen_paste_and_copy() {
     let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
-    app.load_example(0);
+    app.load_example_text(rustemu_ui::testing::PROGRAMS[0].0, rustemu_ui::testing::PROGRAMS[0].1);
     app.emulate();
     let m = &mut app.session.machine;
     let before = m.sys.keys.len();
@@ -694,7 +699,7 @@ fn value_viewer_addresses_and_view_menu_snapshots() {
 fn value_viewer_sets_registers_and_memory() {
     use rustemu_ui::debugger::{set_viewed_value, view_register};
     let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
-    app.load_example(0);
+    app.load_example_text(rustemu_ui::testing::PROGRAMS[0].0, rustemu_ui::testing::PROGRAMS[0].1);
     app.emulate();
     view_register(&mut app, "BX");
     set_viewed_value(&mut app, "1010b").unwrap();
@@ -733,7 +738,7 @@ fn nasm_templates_and_syntax_setting() {
 
 #[test]
 fn nasm_editor_snapshot() {
-    let i = rustemu_ui::examples::EXAMPLES.iter().position(|e| e.0 == "hello_nasm.asm").unwrap();
+    let i = rustemu_ui::testing::example("hello_nasm.asm");
     let mut h = harness(app_with_example(i));
     h.run();
     let app = h.state_mut();
@@ -1064,4 +1069,206 @@ fn share_links_open_the_program() {
     assert!(!clean.dirty() && clean.loaded());
     run_until_paused(&mut clean);
     assert_eq!(String::from_utf8_lossy(&clean.session.machine.output), "Hello, World!\r\n");
+}
+
+/// Test program `name` in the panels layout (the default is classic windows).
+fn panels_app(name: &str) -> App {
+    let mut app = app_with_example(rustemu_ui::testing::example(name));
+    app.settings.layout = rustemu_ui::workspace::Layout::Panels;
+    app
+}
+
+#[test]
+fn panels_and_classic_windows() {
+    use rustemu_ui::workspace::{Layout, Tool};
+    let mut h = harness(panels_app("calc.asm"));
+    h.run();
+    h.state_mut().emulate();
+    let w = &mut h.state_mut().windows;
+    (w.memory, w.vars, w.watch, w.call_stack, w.devices) = (true, true, true, true, true);
+    h.run_steps(8);
+    save(&mut h, "40_panels_debugging");
+    // Every open tool has a tab, nothing floats over the editor.
+    let tree = h.state().panels.clone().unwrap();
+    for t in [Tool::Editor, Tool::Emulator, Tool::Screen, Tool::Source, Tool::Memory, Tool::Watch, Tool::Devices] {
+        assert!(tree.tiles.find_pane(&t).is_some(), "{t:?} has no tab");
+    }
+    // The tabs of the inspection tools are below the emulator, the screen is on the right.
+    let rect = |t| tree.tiles.rect(tree.tiles.parent_of(tree.tiles.find_pane(&t).unwrap()).unwrap()).unwrap();
+    assert!(rect(Tool::Memory).top() > rect(Tool::Emulator).bottom() - 1.0);
+    assert!(rect(Tool::Screen).left() > rect(Tool::Emulator).right() - 1.0);
+    assert!(rect(Tool::Emulator).left() > rect(Tool::Editor).right() - 1.0);
+
+    // The layout is saved with the settings (as eframe stores them) and comes back.
+    use eframe::Storage;
+    h.state_mut().store_settings();
+    let mut storage = MemStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, &h.state().settings);
+    let back: Settings = eframe::get_value(&storage, eframe::APP_KEY).unwrap();
+    let app = App::with_settings(back);
+    assert!(app.panels.unwrap().tiles.find_pane(&Tool::Watch).is_some());
+    // A layout saved by another version is dropped, not the other settings.
+    let text = storage.get_string(eframe::APP_KEY).unwrap().replace("Watch", "Unknown");
+    storage.set_string(eframe::APP_KEY, text);
+    let back: Settings = eframe::get_value(&storage, eframe::APP_KEY).unwrap();
+    assert!(back.windows.watch);
+    assert!(App::with_settings(back).panels.is_none());
+
+    // Classic windows: the same tools float, as in Emu8086.
+    h.state_mut().settings.layout = Layout::Classic;
+    h.run_steps(8);
+    save(&mut h, "41_classic_windows");
+    h.get_by_label("original source code");
+    h.get_by_label("emulator screen (80x25 chars)");
+    // Back to panels: the arrangement is kept; reset puts the tools where they start.
+    h.state_mut().settings.layout = Layout::Panels;
+    h.run_steps(4);
+    assert!(h.state().panels.is_some());
+    let ctx = h.ctx.clone();
+    rustemu_ui::workspace::reset_layout(h.state_mut(), &ctx);
+    h.run_steps(4);
+    assert!(h.state().panels.as_ref().unwrap().tiles.find_pane(&Tool::Watch).is_some());
+
+    // The ASCII table floats over the panels, as in Emu8086, instead of taking a tab.
+    h.state_mut().windows.ascii = true;
+    h.run_steps(4);
+    save(&mut h, "42_ascii_codes");
+    h.get_by_label("ASCII codes");
+    // It isn't modal: the emulator keeps working while the table is open.
+    h.get_by_label("▶ Run").click();
+    h.run_steps(4);
+    assert!(h.state().windows.ascii && h.state().run != rustemu_ui::app::RunMode::Paused);
+    h.state_mut().stop();
+}
+
+#[test]
+fn short_emulator_panel_scrolls() {
+    use rustemu_ui::workspace::Tool;
+    let app = panels_app("calc.asm");
+    let mut h = Harness::builder()
+        .with_size([1100.0, 560.0])
+        .with_max_steps(64)
+        .build_ui_state(|ui, app: &mut App| crate::ui::main_ui(app, ui), app);
+    rustemu_ui::fonts::install(&h.ctx);
+    h.run();
+    h.state_mut().emulate();
+    h.state_mut().windows.memory = true;
+    h.run_steps(8);
+    let tree = h.state().panels.clone().unwrap();
+    let panel = tree.tiles.rect(tree.tiles.parent_of(tree.tiles.find_pane(&Tool::Emulator).unwrap()).unwrap()).unwrap();
+    // The registers and the buttons under the list don't fit: the panel scrolls to them.
+    assert!(h.get_by_label("flags").rect().top() > panel.bottom());
+    // Over the registers: the wheel over the disassembly scrolls the code instead.
+    h.hover_at(egui::pos2(panel.left() + 40.0, panel.center().y));
+    for _ in 0..4 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -100.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Default::default(),
+        });
+        h.run_steps(2);
+    }
+    h.run_steps(8);
+    save(&mut h, "43_panels_short_emulator");
+    assert!(h.get_by_label("flags").rect().bottom() < panel.bottom());
+}
+
+#[test]
+fn disassembly_scrolls_and_tools_go_under_the_screen() {
+    use rustemu_ui::workspace::Tool;
+    let mut h = harness(panels_app("calc.asm"));
+    h.run();
+    h.state_mut().emulate();
+    h.run_steps(8);
+    let pc = h.state().session.machine.cpu.pc();
+    let wheel = |h: &mut Harness<'static, App>, dy: f32| {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Default::default(),
+        });
+        h.run_steps(2);
+    };
+    // The wheel over the disassembly scrolls the code: down three rows and back.
+    h.hover_at(h.get_by_label("0700:0101").rect().center());
+    for _ in 0..3 {
+        wheel(&mut h, -24.0);
+    }
+    assert!(h.state().code_view_pinned);
+    assert!(h.state().code_view_start > pc);
+    save(&mut h, "44_disasm_scrolled");
+    for _ in 0..6 {
+        wheel(&mut h, 24.0);
+    }
+    assert!(h.state().code_view_start <= pc);
+    // Back up to the data rows of the PRINT macro: they are shown whole, not from a byte inside.
+    h.state_mut().scroll_disasm(3);
+    h.state_mut().scroll_disasm(-1);
+    h.run_steps(2);
+    h.get_by_label("DB 'First number: ', 0");
+    // The next step shows CS:IP again.
+    h.get_by_label("⌖ CS:IP").click();
+    h.run_steps(2);
+    assert!(!h.state().code_view_pinned);
+
+    // vars, stack and the debug log open under the screen; flags float.
+    let w = &mut h.state_mut().windows;
+    (w.vars, w.stack, w.console, w.flags) = (true, true, true, true);
+    h.run_steps(8);
+    save(&mut h, "45_panels_under_screen");
+    let tree = h.state().panels.clone().unwrap();
+    let rect = |t| tree.tiles.rect(tree.tiles.parent_of(tree.tiles.find_pane(&t).unwrap()).unwrap()).unwrap();
+    for t in [Tool::Vars, Tool::Stack, Tool::Console] {
+        assert!(rect(t).top() > rect(Tool::Screen).bottom() - 1.0, "{t:?}");
+        assert!(rect(t).left() > rect(Tool::Emulator).right() - 1.0, "{t:?}");
+    }
+    h.get_by_label("analyse").click();
+    h.run_steps(4);
+    h.get_by_label("lexical flag analyser");
+}
+
+#[test]
+fn examples_menu_and_more_examples() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    // The Examples menu of Emu8086.
+    h.get_by_label("📚 examples").click();
+    h.run_steps(4);
+    save(&mut h, "46_examples_menu");
+    h.get_by_label("compare numbers").click();
+    h.run_steps(4);
+    assert_eq!(h.state().example_key.as_deref(), Some("example:4_sample.asm"));
+    assert!(h.state().text.starts_with("name \"flags\"\n"), "DOS line ends are gone");
+    // "more examples..." lists every file of Emu8086's examples folder.
+    h.get_by_label("📚 examples").click();
+    h.run_steps(4);
+    h.get_by_label("more examples...").click();
+    h.run_steps(4);
+    assert_eq!(h.state().more_examples, Some(false));
+    h.state_mut().examples_filter = "palin".into();
+    h.run_steps(4);
+    save(&mut h, "47_more_examples");
+    h.get_by_label("palindrome.asm").click();
+    h.run_steps(4);
+    assert_eq!(h.state().example_key.as_deref(), Some("example:palindrome.asm"));
+    assert_eq!(h.state().more_examples, None);
+}
+
+#[test]
+fn classic_windows_by_default_and_flag_tips() {
+    assert_eq!(rustemu_ui::app::Settings::default().layout, rustemu_ui::workspace::Layout::Classic);
+    let mut h = harness(app_with_example(rustemu_ui::testing::example("calc.asm")));
+    h.run();
+    h.state_mut().emulate();
+    h.run_steps(8);
+    assert!(h.state().panels.is_none());
+    // The flags under the registers say what they are.
+    h.hover_at(h.get_by_label("C0").rect().center());
+    h.run_steps(30);
+    save(&mut h, "48_classic_emulator");
+    h.get_by_label("CF = 0: Carry Flag");
 }

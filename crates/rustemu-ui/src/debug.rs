@@ -23,21 +23,33 @@ fn window(title: &str, open: &mut bool, pos: [f32; 2], ctx: &egui::Context, f: i
 }
 
 pub fn debug_windows(app: &mut App, ctx: &egui::Context) {
+    // The flags float in both layouts, as in Emu8086: a small window to glance at while stepping.
+    let mut fl = app.windows.flags;
+    egui::Window::new("flags")
+        .open(&mut fl)
+        .default_pos(pos2(880.0, 110.0))
+        .resizable(false)
+        .default_width(140.0)
+        .show(ctx, |ui| flags_ui(app, ui));
+    app.windows.flags = fl;
+    // After the flags: their "analyse" button opens it.
+    let mut an = app.windows.flag_analyser;
+    window("lexical flag analyser", &mut an, [1000.0, 110.0], ctx, |ui| flag_analyser_ui(app, ui));
+    app.windows.flag_analyser = an;
+    if app.panels() {
+        return;
+    }
     let w = &mut app.windows;
-    let (mut mem, mut stack, mut fl, mut vars, mut sym, mut lst, mut log) =
-        (w.memory, w.stack, w.flags, w.vars, w.symbols, w.listing, w.log);
+    let (mut mem, mut stack, mut vars, mut sym, mut lst, mut log) =
+        (w.memory, w.stack, w.vars, w.symbols, w.listing, w.log);
     window("memory", &mut mem, [80.0, 420.0], ctx, |ui| memory_ui(app, ui));
     window("stack", &mut stack, [680.0, 110.0], ctx, |ui| stack_ui(app, ui));
-    window("flags", &mut fl, [880.0, 110.0], ctx, |ui| flags_ui(app, ui));
     window("variables", &mut vars, [300.0, 300.0], ctx, |ui| vars_ui(app, ui));
     window("symbol table", &mut sym, [320.0, 160.0], ctx, |ui| symbols_ui(app, ui));
     window("listing", &mut lst, [200.0, 140.0], ctx, |ui| listing_ui(app, ui));
     window("log", &mut log, [120.0, 500.0], ctx, |ui| log_ui(app, ui));
     let w = &mut app.windows;
-    (w.memory, w.stack, w.flags, w.vars, w.symbols, w.listing, w.log) = (mem, stack, fl, vars, sym, lst, log);
-    let mut an = app.windows.flag_analyser;
-    window("lexical flag analyser", &mut an, [1000.0, 110.0], ctx, |ui| flag_analyser_ui(app, ui));
-    app.windows.flag_analyser = an;
+    (w.memory, w.stack, w.vars, w.symbols, w.listing, w.log) = (mem, stack, vars, sym, lst, log);
 }
 
 /// Parses `seg:off` (hex) or a linear hex address; segment may be a register name.
@@ -64,7 +76,7 @@ pub fn parse_addr(app: &App, s: &str) -> Option<u32> {
     }
 }
 
-fn memory_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label("address:");
         let r = ui
@@ -139,7 +151,7 @@ fn memory_ui(app: &mut App, ui: &mut Ui) {
     ui.weak("blue = CS:IP, yellow = SS:SP");
 }
 
-fn stack_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn stack_ui(app: &mut App, ui: &mut Ui) {
     let c = &app.session.machine.cpu;
     let (ss, sp, bp) = (c.sregs[cpu::SS], c.regs[cpu::SP], c.regs[cpu::BP]);
     let font = FontId::monospace(12.5);
@@ -176,7 +188,7 @@ fn stack_ui(app: &mut App, ui: &mut Ui) {
 }
 
 /// The flags of the flags window, in Emu8086's order, with their descriptions.
-const FLAG_ROWS: [(u16, &str, &str); 8] = [
+pub const FLAG_ROWS: [(u16, &str, &str); 8] = [
     (flags::CF, "CF", "Carry Flag"),
     (flags::ZF, "ZF", "Zero Flag (0-not zero, 1-zero)"),
     (flags::SF, "SF", "Sign Flag (0-positive, 1-negative)"),
@@ -262,7 +274,7 @@ fn format_value(v: u32, size: u8, f: NumFormat) -> String {
     }
 }
 
-fn vars_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn vars_ui(app: &mut App, ui: &mut Ui) {
     let Some(prog) = &app.session.program else {
         ui.weak("no program");
         return;
@@ -326,7 +338,7 @@ fn vars_ui(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn symbols_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn symbols_ui(app: &mut App, ui: &mut Ui) {
     let Some(prog) = &app.session.program else {
         ui.weak("no program");
         return;
@@ -336,7 +348,7 @@ fn symbols_ui(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn listing_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn listing_ui(app: &mut App, ui: &mut Ui) {
     let Some(prog) = &app.session.program else {
         ui.weak("no program");
         return;
@@ -350,7 +362,7 @@ fn listing_ui(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn log_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn log_ui(app: &mut App, ui: &mut Ui) {
     let m = &app.session.machine;
     ui.label(RichText::new("console output").strong());
     egui::ScrollArea::vertical().id_salt("out").max_height(160.0).stick_to_bottom(true).show(ui, |ui| {
@@ -392,7 +404,10 @@ pub fn disasm_start(app: &mut App, rows: usize) -> u32 {
     let pc = m.cpu.pc();
     let mut a = app.code_view_start;
     let mut ip = m.cpu.ip.wrapping_sub(pc.wrapping_sub(a) as u16);
-    for _ in 0..rows.saturating_sub(3) {
+    // Rows of the list, label rows included; CS:IP stays at least 3 rows above the bottom.
+    let mut shown = 0;
+    while shown + 3 < rows {
+        shown += 1 + app.session.symbol_at(a).is_some() as usize;
         if a == pc {
             return app.code_view_start;
         }

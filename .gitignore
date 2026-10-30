@@ -5,3 +5,11 @@
 
 # The course is kept outside the repository
 /course/
+
+# Built from the examples by `rustemu asm`
+/examples/*.com
+/examples/*.exe
+/examples/*.bin
+/examples/*.lst
+/examples/*.symbol
+/examples/*.binf

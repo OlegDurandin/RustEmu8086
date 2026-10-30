@@ -246,6 +246,9 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
 }
 
 pub fn console_window(app: &mut App, ctx: &egui::Context) {
+    if app.panels() {
+        return;
+    }
     let mut open = app.windows.console;
     egui::Window::new("debug log")
         .open(&mut open)
@@ -275,7 +278,7 @@ pub fn log_state(app: &mut App) {
     con.lines.extend(text);
 }
 
-fn console_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn console_ui(app: &mut App, ui: &mut Ui) {
     if app.console.lines.is_empty() {
         app.console.lines.push("RustEmu8086 debug console - type ? for help".into());
     }
@@ -325,7 +328,7 @@ mod tests {
     #[test]
     fn debug_commands() {
         let mut a = App::with_settings(Settings { last_file: None, ..Settings::default() });
-        a.load_example(0);
+        a.load_example_text("hello.asm", include_str!("../../../tests/programs/hello.asm"));
         a.emulate();
         execute(&mut a, "r");
         assert!(a.console.lines.iter().any(|l| l.contains("IP=0100")));

@@ -66,6 +66,11 @@ pub struct Settings {
     pub timer_irq: bool,
     /// Open windows (positions and sizes are kept by egui itself).
     pub windows: Windows,
+    /// Tools as panels or as floating windows (classic, like Emu8086).
+    pub layout: crate::workspace::Layout,
+    /// The arrangement of the panels in RON (`None`: the default one). Kept as text, so that one
+    /// saved by another version that cannot be read is dropped, not the whole settings.
+    pub panels: Option<String>,
     pub screen_zoom: f32,
     pub show_macro_code: bool,
     /// The disassembler shows the program's data as `DB`/`DW` and the zeros after it as `DUP`.
@@ -117,6 +122,8 @@ impl Default for Settings {
             last_file: None,
             timer_irq: false,
             windows: Windows::default(),
+            layout: Default::default(),
+            panels: None,
             screen_zoom: 13.0,
             show_macro_code: true,
             disasm_data: true,
@@ -158,6 +165,47 @@ pub struct Windows {
     pub drive: bool,
     /// "my programs": programs saved in the browser.
     pub programs: bool,
+}
+
+/// The tools of a loaded program: they open with the emulator.
+const PROGRAM_TOOLS: [fn(&mut Windows) -> &mut bool; 19] = [
+    |w| &mut w.emulator,
+    |w| &mut w.screen,
+    |w| &mut w.source,
+    |w| &mut w.memory,
+    |w| &mut w.stack,
+    |w| &mut w.flags,
+    |w| &mut w.vars,
+    |w| &mut w.symbols,
+    |w| &mut w.listing,
+    |w| &mut w.log,
+    |w| &mut w.devices,
+    |w| &mut w.console,
+    |w| &mut w.breakpoints,
+    |w| &mut w.watch,
+    |w| &mut w.call_stack,
+    |w| &mut w.alu,
+    |w| &mut w.stop_condition,
+    |w| &mut w.flag_analyser,
+    |w| &mut w.value_viewer,
+];
+
+impl Windows {
+    /// Closes the tools of a loaded program and returns them.
+    pub fn take_program_tools(&mut self) -> Windows {
+        let mut tools = Windows::default();
+        for f in PROGRAM_TOOLS {
+            *f(&mut tools) = std::mem::take(f(self));
+        }
+        tools
+    }
+
+    /// Opens the tools that are open in `other` as well.
+    pub fn open_also(&mut self, mut other: Windows) {
+        for f in PROGRAM_TOOLS {
+            *f(self) |= *f(&mut other);
+        }
+    }
 }
 
 pub struct Message {
@@ -279,6 +327,9 @@ pub struct App {
     // ---- emulator
     pub session: Session,
     pub windows: Windows,
+    /// The program's tools that were open last time: they open with the emulator, at the first
+    /// emulate (Emu8086 starts with the source editor alone).
+    pub deferred_tools: Option<Windows>,
     pub run: RunMode,
     pub last_step: f64,
     pub status: String,
@@ -321,6 +372,12 @@ pub struct App {
     pub code_view_pinned: bool,
     /// Instruction selected in the disassembly (segment, offset) for the Debug menu.
     pub code_selected: Option<(u16, u16)>,
+    /// Mouse wheel movement over the disassembly not yet turned into whole rows.
+    pub code_wheel: f32,
+    /// "more examples..." is open: `Some(true)` from the emulator (the example is emulated).
+    pub more_examples: Option<bool>,
+    /// Filter of the "more examples..." list.
+    pub examples_filter: String,
     /// "Save the emulator's state" (File menu of the emulator).
     pub saved_state: Option<SavedState>,
     pub bin_to_floppy: Option<BinToFloppy>,
@@ -385,6 +442,8 @@ pub struct App {
     pub current_line_color: Option<egui::Color32>,
     /// The tablet layout is shown (set by the tablet front end).
     pub tablet_layout: bool,
+    /// The arrangement of the panels (`None`: the default one; saved in `Settings::panels`).
+    pub panels: Option<egui_tiles::Tree<crate::workspace::Tool>>,
     /// The front end can switch between the desktop and the tablet layout (the web version); the
     /// options window and the tablet menu offer it then and set `switch_layout`.
     pub can_switch_layout: bool,
@@ -418,6 +477,11 @@ impl App {
         app
     }
 
+    /// Tools are tabs of the workspace, not floating windows (never in the tablet layout).
+    pub fn panels(&self) -> bool {
+        self.settings.layout == crate::workspace::Layout::Panels && !self.tablet_layout
+    }
+
     pub fn with_settings(settings: Settings) -> Self {
         let mut app = App {
             settings,
@@ -440,6 +504,7 @@ impl App {
             cursor_line: 1,
             session: Session::new(),
             windows: Windows::default(),
+            deferred_tools: None,
             run: RunMode::Paused,
             last_step: 0.0,
             status: "Ready".into(),
@@ -467,6 +532,9 @@ impl App {
             code_view_start: 0,
             code_view_pinned: false,
             code_selected: None,
+            code_wheel: 0.0,
+            more_examples: None,
+            examples_filter: String::new(),
             saved_state: None,
             bin_to_floppy: None,
             new_nasm: false,
@@ -507,10 +575,13 @@ impl App {
             storage_warned: false,
             current_line_color: None,
             tablet_layout: false,
+            panels: None,
             can_switch_layout: false,
             switch_layout: false,
         };
         app.windows = app.settings.windows.clone();
+        app.deferred_tools = Some(app.windows.take_program_tools());
+        app.panels = app.settings.panels.as_deref().and_then(|s| ron::from_str(s).ok());
         app.windows.about = false;
         app.screen.font_size = app.settings.screen_zoom.clamp(10.0, 22.0);
         app.show_macro_code = app.settings.show_macro_code;
@@ -519,7 +590,8 @@ impl App {
         let last = app.settings.last_file.clone();
         match last {
             Some(p) if p.exists() => app.open_path(&p),
-            _ => app.load_example(0),
+            // The first item of the Examples menu: Hello, world.
+            _ => app.load_example(crate::examples::index(crate::examples::MENU[0].1).unwrap_or(0)),
         }
         // The browser has no file system: DOS programs get a drive in memory.
         if app.browser {

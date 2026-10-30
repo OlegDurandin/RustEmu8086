@@ -14,6 +14,9 @@ pub fn drive_window(app: &mut App, ctx: &egui::Context) {
         app.windows.drive = false;
         return;
     }
+    if app.panels() {
+        return;
+    }
     let mut open = app.windows.drive;
     egui::Window::new("drive C:")
         .open(&mut open)
@@ -28,7 +31,7 @@ fn dos_name(key: &str) -> String {
     format!("C:\\{}", key.replace('/', "\\"))
 }
 
-fn drive_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
     if app.own_drive.is_some() {
         ui.colored_label(crate::colors::warn(ui), crate::share::temporary_drive_text(&app.file_name()));
     } else {
