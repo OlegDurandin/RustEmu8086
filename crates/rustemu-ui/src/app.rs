@@ -71,7 +71,6 @@ pub struct Settings {
     /// The arrangement of the panels in RON (`None`: the default one). Kept as text, so that one
     /// saved by another version that cannot be read is dropped, not the whole settings.
     pub panels: Option<String>,
-    pub screen_zoom: f32,
     pub show_macro_code: bool,
     /// The disassembler shows the program's data as `DB`/`DW` and the zeros after it as `DUP`.
     pub disasm_data: bool,
@@ -124,7 +123,6 @@ impl Default for Settings {
             windows: Windows::default(),
             layout: Default::default(),
             panels: None,
-            screen_zoom: 13.0,
             show_macro_code: true,
             disasm_data: true,
             follow_source: true,
@@ -583,7 +581,6 @@ impl App {
         app.deferred_tools = Some(app.windows.take_program_tools());
         app.panels = app.settings.panels.as_deref().and_then(|s| ron::from_str(s).ok());
         app.windows.about = false;
-        app.screen.font_size = app.settings.screen_zoom.clamp(10.0, 22.0);
         app.show_macro_code = app.settings.show_macro_code;
         app.follow_source = app.settings.follow_source;
         app.vars_format = app.settings.vars_format;

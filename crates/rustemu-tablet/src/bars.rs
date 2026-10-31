@@ -210,10 +210,7 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
         app.switch_layout = true;
         ui.close();
     }
-    if ui.button("Options").clicked() {
-        app.options_open = true;
-        ui.close();
-    }
+    ui.menu_button("Options", |ui| rustemu_ui::windows::options_menu(app, ui));
     if ui.button("About").clicked() {
         app.windows.about = true;
         ui.close();

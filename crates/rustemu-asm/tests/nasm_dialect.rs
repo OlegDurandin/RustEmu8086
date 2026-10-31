@@ -239,3 +239,16 @@ fn dialect_detection() {
     }
     assert_eq!(detect_dialect("prog.nasm", "org 100h\n"), Dialect::Nasm);
 }
+
+/// Detection is a guess: a program it takes for MASM that assembles only as NASM is assembled as
+/// NASM; a MASM program with an error keeps the MASM errors.
+#[test]
+fn auto_dialect_falls_back_to_the_other_one() {
+    for src in ["org 100h\npush word 5\nret\n", "org 100h\nmov al, `a`\nret\n"] {
+        assert_eq!(detect_dialect("a.asm", src), Dialect::Masm, "{src}");
+        let p = assemble_str(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        assert_eq!(p.dialect, Dialect::Nasm, "{src}");
+    }
+    let e = assemble_str("org 100h\nmov ax, undefined_name\nret\n").unwrap_err();
+    assert!(e.to_string().contains("UNDEFINED_NAME"), "{e}");
+}
