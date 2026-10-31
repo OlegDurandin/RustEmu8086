@@ -128,6 +128,7 @@ impl App {
         self.stop_condition.compiled = None;
         self.sync_breakpoints();
         self.prev_cpu = self.session.machine.cpu.clone();
+        self.prev_fpu = self.session.machine.sys.fpu.clone();
         self.code_view_pinned = false;
         let c = &self.session.machine.cpu;
         self.status = format!("Emulator state restored - CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
@@ -142,6 +143,7 @@ impl App {
         self.loaded_text = None;
         self.bp_addr.clear();
         self.prev_cpu = self.session.machine.cpu.clone();
+        self.prev_fpu = self.session.machine.sys.fpu.clone();
         self.code_selected = None;
         self.code_view_pinned = false;
         self.status = "Emulator and RAM reset".into();

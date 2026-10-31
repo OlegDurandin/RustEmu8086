@@ -7,6 +7,7 @@ pub mod devices;
 pub mod disasm;
 pub mod dos;
 pub mod font;
+pub mod fpu;
 pub mod keyboard;
 pub mod machine;
 pub mod memdrive;

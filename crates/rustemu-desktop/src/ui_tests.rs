@@ -1393,3 +1393,29 @@ fn reference_in_russian() {
     let (title, details) = Topic::Instr(0).tooltip(app.reference.lang);
     assert!(title.contains("Скопировать") && details.starts_with("флаги"), "{title} / {details}");
 }
+
+#[test]
+fn fpu_window_shows_the_8087() {
+    const SRC: &str = "org 100h\nfinit\nfld two\nfsqrt\nfldpi\nret\ntwo dd 2.0\n";
+    let mut h = harness(app_with_example(0));
+    h.run();
+    h.state_mut().load_example_text("fpu.asm", SRC);
+    h.state_mut().emulate();
+    h.state_mut().windows.fpu = true;
+    for _ in 0..5 {
+        h.state_mut().single_step();
+    }
+    h.run_steps(8);
+    save(&mut h, "54_fpu_window");
+    let f = &h.state().session.machine.sys.fpu;
+    assert_eq!((f.top(), rustemu_core::fpu::to_f64(f.st(1))), (6, 2f64.sqrt()));
+    h.get_by_label("3.141592653589793");
+    h.get_by_label("1.4142135623730951");
+    h.get_by_label("TOP = 6");
+    // The raw bytes, as Emu8086's FPU window shows them: ST(0) = pi, lowest byte first.
+    h.get_by_label("raw bytes (as in Emu8086)").click();
+    h.run_steps(4);
+    save(&mut h, "54_fpu_window");
+    h.get_by_label("control register:");
+    h.get_by_label("35 C2 68 21 A2 DA 0F C9 00 40");
+}

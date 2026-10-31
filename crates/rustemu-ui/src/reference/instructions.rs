@@ -29,10 +29,11 @@ pub enum Group {
     Flags,
     Control,
     I186,
+    Fpu,
 }
 
 impl Group {
-    pub const ALL: [Group; 10] = [
+    pub const ALL: [Group; 11] = [
         Group::Transfer,
         Group::Arithmetic,
         Group::Bcd,
@@ -43,6 +44,7 @@ impl Group {
         Group::Flags,
         Group::Control,
         Group::I186,
+        Group::Fpu,
     ];
 
     pub fn title(self) -> &'static str {
@@ -57,6 +59,7 @@ impl Group {
             Group::Flags => "Flag control",
             Group::Control => "Processor control",
             Group::I186 => "80186 additions",
+            Group::Fpu => "8087 coprocessor (FPU)",
         }
     }
 }
@@ -1010,4 +1013,296 @@ pub const INSTRUCTIONS: &[Instr] = &[
         NONE,
         "my_proc proc\n    push bp\n    mov bp, sp\n    sub sp, 4   ; local variables\n    ; ...\n    leave\n    ret\nmy_proc endp"
     ),
+    // ---- 8087 coprocessor ---------------------------------------------------------------
+    instr!(
+        "FINIT",
+        ["FNINIT"],
+        Fpu,
+        [""],
+        "Initialize the coprocessor.",
+        "Empties the register stack (all tags empty, TOP = 0), clears the exceptions, masks them all and sets rounding to nearest with 64-bit precision (control word 03FFh). Start every program that uses the 8087 with FINIT. FINIT is FWAIT + FNINIT.",
+        NONE,
+        "finit\nfld1            ; ST = 1.0"
+    ),
+    instr!(
+        "FLD",
+        [],
+        Fpu,
+        ["dword/qword/tbyte memory", "ST(i)"],
+        "Load a real number onto the register stack (push).",
+        "Decrements TOP and puts the value into the new ST(0); the old ST(0) becomes ST(1), and so on. The memory operand is a 32-bit (DD, DWORD PTR), 64-bit (DQ, QWORD PTR) or 80-bit (DT, TBYTE PTR) real; FLD ST(i) pushes a copy of a register. Eight values fit; a ninth push is a stack overflow (invalid operation).",
+        NONE,
+        "fld x           ; ST = 2.5\nfld st(0)       ; a copy: ST = ST(1) = 2.5\nret\nx dd 2.5"
+    ),
+    instr!(
+        "FST",
+        ["FSTP"],
+        Fpu,
+        ["dword/qword memory", "tbyte memory (FSTP)", "ST(i)"],
+        "Store ST(0) to memory or a register; FSTP also pops it.",
+        "Converts ST(0) to the size of the destination with the rounding of the control word. FSTP removes ST(0) from the stack (TOP + 1); only FSTP can store an 80-bit TBYTE. FSTP ST(0) simply drops the top value.",
+        NONE,
+        "fldpi\nfst y           ; y = 3.14159 (float), ST still holds pi\nfstp z          ; z = 3.141592653589793, the stack is empty\nret\ny dd 0.0\nz dq 0.0"
+    ),
+    instr!(
+        "FILD",
+        [],
+        Fpu,
+        ["word/dword/qword memory"],
+        "Load a signed integer onto the register stack.",
+        "Converts a 16-bit (DW), 32-bit (DD) or 64-bit (DQ) signed integer to an 80-bit real and pushes it. The conversion is exact.",
+        NONE,
+        "fild n          ; ST = 7.0\nret\nn dw 7"
+    ),
+    instr!(
+        "FIST",
+        ["FISTP"],
+        Fpu,
+        ["word/dword memory", "qword memory (FISTP)"],
+        "Store ST(0) as a signed integer; FISTP also pops it.",
+        "Rounds ST(0) by the control word (to nearest even by default: 2.5 gives 2, 3.5 gives 4) and stores it. A value out of range stores the integer indefinite (8000h for a word) and raises invalid operation. Only FISTP stores a 64-bit integer.",
+        NONE,
+        "fld x\nfistp n         ; n = 3 (2.75 rounded)\nret\nx dd 2.75\nn dw 0"
+    ),
+    instr!(
+        "FBLD",
+        ["FBSTP"],
+        Fpu,
+        ["tbyte memory"],
+        "Load / store an 18-digit packed BCD number (FBSTP pops).",
+        "The 10-byte operand holds 18 decimal digits, two per byte (the lowest digits first), and the sign in the top bit of the last byte. FBSTP rounds ST(0) to an integer first. Handy for printing: FBSTP gives the decimal digits.",
+        NONE,
+        "fild n\nfbstp bcd       ; bcd = 45 23 01 00 ... (12345)\nret\nn dw 12345\nbcd dt 0.0"
+    ),
+    instr!(
+        "FLDZ",
+        ["FLD1", "FLDPI", "FLDL2T", "FLDL2E", "FLDLG2", "FLDLN2"],
+        Fpu,
+        [""],
+        "Push a constant: 0, 1, pi, log2(10), log2(e), log10(2), ln(2).",
+        "The constants are exact to 64 bits. FLDLG2 and FLDLN2 are used to compute decimal and natural logarithms with FYL2X.",
+        NONE,
+        "fldpi           ; ST = 3.14159265358979323846\nfld1\nfldz"
+    ),
+    instr!(
+        "FXCH",
+        [],
+        Fpu,
+        ["", "ST(i)"],
+        "Exchange ST(0) with ST(i) (ST(1) without an operand).",
+        "Brings any register to the top of the stack, where most operations work.",
+        NONE,
+        "fld1\nfldz\nfxch            ; ST = 1.0, ST(1) = 0.0"
+    ),
+    instr!(
+        "FADD",
+        ["FADDP", "FIADD"],
+        Fpu,
+        ["", "dword/qword memory", "ST(i)", "ST, ST(i)", "ST(i), ST", "FADDP ST(i), ST", "FIADD word/dword memory"],
+        "Add: ST(0) = ST(0) + operand, or ST(i) = ST(i) + ST(0).",
+        "FADD with a memory operand or ST(i) adds to ST(0); FADD ST(i), ST adds ST(0) to ST(i). FADDP ST(i), ST does that and pops, so FADDP (no operands) adds the two top values and leaves the sum in ST. FIADD adds a 16- or 32-bit integer from memory.",
+        NONE,
+        "fld a\nfld b\nfaddp           ; ST = 3.75\nfiadd n         ; ST = 13.75\nret\na dd 1.5\nb dd 2.25\nn dw 10"
+    ),
+    instr!(
+        "FSUB",
+        ["FSUBP", "FISUB"],
+        Fpu,
+        ["", "dword/qword memory", "ST(i)", "ST, ST(i)", "ST(i), ST", "FSUBP ST(i), ST", "FISUB word/dword memory"],
+        "Subtract: ST(0) = ST(0) - operand, or ST(i) = ST(i) - ST(0).",
+        "FSUBP ST(1), ST (FSUBP without operands) computes ST(1) - ST(0), pops, and leaves the difference in ST: the value pushed first minus the value pushed second. FISUB subtracts an integer from memory.",
+        NONE,
+        "fld a           ; 5.0\nfld b           ; 2.0\nfsubp           ; ST = 5.0 - 2.0 = 3.0\nret\na dd 5.0\nb dd 2.0"
+    ),
+    instr!(
+        "FSUBR",
+        ["FSUBRP", "FISUBR"],
+        Fpu,
+        ["dword/qword memory", "ST, ST(i)", "ST(i), ST", "FSUBRP ST(i), ST", "FISUBR word/dword memory"],
+        "Reverse subtract: ST(0) = operand - ST(0), or ST(i) = ST(0) - ST(i).",
+        "Like FSUB with the operands swapped; saves an FXCH when the values are in the wrong order.",
+        NONE,
+        "fld a           ; 2.0\nfsubr b         ; ST = 5.0 - 2.0 = 3.0\nret\na dd 2.0\nb dd 5.0"
+    ),
+    instr!(
+        "FMUL",
+        ["FMULP", "FIMUL"],
+        Fpu,
+        ["", "dword/qword memory", "ST(i)", "ST, ST(i)", "ST(i), ST", "FMULP ST(i), ST", "FIMUL word/dword memory"],
+        "Multiply: ST(0) = ST(0) * operand, or ST(i) = ST(i) * ST(0).",
+        "FMUL ST, ST squares ST(0). FIMUL multiplies by an integer from memory.",
+        NONE,
+        "fld r\nfmul st, st      ; r * r\nfldpi\nfmulp           ; ST = pi * r * r\nret\nr dd 2.0"
+    ),
+    instr!(
+        "FDIV",
+        ["FDIVP", "FIDIV"],
+        Fpu,
+        ["", "dword/qword memory", "ST(i)", "ST, ST(i)", "ST(i), ST", "FDIVP ST(i), ST", "FIDIV word/dword memory"],
+        "Divide: ST(0) = ST(0) / operand, or ST(i) = ST(i) / ST(0).",
+        "FDIVP (no operands) computes ST(1) / ST(0) and pops. Division by zero gives infinity and the zero-divide exception (masked by default).",
+        NONE,
+        "fld a\nfidiv n         ; ST = 7.0 / 2 = 3.5\nret\na dd 7.0\nn dw 2"
+    ),
+    instr!(
+        "FDIVR",
+        ["FDIVRP", "FIDIVR"],
+        Fpu,
+        ["dword/qword memory", "ST, ST(i)", "ST(i), ST", "FDIVRP ST(i), ST", "FIDIVR word/dword memory"],
+        "Reverse divide: ST(0) = operand / ST(0), or ST(i) = ST(0) / ST(i).",
+        "FDIVR with 1.0 computes the reciprocal 1 / ST(0).",
+        NONE,
+        "fld x\nfdivr one       ; ST = 1 / 4 = 0.25\nret\nx dd 4.0\none dd 1.0"
+    ),
+    instr!(
+        "FCOM",
+        ["FCOMP", "FCOMPP", "FICOM", "FICOMP"],
+        Fpu,
+        ["", "dword/qword memory", "ST(i)", "FICOM word/dword memory"],
+        "Compare ST(0) with the operand (ST(1) by default); the result goes to C3, C2, C0.",
+        "C3 C2 C0 = 000: ST(0) > operand, 001: less, 100: equal, 111: unordered (NaN). FCOMP pops once, FCOMPP compares with ST(1) and pops twice. To branch on the result: FSTSW to memory, MOV AX, it, SAHF - then C3 is ZF and C0 is CF, and the unsigned jumps JA / JB / JE work.",
+        NONE,
+        "fld x\nficomp n        ; compare with 3\nfstsw sw\nmov ax, sw\nsahf            ; C3 -> ZF, C0 -> CF\nja bigger       ; x > 3\nbigger:\nret\nx dd 3.5\nn dw 3\nsw dw 0"
+    ),
+    instr!(
+        "FUCOM",
+        ["FUCOMP", "FUCOMPP"],
+        Fpu,
+        ["", "ST(i)"],
+        "Unordered compare (80387): like FCOM, but a quiet NaN raises no exception.",
+        "Sets C3, C2, C0 like FCOM. Not an 8087 instruction; accepted for programs written for later processors.",
+        NONE,
+        "fld1\nfldz\nfucompp"
+    ),
+    instr!(
+        "FTST",
+        ["FXAM"],
+        Fpu,
+        [""],
+        "FTST: compare ST(0) with 0.0. FXAM: classify ST(0).",
+        "FTST sets C3 C2 C0 as FCOM with zero. FXAM sets C1 = sign and C3 C2 C0 = 000 unsupported, 001 NaN, 010 normal, 011 infinity, 100 zero, 101 empty, 110 denormal.",
+        NONE,
+        "fld x\nftst            ; C0 = 1: x < 0\nret\nx dd -2.0"
+    ),
+    instr!(
+        "FSTSW",
+        ["FNSTSW"],
+        Fpu,
+        ["word memory", "AX (80287)"],
+        "Store the status word: exceptions, C0-C3 and TOP.",
+        "Bits 0-5: exceptions IE DE ZE OE UE PE, bit 7: error summary, bits 8, 9, 10, 14: C0, C1, C2, C3, bits 11-13: TOP. The 8087 stores it only to memory; FSTSW AX is an 80287 instruction (accepted here). FSTSW is FWAIT + FNSTSW.",
+        NONE,
+        "fcom\nfstsw sw\nmov ax, sw\nsahf\nret\nsw dw 0"
+    ),
+    instr!(
+        "FSTCW",
+        ["FNSTCW", "FLDCW"],
+        Fpu,
+        ["word memory"],
+        "Store / load the control word: exception masks, precision and rounding.",
+        "Bits 0-5: masks of the exceptions (1 = masked), bits 8-9: precision (00 = 24, 10 = 53, 11 = 64 bits), bits 10-11: rounding (00 nearest, 01 down, 10 up, 11 toward zero). The usual pattern: FSTCW, change the bits, FLDCW, compute, FLDCW the old value.",
+        NONE,
+        "fstcw cw\nor cw, 0C00h     ; round toward zero (chop)\nfldcw cw\nret\ncw dw 0"
+    ),
+    instr!(
+        "FSQRT",
+        [],
+        Fpu,
+        [""],
+        "Square root: ST(0) = sqrt(ST(0)).",
+        "Exact to 80 bits. The root of a negative number is an invalid operation (the result is NaN).",
+        NONE,
+        "fld x\nfsqrt           ; ST = 1.41421356...\nret\nx dd 2.0"
+    ),
+    instr!(
+        "FABS",
+        ["FCHS"],
+        Fpu,
+        [""],
+        "FABS: ST(0) = |ST(0)|. FCHS: ST(0) = -ST(0).",
+        "Only the sign bit changes; no exceptions.",
+        NONE,
+        "fld x\nfabs            ; 3.0\nfchs            ; -3.0\nret\nx dd -3.0"
+    ),
+    instr!(
+        "FRNDINT",
+        [],
+        Fpu,
+        [""],
+        "Round ST(0) to an integer (by the rounding of the control word).",
+        "The result stays a real number. To truncate, set rounding toward zero in the control word first (see FSTCW).",
+        NONE,
+        "fld x\nfrndint         ; 3.0 (2.5 -> 2.0 by nearest even, 2.7 -> 3.0)\nret\nx dd 2.7"
+    ),
+    instr!(
+        "FSCALE",
+        ["FXTRACT"],
+        Fpu,
+        [""],
+        "FSCALE: ST(0) = ST(0) * 2^trunc(ST(1)). FXTRACT: split ST(0) into exponent and significand.",
+        "FXTRACT leaves the significand (1 <= |s| < 2) in ST(0) and the exponent in ST(1); FSCALE is the reverse.",
+        NONE,
+        "fld1\nfld x\nfscale          ; ST = 3 * 2^1 = 6.0 (ST(1) = 1)\nret\nx dd 3.0"
+    ),
+    instr!(
+        "FPREM",
+        ["FPREM1"],
+        Fpu,
+        [""],
+        "Partial remainder: ST(0) = remainder of ST(0) / ST(1).",
+        "FPREM truncates the quotient (like the % of C), FPREM1 (80387) rounds it to nearest. C0, C3, C1 get the low three bits of the quotient (used to reduce angles to an octant), C2 = 0 when the reduction is complete.",
+        NONE,
+        "fld y\nfld x\nfprem           ; ST = 7.5 mod 2 = 1.5\nret\nx dd 7.5\ny dd 2.0"
+    ),
+    instr!(
+        "FPTAN",
+        ["FPATAN", "FSIN", "FCOS", "FSINCOS"],
+        Fpu,
+        [""],
+        "Trigonometry: FPTAN tangent, FPATAN arctangent of ST(1) / ST(0); FSIN, FCOS, FSINCOS (80387).",
+        "Angles are in radians. FPTAN replaces ST(0) with tan and pushes 1.0, so that ST(1) / ST(0) = tan (the 8087 accepts 0..pi/4 only; here any angle works). FPATAN computes atan(ST(1) / ST(0)), pops and leaves the angle in ST. FSIN, FCOS and FSINCOS are 80387 instructions, accepted here. Computed in double precision.",
+        NONE,
+        "fld one\nfld one\nfpatan          ; ST = atan(1 / 1) = pi / 4\nret\none dd 1.0"
+    ),
+    instr!(
+        "F2XM1",
+        ["FYL2X", "FYL2XP1"],
+        Fpu,
+        [""],
+        "Exponent and logarithm: F2XM1 ST(0) = 2^ST(0) - 1; FYL2X ST(1) * log2(ST(0)); FYL2XP1 ST(1) * log2(ST(0) + 1).",
+        "FYL2X and FYL2XP1 pop and leave the result in ST. With FLDLN2 or FLDLG2 as ST(1), FYL2X gives ln(x) or lg(x). The 8087 accepts -1..1 for F2XM1 only; here any value works. Computed in double precision.",
+        NONE,
+        "fldln2\nfld x\nfyl2x           ; ST = ln(2) * log2(e^2) = ln(e^2) = 2\nret\nx dq 7.38905609893065"
+    ),
+    instr!(
+        "FFREE",
+        ["FINCSTP", "FDECSTP"],
+        Fpu,
+        ["ST(i)", ""],
+        "FFREE: mark ST(i) empty. FINCSTP / FDECSTP: move TOP without moving data.",
+        "FINCSTP rotates the stack: the old ST(1) becomes ST(0), but the old ST(0) stays in its register (not empty). FFREE ST(0) + FINCSTP is a pop.",
+        NONE,
+        "fld1\nffree st(0)\nfincstp         ; the stack is empty again"
+    ),
+    instr!(
+        "FCLEX",
+        ["FNCLEX", "FENI", "FNENI", "FDISI", "FNDISI"],
+        Fpu,
+        [""],
+        "FCLEX: clear the exception flags. FENI / FDISI: enable / disable the 8087 interrupt (IEM bit).",
+        "FCLEX clears IE..PE, the error summary and busy bits. FENI and FDISI change bit 7 of the control word; only the 8087 has them. The FN forms do not wait (no FWAIT before).",
+        NONE,
+        "fclex"
+    ),
+    instr!(
+        "FSAVE",
+        ["FNSAVE", "FRSTOR", "FSTENV", "FNSTENV", "FLDENV"],
+        Fpu,
+        ["memory"],
+        "Save / restore the coprocessor: environment (14 bytes) or all of it (94 bytes).",
+        "FSTENV / FLDENV store and load the control, status and tag words and the last instruction and operand addresses (14 bytes in real mode). FSAVE stores the environment and the eight registers (94 bytes) and then initializes the 8087 like FINIT; FRSTOR loads it all back. Used by interrupt handlers that use the 8087.",
+        NONE,
+        "fsave state\n; ... the 8087 is free here ...\nfrstor state\nret\nstate db 94 dup(0)"
+    ),
+    instr!("FNOP", [], Fpu, [""], "Coprocessor no-operation.", "Does nothing; D9 D0.", NONE, "fnop"),
 ];

@@ -9,7 +9,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 
 | Крейт | Назначение |
 |---|---|
-| `crates/rustemu-core` | Эмулятор: CPU 8086 (`cpu.rs`), шина/память 1 MiB с журналом (`bus.rs`), `Machine` (загрузчики, шаг/run/шаг назад, точки останова — `machine.rs`), BIOS (`bios.rs`: INT 10h/13h/15h/16h/1Ah/33h), DOS (`dos.rs`: INT 21h, файлы в песочнице), видео (`video.rs`), порты и виртуальные устройства (`devices.rs`), шрифт/CP437 (`font.rs`), скан-коды (`keyboard.rs`), дизассемблер (`disasm.rs`). Без зависимостей от GUI. |
+| `crates/rustemu-core` | Эмулятор: CPU 8086 (`cpu.rs`), шина/память 1 MiB с журналом (`bus.rs`), `Machine` (загрузчики, шаг/run/шаг назад, точки останова — `machine.rs`), BIOS (`bios.rs`: INT 10h/13h/15h/16h/1Ah/33h), DOS (`dos.rs`: INT 21h, файлы в песочнице), видео (`video.rs`), порты и виртуальные устройства (`devices.rs`), шрифт/CP437 (`font.rs`), скан-коды (`keyboard.rs`), дизассемблер (`disasm.rs`), сопроцессор 8087 (`fpu.rs`). Без зависимостей от GUI. |
 | `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
 | `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT), строки дизассемблера (`code.rs`: `Session::code_row` — данные программы как `DB`/`DW`/`DD` по `LineInfo::is_code`/`data_size`, нули вне кода — `DB n DUP (0)`; инструкция на CS:IP — всегда код). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
@@ -109,6 +109,15 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 1.5 Дизассемблер
 - [x] 1.6 Журнал «шага назад»
 - [x] 1.7 Валидация на SingleStepTests/8088
+- [x] 1.8 Сопроцессор 8087 (`fpu.rs`; состояние — `System::fpu`, процессор получает его через `Bus::fpu()`: у тестовой
+      шины SingleStepTests его нет — ESC декодируется и пропускается; в историю шага назад попадает только на D8..DF
+      через системный снимок, обращение ставит `touched`). 80-битная арифметика — `rustc_apfloat` (X87DoubleExtended, округление и
+      точность из управляющего слова), `FSQRT` — точный (Ньютон в 80 битах); трансцендентные — в f64; исключения как
+      замаскированные (+ES, без прерывания); FSTSW AX/FSIN/FCOS/FSINCOS/FUCOM*/FPREM1 тоже. Ассемблер: `Tok::Float`
+      (`1.5`, `2.0e-3`) только в DD/DQ/DT (`DataItem::Float`, `LineInfo::data_float` → дизассемблер `DD 2.0`),
+      `Reg::St` (`st`, `st(i)`, `stN` — только в операндах FPU-мнемоник, `parse::fpu_reg`), `QWORD`/`TBYTE PTR`,
+      `encode::fpu` (без размера — dword, WAIT только в FINIT/FSTSW/…, как NASM; тест `fpu_8087` — байт в байт с NASM).
+      Дизассемблер `fpu_text`, окно FPU `debugger::fpu_ui` (aux → FPU, вкладка `Tool::Fpu`), справочник — группа Fpu
 
 ### Этап 2. Ассемблер (`rustemu-asm`)
 - [x] 2.1 Лексер
@@ -204,13 +213,13 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       окна watch, call stack, ALU (`Cpu::alu_trace` — последняя операция АЛУ, ~3% к скорости),
       значение регистра/переменной при наведении, предупреждение об устаревшей программе (`App::is_stale`)
 - [x] 5.15 Окно эмулятора как в Emu8086: регистры AX BX CX DX CS IP SS SP BP SI DI DS ES; кнопки screen / source /
-      reset / aux (memory, ALU, FPU — нет, stop on condition, symbol table, listing + наши окна) / vars (с константами) /
+      reset / aux (memory, ALU, FPU, stop on condition, symbol table, listing + наши окна) / vars (с константами) /
       debug (журнал состояния в стиле DEBUG.EXE после каждой остановки) / stack (от SS:FFFE, SP выделен) /
       flags (0/1, кнопка analyse → «lexical flag analyser»); подсказки кнопок — тексты оригинала
 - [x] 5.18 Два режима окон (`workspace.rs`, `Settings::layout`, options → windows): **классические окна Emu8086** (по умолчанию — минимум отличий от оригинала) и **панели** (`egui_tiles` —
       `egui_dock` для egui 0.37 нет). Флаги `App::windows` (+ `library.open`, `reference.open`)
       — единственный источник «что открыто»: в панелях `workspace::sync` добавляет вкладку в группу инструмента (`Group`:
-      Text/Debug слева, Emulator/Inspect (memory, watch, ALU) посередине, Screen/Aside справа — под экраном vars, stack,
+      Text/Debug слева, Emulator/Inspect (memory, watch, ALU, FPU) посередине, Screen/Aside справа — под экраном vars, stack,
       debug log, log, устройства, диск; нет группы — новая колонка или половина колонки
       по раскладке по умолчанию), крестик снимает флаг. Окна-инструменты: `xxx_window` не рисует окно при `App::panels()`,
       тело — `xxx_ui(app, ui)`, вызывается из `workspace::tool_ui` (эмулятор и исходник — из `rustemu-desktop`, `emulator::tool_ui`).

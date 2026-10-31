@@ -32,6 +32,7 @@ pub enum Tool {
     Vars,
     Watch,
     Alu,
+    Fpu,
     Screen,
     Devices,
     Drive,
@@ -101,7 +102,7 @@ const COLUMN_WIDTHS: [f32; 3] = [0.26, 0.42, 0.32];
 
 impl Tool {
     /// All tools in the order the default layout places them.
-    pub const ALL: [Tool; 19] = [
+    pub const ALL: [Tool; 20] = [
         Tool::Editor,
         Tool::Source,
         Tool::Listing,
@@ -112,6 +113,7 @@ impl Tool {
         Tool::Memory,
         Tool::Watch,
         Tool::Alu,
+        Tool::Fpu,
         Tool::Screen,
         Tool::Vars,
         Tool::Stack,
@@ -132,6 +134,7 @@ impl Tool {
             Tool::Vars => "variables",
             Tool::Watch => "watch",
             Tool::Alu => "ALU",
+            Tool::Fpu => "FPU",
             Tool::Screen => "screen",
             Tool::Devices => "virtual devices",
             Tool::Drive => "drive C:",
@@ -154,7 +157,7 @@ impl Tool {
             }
             Tool::Breakpoints | Tool::CallStack => Group::Debug,
             Tool::Emulator => Group::Emulator,
-            Tool::Memory | Tool::Watch | Tool::Alu => Group::Inspect,
+            Tool::Memory | Tool::Watch | Tool::Alu | Tool::Fpu => Group::Inspect,
             Tool::Screen => Group::Screen,
             Tool::Vars | Tool::Stack | Tool::Console | Tool::Log | Tool::Devices | Tool::Drive => Group::Aside,
         }
@@ -190,6 +193,7 @@ impl Tool {
             Tool::Vars => &mut w.vars,
             Tool::Watch => &mut w.watch,
             Tool::Alu => &mut w.alu,
+            Tool::Fpu => &mut w.fpu,
             Tool::Screen => &mut w.screen,
             Tool::Devices => &mut w.devices,
             Tool::Drive => &mut w.drive,
@@ -234,6 +238,7 @@ pub fn tool_ui(app: &mut App, ui: &mut Ui, tool: Tool, extra: &mut dyn FnMut(&mu
         Tool::Log => crate::debug::log_ui(app, ui),
         Tool::Watch => crate::debugger::watch_ui(app, ui),
         Tool::Alu => crate::debugger::alu_ui(app, ui),
+        Tool::Fpu => crate::debugger::fpu_ui(app, ui),
         Tool::Breakpoints => crate::debugger::breakpoints_ui(app, ui),
         Tool::CallStack => crate::debugger::call_stack_ui(app, ui),
         Tool::Devices => crate::devices_ui::devices_ui(app, ui),
