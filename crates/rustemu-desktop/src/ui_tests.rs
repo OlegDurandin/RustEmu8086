@@ -498,7 +498,6 @@ fn session_is_restored_after_restart() {
     app.stop_condition.text = "cx == 1".into();
     app.windows.watch = true;
     app.windows.alu = true;
-    app.screen.font_size = 17.0;
     app.cursor_line = 4;
 
     // Another file has its own (empty) session.
@@ -518,7 +517,6 @@ fn session_is_restored_after_restart() {
     assert!(app.settings.windows.watch && app.settings.windows.alu, "kept while not shown");
     app.emulate();
     assert!(app.windows.watch && app.windows.alu && app.windows.emulator);
-    assert_eq!(app.screen.font_size, 17.0);
     // Back to a.asm: everything is there again.
     app.open_path(&a);
     assert_eq!(app.bp_lines[&(0, 3)].condition, "cx == 3");
@@ -1271,4 +1269,70 @@ fn classic_windows_by_default_and_flag_tips() {
     h.run_steps(30);
     save(&mut h, "48_classic_emulator");
     h.get_by_label("CF = 0: Carry Flag");
+}
+
+#[test]
+fn options_menu() {
+    use rustemu_ui::app::{SyntaxChoice, ThemeChoice};
+    use rustemu_ui::workspace::Layout;
+    let mut h = harness(app_with_example(0));
+    h.run();
+    let menu = |h: &mut Harness<'static, App>, item: &str| {
+        h.get_by_label("Options").click();
+        h.run_steps(4);
+        h.get_by_label(item).click();
+        h.run_steps(4);
+    };
+    h.get_by_label("Options").click();
+    h.run_steps(4);
+    save(&mut h, "50_options_menu");
+    h.get_by_label("Options").click();
+    h.run_steps(4);
+    menu(&mut h, "NASM");
+    assert!(h.state().settings.syntax == SyntaxChoice::Nasm);
+    menu(&mut h, "panels");
+    assert_eq!(h.state().settings.layout, Layout::Panels);
+    menu(&mut h, "dark");
+    assert!(h.state().settings.theme == ThemeChoice::Dark);
+    assert!(h.ctx.global_style().visuals.dark_mode);
+    menu(&mut h, "all options…");
+    assert!(h.state().options_open);
+}
+
+#[test]
+fn screen_window_resizes_with_the_mouse() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    h.state_mut().emulate();
+    h.run_steps(8);
+    let window =
+        |h: &Harness<'static, App>| egui::AreaState::load(&h.ctx, egui::Id::unique("screen_window")).unwrap().rect();
+    let copy = |h: &Harness<'static, App>| h.get_by_label("copy").rect();
+    let before = window(&h);
+    // Drag the bottom-right corner up and to the left.
+    let corner = before.right_bottom() - egui::vec2(3.0, 3.0);
+    h.hover_at(corner);
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton {
+        pos: corner,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    for k in 1..=10 {
+        h.hover_at(corner - egui::vec2(20.0, 12.0) * k as f32);
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton {
+        pos: corner - egui::vec2(200.0, 120.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(8);
+    save(&mut h, "51_screen_window_small");
+    let after = window(&h);
+    assert!(after.width() < before.width() - 100.0, "{before:?} -> {after:?}");
+    // The screen fills the window; the buttons stay under it, inside the window.
+    assert!(copy(&h).right() <= after.right() && copy(&h).bottom() <= after.bottom(), "{:?} {after:?}", copy(&h));
 }
