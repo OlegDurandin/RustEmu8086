@@ -196,6 +196,22 @@ impl App {
         }
     }
 
+    /// Virtual drive -> boot from virtual floppy. The boot program assembled last keeps its source
+    /// when it is what the floppy holds (see `Session::boot_from_floppy`).
+    pub fn boot_from_floppy(&mut self, drive: usize) {
+        match self.session.boot_from_floppy(drive) {
+            Ok(()) if self.session.program.is_some() => {
+                self.after_load();
+                self.status = format!("Booted from FLOPPY_{drive} - {}", self.status);
+            }
+            Ok(()) => {
+                self.after_binary_load();
+                self.status = format!("Booted from FLOPPY_{drive} - {}", self.status);
+            }
+            Err(e) => self.notice("Virtual drive", &e),
+        }
+    }
+
     /// After loading code without debug information (binary file, boot from floppy).
     pub fn after_binary_load(&mut self) {
         self.use_temporary_drive(false);

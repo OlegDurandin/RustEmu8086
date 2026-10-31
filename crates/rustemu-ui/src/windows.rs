@@ -321,10 +321,7 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
     ui.menu_button("boot from virtual floppy", |ui| {
         for d in 0..drives {
             if ui.button(format!("FLOPPY_{d}")).clicked() {
-                match app.session.boot_from_floppy(d) {
-                    Ok(()) => app.after_binary_load(),
-                    Err(e) => app.notice("Virtual drive", &e),
-                }
+                app.boot_from_floppy(d);
             }
         }
     });
@@ -339,7 +336,9 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
         }
     });
     if ui.button("write '.bin' file to floppy…").clicked() {
-        app.bin_to_floppy = Some(crate::app::BinToFloppy { path: String::new(), drive: 0, cyl: 0, head: 0, sector: 2 });
+        let loaded = app.session.loaded_bytes().is_some() || app.browser;
+        app.bin_to_floppy =
+            Some(crate::app::BinToFloppy { loaded, path: String::new(), drive: 0, cyl: 0, head: 0, sector: 2 });
     }
     ui.separator();
     if ui
@@ -390,14 +389,27 @@ fn bin_to_floppy_dialog(app: &mut App, ctx: &egui::Context) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut d.path).hint_text("file.bin").desired_width(300.0));
-                if ui.button("browse…").clicked()
-                    && let Some(p) = crate::platform::pick_file(&[("binary", &["bin", "com", "img"])], None)
-                {
-                    d.path = p.display().to_string();
-                }
-            });
+            // The program in the emulator (also in the browser, which has no files), or a file.
+            let loaded = app.session.loaded_bytes().map(<[u8]>::len);
+            let what = match loaded {
+                Some(n) => format!("the program loaded in the emulator ({n} bytes)"),
+                None => "the program loaded in the emulator (nothing is loaded)".into(),
+            };
+            ui.radio_value(&mut d.loaded, true, what);
+            if !app.browser {
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut d.loaded, false, "a file:");
+                    ui.add_enabled(
+                        !d.loaded,
+                        egui::TextEdit::singleline(&mut d.path).hint_text("file.bin").desired_width(260.0),
+                    );
+                    if ui.add_enabled(!d.loaded, egui::Button::new("browse…")).clicked()
+                        && let Some(p) = crate::platform::pick_file(&[("binary", &["bin", "com", "img"])], None)
+                    {
+                        d.path = p.display().to_string();
+                    }
+                });
+            }
             ui.horizontal(|ui| {
                 let drives = app.session.machine.floppies.len();
                 egui::ComboBox::from_label("drive").selected_text(format!("FLOPPY_{}", d.drive)).show_ui(ui, |ui| {
@@ -413,14 +425,19 @@ fn bin_to_floppy_dialog(app: &mut App, ctx: &egui::Context) {
             });
             ui.weak("1.44 MB disk: 80 cylinders, 2 heads, 18 sectors of 512 bytes. Sector 1 of cylinder 0, head 0 is the boot sector.");
             ui.horizontal(|ui| {
-                write = ui.add_enabled(!d.path.trim().is_empty(), egui::Button::new("write")).clicked();
+                let ready = if d.loaded { loaded.is_some() } else { !d.path.trim().is_empty() };
+                write = ui.add_enabled(ready, egui::Button::new("write")).clicked();
                 if ui.button("cancel").clicked() {
                     keep = false;
                 }
             });
         });
     if write {
-        match std::fs::read(d.path.trim()) {
+        let data = match app.session.loaded_bytes() {
+            Some(b) if d.loaded => Ok(b.to_vec()),
+            _ => std::fs::read(d.path.trim()),
+        };
+        match data {
             Ok(data) => match app.session.write_floppy(d.drive, d.cyl, d.head, d.sector, &data) {
                 Ok(n) => {
                     app.status = format!("{} bytes ({n} sectors) written to FLOPPY_{}", data.len(), d.drive);

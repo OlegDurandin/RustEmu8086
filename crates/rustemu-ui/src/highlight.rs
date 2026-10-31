@@ -82,7 +82,7 @@ const DIRECTIVES: &[&str] = &[
     "IFNDEF", "ELSE", "ENDIF", "REPT", "TYPE", "LENGTH", "SIZE", "MOD", "SHL", "SHR", "AND", "OR", "XOR", "NOT",
     "STACK", "PUBLIC", "LOW", "HIGH", "B.", "W.", // NASM
     "BITS", "USE16", "SECTION", "TIMES", "RESB", "RESW", "RESD", "RESQ", "REST", "ALIGNB", "CPU", "GLOBAL", "EXTERN",
-    "QWORD", "TWORD", "STRICT", ".TEXT", ".BSS", ".RODATA",
+    "QWORD", "TWORD", "STRICT", ".TEXT", ".BSS", ".RODATA", "STRUC", "ENDSTRUC", "ISTRUC", "IEND",
 ];
 
 /// NASM preprocessor directives.

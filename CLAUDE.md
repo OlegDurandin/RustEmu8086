@@ -127,8 +127,10 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       (`App::jump_to_message`)
 - [x] 2.9 Диалект NASM (`-f bin`): автоопределение (`detect_dialect`; не собралось — `assemble_dialect` пробует другой
       диалект, ошибки — определённого) / `#nasm#` / `.nasm` / настройка; COM / BOOT / BIN по ORG;
-      тест `nasm_dialect` сверяет программы с настоящим `nasm -f bin` байт в байт. Нет: EXE, `%define` с
-      параметрами, `%0`/`%rotate`/greedy-параметры, `incbin`, `struc`, контекстные макросы; дальний Jcc — пара 8086
+      тест `nasm_dialect` сверяет программы с настоящим `nasm -f bin` байт в байт. Есть `%define` с параметрами
+      (`source.rs`: `function_define`/`expand_functions`, раскрытие при чтении строки), `struc`/`istruc`/`at`/`iend` (→ `equ`
+      полей и `times … db 0`), операторы с порядком NASM (`expr.rs`: `nasm_cond` — `?:`, `|| ^^ &&`, сравнения = 1, `| ^ &`).
+      Нет: EXE, `%0`/`%rotate`/greedy-параметры, `%strlen`, `incbin`, float, контекстные макросы; дальний Jcc — пара 8086
 - [ ] 2.8 Недостающее: `STRUC`, `IRP/IRPC`, `ASSUME`-автопрефиксы, `.binf`-файл — проверить,
       что поддерживает Emu8086
 
@@ -137,7 +139,9 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 3.2 Загрузчики COM/EXE/BIN/BOOT, PSP
 - [x] 3.3 INT 10h: 00,01,02,03,05,06,07,08,09,0A,0C,0D,0E,0F,10h(DAC),13h; режимы 0-3, 7, 13h
 - [x] 3.4 INT 16h, 1Ah, 15h, 11h, 12h, 13h (дискеты FLOPPY_0..3 в `Machine::floppies`, DL = номер дисковода; INT 11h и INT 13h/08h сообщают их число;
-      «create new floppy drive» — `Machine::add_floppy`; образы в памяти, загружаются/сохраняются явно)
+      «create new floppy drive» — `Machine::add_floppy`; образы в памяти, загружаются/сохраняются явно; запись на дискету —
+      файла или загруженной программы (`Session::loaded_bytes`, работает в вебе); `Session::boot_from_floppy` оставляет
+      `program`, если сектор совпадает с собранной BOOT-программой (`App::boot_from_floppy` не сбрасывает исходник))
 - [x] 3.5 INT 21h: консоль, 0Ah, векторы, дата/время, файлы (3Ch-42h, 39h-3Bh, 41h, 43h, 47h, 4Eh/4Fh, 56h),
       память 48h-4Ah, 4Ch; INT 20h; INT 33h (базово)
 - [x] 3.6 Таймер: счётчик тиков BIOS 0040:006C идёт по часам хоста 18.2 Гц (или `instructions_per_tick` —
@@ -170,7 +174,9 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       робот (карта редактируется кликом)
 - [x] 5.6 Примеры (все из Emu8086: меню Examples с подписями оригинала + NASM, *more examples...* — окно со списком
       `EXAMPLES` и описаниями `examples::description`, `windows::examples_menu`; `examples::index` — без учёта регистра,
-      старые имена → `FORMER`; ключ сессии примера — `EXAMPLE_KEY` = `emu8086-example:`, старые `example:` не применяются) и справочник (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
+      старые имена → `FORMER`; ключ сессии примера — `EXAMPLE_KEY` = `emu8086-example:`, старые `example:` не применяются) и справочник на английском и русском (`reference::Lang`, `Settings::reference_lang`, переключатель EN / RU;
+      русские тексты — `reference/ru_{instructions,directives,interrupts}.rs` по имени / номеру статьи, `ru.rs` — поиск
+      с запасным английским, `help::HELP_RU`; тест: перевод есть у каждой статьи, код русских примеров = английскому) (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
       (синтаксис, флаги ODITSZAPC, пример), директивы, прерывания BIOS/DOS по функциям, обзор синтаксиса NASM
       (`NASM_GUIDE`, вкладка *NASM syntax*, `Topic::Nasm`; примеры распознаются как NASM — тест); из редактора —
       подсказка при наведении, F1/⌘-клик открывает статью (для `INT nn` функция берётся из `mov ah, ..` выше).

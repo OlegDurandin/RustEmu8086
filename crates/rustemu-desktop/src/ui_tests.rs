@@ -1336,3 +1336,60 @@ fn screen_window_resizes_with_the_mouse() {
     // The screen fills the window; the buttons stay under it, inside the window.
     assert!(copy(&h).right() <= after.right() && copy(&h).bottom() <= after.bottom(), "{:?} {after:?}", copy(&h));
 }
+
+#[test]
+fn kernel_to_floppy_and_boot_with_the_loader_source() {
+    const KERNEL: &str = "#make_bin#\n#load_segment=0800#\n#load_offset=0000#\n#cs=0800#\n#ip=0000#\norg 0\n\
+        jmp short start\ndb 'K', 'R'\nstart: mov ax, 1234h\nhang: jmp hang\n";
+    const LOADER: &str = "#make_boot#\norg 7C00h\nstart: mov ax, 0800h\nmov es, ax\nxor bx, bx\n\
+        mov ax, 0201h\nmov cx, 0002h\nmov dh, 0\nint 13h\njmp 0800h:0000h\n\
+        db 510 - ($ - start) dup(0)\ndw 0AA55h\n";
+    let mut h = harness(app_with_example(0));
+    h.run();
+    // The kernel: emulate it, then write the loaded program to the floppy from sector 2.
+    h.state_mut().load_example_text("kernel.asm", KERNEL);
+    h.state_mut().emulate();
+    h.state_mut().bin_to_floppy =
+        Some(rustemu_ui::app::BinToFloppy { loaded: true, path: String::new(), drive: 0, cyl: 0, head: 0, sector: 2 });
+    h.run_steps(4);
+    save(&mut h, "52_write_to_floppy");
+    h.get_by_label("write").click();
+    h.run_steps(4);
+    assert!(h.state().bin_to_floppy.is_none(), "{}", h.state().status);
+    assert!(h.state().status.contains("written to FLOPPY_0"), "{}", h.state().status);
+    // The loader: emulate, write its boot sector, boot from the floppy - its source stays.
+    h.state_mut().load_example_text("loader.asm", LOADER);
+    h.state_mut().emulate();
+    h.state_mut().session.write_boot_sector(0).unwrap();
+    h.state_mut().boot_from_floppy(0);
+    h.run_steps(4);
+    assert!(h.state().status.starts_with("Booted from FLOPPY_0"), "{}", h.state().status);
+    assert!(!h.state().source_files.is_empty() && h.state().session.program.is_some());
+    // Run: the loader reads the kernel and jumps to it.
+    let m = &mut h.state_mut().session.machine;
+    m.run(10_000);
+    assert_eq!((m.cpu.cs(), m.cpu.regs[0]), (0x0800, 0x1234));
+}
+
+#[test]
+fn reference_in_russian() {
+    use rustemu_ui::reference::{Lang, Topic};
+    let mut h = harness(app_with_example(0));
+    h.run();
+    h.state_mut().reference.show(Topic::Instr(rustemu_ui::reference::find_instruction("SHL").unwrap()));
+    h.run_steps(4);
+    h.get_by_label("Shift left (multiply by 2): bits move left, 0 comes in, the last bit out goes to CF.");
+    // The language switch: articles, sections and flags in Russian.
+    h.get_by_label("RU").click();
+    h.run_steps(4);
+    save(&mut h, "53_reference_russian");
+    assert_eq!(h.state().reference.lang, Lang::Ru);
+    h.get_by_label("Синтаксис");
+    h.get_by_label("Флаги");
+    // The choice is kept with the settings and used by the editor tooltips.
+    h.state_mut().store_settings();
+    let app = App::with_settings(h.state().settings.clone());
+    assert_eq!(app.reference.lang, Lang::Ru);
+    let (title, details) = Topic::Instr(0).tooltip(app.reference.lang);
+    assert!(title.contains("Скопировать") && details.starts_with("флаги"), "{title} / {details}");
+}

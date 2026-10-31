@@ -206,16 +206,26 @@ impl Session {
     }
 
     /// Boots from a virtual floppy: its sector 1 is loaded at 0000:7C00 (like the BIOS does) and
-    /// DL holds the drive number.
+    /// DL holds the drive number. When the sector is the boot program assembled last, its source
+    /// stays: the boot code is debugged line by line.
     pub fn boot_from_floppy(&mut self, drive: usize) -> Result<(), String> {
         let fl = self.machine.floppies.get(drive).ok_or(format!("there is no FLOPPY_{drive}"))?;
         if fl.len() < 512 {
             return Err(format!("FLOPPY_{drive} is empty"));
         }
         let sector = fl[..512].to_vec();
-        self.load_bytes(Loadable::Boot, sector)?;
+        let program = self.program.clone().filter(|p| {
+            let image = p.file_bytes();
+            p.format == Format::Boot && sector.get(..image.len()) == Some(&image[..])
+        });
+        self.load_bytes_with_program(Loadable::Boot, sector, program)?;
         self.machine.cpu.regs[rustemu_core::cpu::DX] = drive as u16;
         Ok(())
+    }
+
+    /// The executable loaded last, as it was loaded (e.g. to write it to a floppy).
+    pub fn loaded_bytes(&self) -> Option<&[u8]> {
+        self.loaded.as_ref().map(|(_, b)| &b[..])
     }
 
     /// Copies the 512 bytes at 0000:7C00 to the boot sector of a virtual floppy.
