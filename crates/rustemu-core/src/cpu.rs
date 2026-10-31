@@ -392,6 +392,40 @@ impl Cpu {
         ModRm { reg, rm: Operand::Mem { seg: self.seg_or(def_seg), off }, ea: off }
     }
 
+    /// An 8087 instruction: the CPU reads the memory operand, the coprocessor computes, the CPU
+    /// writes back what it stored.
+    fn esc<B: Bus>(&mut self, bus: &mut B, op: u8, m: ModRm) {
+        let mut buf = [0u8; 94];
+        let (rm, mem) = match m.rm {
+            Operand::Reg(r) => (Some(r), None),
+            Operand::Mem { seg, off } => (None, Some((seg, off))),
+        };
+        if let Some((seg, off)) = mem {
+            for (i, b) in buf.iter_mut().enumerate().take(crate::fpu::read_len(op, m.reg)) {
+                *b = self.rd8(bus, seg, off.wrapping_add(i as u16));
+            }
+        }
+        let modrm = match m.rm {
+            Operand::Reg(r) => 0xC0 | m.reg << 3 | r,
+            Operand::Mem { .. } => m.reg << 3,
+        };
+        let ctx = crate::fpu::Ctx {
+            ip: crate::linear(self.sregs[CS], self.instr_ip),
+            opcode: ((op as u16 & 7) << 8) | modrm as u16,
+            data: mem.map_or(0, |(seg, off)| crate::linear(seg, off)),
+        };
+        let Some(fpu) = bus.fpu() else { return };
+        let done = fpu.exec(op, m.reg, rm, &mut buf, ctx);
+        if let Some((seg, off)) = mem {
+            for (i, &b) in buf.iter().enumerate().take(done.write) {
+                self.wr8(bus, seg, off.wrapping_add(i as u16), b);
+            }
+        }
+        if let Some(ax) = done.ax {
+            self.regs[AX] = ax;
+        }
+    }
+
     fn read_op<B: Bus>(&self, bus: &mut B, op: Operand, w: bool) -> u16 {
         match (op, w) {
             (Operand::Reg(r), false) => self.reg8(r) as u16,
@@ -961,8 +995,11 @@ impl Cpu {
                 self.set_reg8(0, v);
             }
             0xD8..=0xDF => {
-                // ESC (coprocessor) - decode operand and ignore.
-                self.modrm(bus);
+                // ESC: the 8087 executes it; without one the operand is decoded and ignored.
+                let m = self.modrm(bus);
+                if bus.fpu().is_some() {
+                    self.esc(bus, op, m);
+                }
             }
             0xE0..=0xE2 => {
                 let d = self.fetch8(bus) as i8 as u16;

@@ -6,6 +6,8 @@ use crate::lexer::{Tok, Token, tokenize, tokenize_nasm};
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataItem {
     Expr(Expr),
+    /// Floating-point number in DD / DQ / DT (sign included).
+    Float(String),
     /// String in DB (each char a byte).
     Str(Vec<u8>),
     /// `?` - uninitialized (emitted as zero).
@@ -196,7 +198,7 @@ pub fn parse_tokens(toks: &[Token]) -> Result<Stmt, PErr> {
                     _ => break,
                 }
             }
-            let ops = operands(&mut p)?;
+            let ops = operands(&mut p, &mnem)?;
             StmtKind::Instr { prefixes, mnem, ops }
         }
     };
@@ -290,6 +292,19 @@ fn data_item(p: &mut Parser, size: u8) -> Result<DataItem, PErr> {
         let s = s.clone();
         p.pos += 1;
         return Ok(DataItem::Str(s));
+    }
+    // A floating-point number, possibly signed.
+    let sign = match p.peek() {
+        Some(Tok::P(c @ ('-' | '+'))) if matches!(p.peek_at(1), Some(Tok::Float(_))) => Some(*c),
+        _ => None,
+    };
+    if let Some(Tok::Float(f)) = p.peek_at(sign.is_some() as usize) {
+        let text = format!("{}{f}", if sign == Some('-') { "-" } else { "" });
+        if !matches!(size, 4 | 8 | 10) {
+            return Err((p.col(), "a floating-point number needs DD, DQ or DT".into()));
+        }
+        p.pos += 1 + sign.is_some() as usize;
+        return Ok(DataItem::Float(text));
     }
     let e = p.expr()?;
     if p.eat_kw("DUP") {
@@ -471,18 +486,53 @@ fn nasm_kind(p: &mut Parser) -> Result<StmtKind, PErr> {
                     _ => break,
                 }
             }
-            let ops = operands(p)?;
+            let ops = operands(p, &mnem)?;
             StmtKind::Instr { prefixes, mnem, ops }
         }
     })
 }
 
-fn operands(p: &mut Parser) -> Result<Vec<Operand>, PErr> {
+/// An 8087 register operand: `ST`, `ST(i)` (MASM) or `STi` (NASM).
+fn fpu_reg(p: &mut Parser) -> Option<u8> {
+    let Some(Tok::Ident(id)) = p.peek() else { return None };
+    let u = id.to_ascii_uppercase();
+    let ends = |k: usize| matches!(p.peek_at(k), None | Some(Tok::P(',')));
+    if u == "ST" {
+        if let (Some(Tok::P('(')), Some(Tok::Num(n)), Some(Tok::P(')'))) = (p.peek_at(1), p.peek_at(2), p.peek_at(3))
+            && (0..8).contains(n)
+            && ends(4)
+        {
+            let n = *n as u8;
+            p.pos += 4;
+            return Some(n);
+        }
+        if ends(1) {
+            p.pos += 1;
+            return Some(0);
+        }
+    }
+    let n = u.strip_prefix("ST").and_then(|d| d.parse::<u8>().ok()).filter(|n| *n < 8)?;
+    if u.len() == 3 && ends(1) {
+        p.pos += 1;
+        return Some(n);
+    }
+    None
+}
+
+fn operands(p: &mut Parser, mnem: &str) -> Result<Vec<Operand>, PErr> {
     let mut ops = Vec::new();
     if p.at_end() {
         return Ok(ops);
     }
+    let fpu = crate::encode::is_fpu(mnem);
     loop {
+        if fpu && let Some(i) = fpu_reg(p) {
+            ops.push(Operand::Expr(Expr::Reg(crate::expr::Reg::St(i))));
+            if !p.eat_p(',') {
+                break;
+            }
+            continue;
+        }
         let e = p.expr()?;
         // `seg:off` far immediate (segment registers are handled by the expression parser).
         // A colon at the very end (`jne label:`) is tolerated.

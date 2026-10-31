@@ -213,6 +213,150 @@ iend
 ",
     ),
     (
+        "fpu_8087",
+        "bits 16
+org 100h
+    finit
+    fninit
+    fld dword [x32]
+    fld qword [x64]
+    fld tword [x80]
+    fld st0
+    fld st3
+    fst dword [bx]
+    fst qword [bx+si+4]
+    fst st2
+    fstp dword [bp-2]
+    fstp qword [di]
+    fstp tword [es:bx]
+    fstp st1
+    fild word [bx]
+    fild dword [bx]
+    fild qword [bx]
+    fist word [bx]
+    fist dword [bx]
+    fistp word [bx]
+    fistp dword [bx]
+    fistp qword [bx]
+    fbld tword [bx]
+    fbstp tword [bx]
+    fadd dword [bx]
+    fadd qword [bx]
+    fadd st0, st3
+    fadd st3, st0
+    fadd st2
+    fadd
+    faddp
+    faddp st2
+    faddp st2, st0
+    fmul dword [bx]
+    fmul st0, st1
+    fmul st1, st0
+    fmulp st1, st0
+    fsub qword [bx]
+    fsub st0, st2
+    fsub st2, st0
+    fsubp st2, st0
+    fsubr dword [bx]
+    fsubr st0, st2
+    fsubr st2, st0
+    fsubrp st2, st0
+    fdiv dword [bx]
+    fdiv st0, st5
+    fdiv st5, st0
+    fdivp st5, st0
+    fdivr qword [bx]
+    fdivr st0, st5
+    fdivr st5, st0
+    fdivrp st5, st0
+    fsubp
+    fsubrp
+    fdivp
+    fdivrp
+    fmulp
+    fcom
+    fcom st2
+    fcom dword [bx]
+    fcom qword [bx]
+    fcomp
+    fcomp st4
+    fcomp qword [bx]
+    fcompp
+    fiadd word [bx]
+    fiadd dword [bx]
+    fimul word [bx]
+    ficom dword [bx]
+    ficomp word [bx]
+    fisub word [bx]
+    fisubr dword [bx]
+    fidiv word [bx]
+    fidivr dword [bx]
+    fxch
+    fxch st3
+    ffree st6
+    fldcw [bx]
+    fstcw [bx]
+    fnstcw [bx]
+    fstsw [bx]
+    fnstsw [bx]
+    fstsw ax
+    fnstsw ax
+    fstenv [bx]
+    fnstenv [bx]
+    fldenv [bx]
+    fsave [bx]
+    fnsave [bx]
+    frstor [bx]
+    f2xm1
+    fabs
+    fchs
+    fclex
+    fnclex
+    fdecstp
+    fincstp
+    fdisi
+    feni
+    fld1
+    fldl2t
+    fldl2e
+    fldpi
+    fldlg2
+    fldln2
+    fldz
+    fnop
+    fpatan
+    fprem
+    fprem1
+    fptan
+    frndint
+    fscale
+    fsqrt
+    ftst
+    fxam
+    fxtract
+    fyl2x
+    fyl2xp1
+    fsin
+    fcos
+    fsincos
+    fucom
+    fucom st3
+    fucomp
+    fucomp st2
+    fucompp
+    fwait
+    fld dword [cs:bx]
+    fld [x32]
+    ret
+x32 dd 1.5
+x64 dq -3.14159265358979323846
+x80 dt 2.718281828459045235360287
+y32 dd 1.0e10, 3.0e-5, 0.1
+y64 dq 1.7976931348623157e308, 4.9e-324
+y80 dt 1.0e4000, 0.3333333333333333333333
+",
+    ),
+    (
         "operators",
         "bits 16
 org 100h
@@ -312,4 +456,21 @@ fn auto_dialect_falls_back_to_the_other_one() {
     }
     let e = assemble_str("org 100h\nmov ax, undefined_name\nret\n").unwrap_err();
     assert!(e.to_string().contains("UNDEFINED_NAME"), "{e}");
+}
+
+/// The 8087 in the Emu8086 syntax (ST(i), QWORD PTR, TBYTE PTR, typed variables) gives the same
+/// bytes as in NASM.
+#[test]
+fn fpu_in_masm_syntax() {
+    let masm = "org 100h\n    finit\n    fld a\n    fld b\n    fld c\n    fld st(1)\n    fadd st, st(1)\n    fadd st(2), st\n    fmul qword ptr b\n    fdiv dword ptr [bx]\n    fstp tbyte ptr c\n    fistp word ptr n\n    fild n\n    fxch st(2)\n    fcom st(1)\n    fstsw ax\n    fst st\n    ret\na dd 1.5\nb dq 2.25\nc dt 3.125\nn dw 7\n";
+    let nasm = "bits 16\norg 100h\n    finit\n    fld dword [a]\n    fld qword [b]\n    fld tword [c]\n    fld st1\n    fadd st0, st1\n    fadd st2, st0\n    fmul qword [b]\n    fdiv dword [bx]\n    fstp tword [c]\n    fistp word [n]\n    fild word [n]\n    fxch st2\n    fcom st1\n    fstsw ax\n    fst st0\n    ret\na dd 1.5\nb dq 2.25\nc dt 3.125\nn dw 7\n";
+    let (m, n) = (assemble_str(masm).unwrap(), assemble_str(nasm).unwrap());
+    assert_eq!((m.dialect, n.dialect), (Dialect::Masm, Dialect::Nasm));
+    assert_eq!(m.file_bytes(), n.file_bytes());
+    let err = |s: &str| assemble_str(s).unwrap_err().to_string();
+    assert!(err("org 100h\nmov ax, 1.5\n").contains("only allowed in DD, DQ and DT"));
+    assert!(err("org 100h\nx dw 1.5\n").contains("needs DD, DQ or DT"));
+    assert!(err("org 100h\nfld word ptr [bx]\n").contains("dword, qword or tbyte"));
+    // `st` stays an ordinary name outside FPU instructions (writebin.asm of Emu8086 has a label `st`).
+    assert!(assemble_str("org 100h\njmp st\nst: ret\n").is_ok());
 }

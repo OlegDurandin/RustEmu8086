@@ -159,6 +159,8 @@ pub struct Windows {
     pub watch: bool,
     pub call_stack: bool,
     pub alu: bool,
+    /// 8087 registers and words.
+    pub fpu: bool,
     pub stop_condition: bool,
     pub flag_analyser: bool,
     pub value_viewer: bool,
@@ -169,7 +171,7 @@ pub struct Windows {
 }
 
 /// The tools of a loaded program: they open with the emulator.
-const PROGRAM_TOOLS: [fn(&mut Windows) -> &mut bool; 19] = [
+const PROGRAM_TOOLS: [fn(&mut Windows) -> &mut bool; 20] = [
     |w| &mut w.emulator,
     |w| &mut w.screen,
     |w| &mut w.source,
@@ -186,6 +188,7 @@ const PROGRAM_TOOLS: [fn(&mut Windows) -> &mut bool; 19] = [
     |w| &mut w.watch,
     |w| &mut w.call_stack,
     |w| &mut w.alu,
+    |w| &mut w.fpu,
     |w| &mut w.stop_condition,
     |w| &mut w.flag_analyser,
     |w| &mut w.value_viewer,
@@ -338,6 +341,8 @@ pub struct App {
     pub status: String,
     /// CPU state before the last step (to highlight changed registers).
     pub prev_cpu: Cpu,
+    /// The 8087 before the last step / run (its changes are red in the FPU window).
+    pub prev_fpu: rustemu_core::fpu::Fpu,
     /// Source files of the loaded program (lines).
     pub source_files: Vec<(String, Vec<String>)>,
     pub source_file_idx: usize,
@@ -512,6 +517,7 @@ impl App {
             last_step: 0.0,
             status: "Ready".into(),
             prev_cpu: Cpu::new(),
+            prev_fpu: Default::default(),
             source_files: Vec::new(),
             source_file_idx: 0,
             follow_source: true,

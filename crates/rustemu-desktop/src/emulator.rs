@@ -206,6 +206,7 @@ fn view_menu(app: &mut App, ui: &mut Ui) {
     ui.separator();
     let w = &mut app.windows;
     ui.checkbox(&mut w.alu, "arithmetic & logical unit");
+    ui.checkbox(&mut w.fpu, "floating point unit (8087)");
     ui.separator();
     ui.checkbox(&mut w.flags, "flags");
     ui.separator();
@@ -317,8 +318,8 @@ fn bottom_buttons(app: &mut App, ui: &mut Ui) {
             let w = &mut app.windows;
             ui.checkbox(&mut w.memory, "memory");
             ui.checkbox(&mut w.alu, "ALU");
-            ui.add_enabled(false, egui::Checkbox::new(&mut false, "FPU"))
-                .on_disabled_hover_text("the 8087 FPU is not emulated");
+            ui.checkbox(&mut w.fpu, "FPU")
+                .on_hover_text("8087 floating-point unit: ST(0)..ST(7), status and control words");
             ui.checkbox(&mut w.stop_condition, "stop on condition");
             ui.separator();
             ui.checkbox(&mut w.symbols, "symbol table");

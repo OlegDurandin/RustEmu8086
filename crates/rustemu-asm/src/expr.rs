@@ -10,6 +10,8 @@ pub enum Reg {
     R16(u8),
     /// Segment register, encoding 0..3 (ES CS SS DS).
     Seg(u8),
+    /// 8087 stack register ST(i) (only in the operands of FPU instructions).
+    St(u8),
 }
 
 pub fn parse_reg(name: &str) -> Option<Reg> {
@@ -433,6 +435,9 @@ impl<'a> Parser<'a> {
                 "BYTE" => Some(1),
                 "WORD" => Some(2),
                 "DWORD" => Some(4),
+                // 8087 operands: QWORD PTR (64-bit real / integer), TBYTE PTR (80-bit real, BCD).
+                "QWORD" if !self.nasm => Some(8),
+                "TBYTE" | "TWORD" if !self.nasm => Some(10),
                 _ => None,
             };
             if let Some(sz) = size
@@ -492,6 +497,10 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> PResult<Expr> {
         match self.advance() {
             Some(Tok::Num(n)) => Ok(Expr::Num(n)),
+            Some(Tok::Float(_)) => {
+                self.pos -= 1;
+                self.err("floating-point numbers are only allowed in DD, DQ and DT data")
+            }
             // NASM character constants are little-endian: 'ab' = 6261h.
             Some(Tok::Str(s)) if self.nasm && !s.is_empty() && s.len() <= 8 => {
                 Ok(Expr::Num(s.iter().rev().fold(0i64, |a, &c| (a << 8) | c as i64)))
@@ -546,6 +555,7 @@ pub fn describe(t: &Tok) -> String {
         Tok::Ident(s) => format!("'{s}'"),
         Tok::Num(n) => format!("number {n}"),
         Tok::Str(_) => "string".into(),
+        Tok::Float(f) => format!("number {f}"),
         Tok::P(c) => format!("'{c}'"),
     }
 }

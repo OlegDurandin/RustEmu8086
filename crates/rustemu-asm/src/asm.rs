@@ -822,6 +822,23 @@ impl Assembler {
                     out.extend_from_slice(&one);
                 }
             }
+            DataItem::Float(f) => {
+                use rustc_apfloat::Float;
+                use rustc_apfloat::ieee::{Double, Single, X87DoubleExtended};
+                let rn = rustc_apfloat::Round::NearestTiesToEven;
+                let bits = match size {
+                    4 => Single::from_str_r(f, rn).map(|v| v.value.to_bits()),
+                    8 => Double::from_str_r(f, rn).map(|v| v.value.to_bits()),
+                    _ => X87DoubleExtended::from_str_r(f, rn).map(|v| v.value.to_bits()),
+                };
+                match bits {
+                    Ok(b) => out.extend_from_slice(&b.to_le_bytes()[..size as usize]),
+                    Err(_) => {
+                        self.err(idx, format!("invalid floating-point number '{f}'"));
+                        out.extend(std::iter::repeat_n(0, size as usize));
+                    }
+                }
+            }
             DataItem::Expr(e) => {
                 let v = match eval(e, self) {
                     Ok(v) => v,
@@ -1013,6 +1030,8 @@ impl Assembler {
                             StmtKind::Data { size, .. } => size,
                             _ => 0,
                         },
+                        data_float: matches!(&st.stmt.kind, StmtKind::Data { items, .. }
+                            if items.iter().any(|i| matches!(i, crate::parse::DataItem::Float(_)))),
                         origin: l.origin(),
                         chain: l.chain.clone(),
                     });
