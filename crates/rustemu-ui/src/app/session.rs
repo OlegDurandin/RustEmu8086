@@ -116,7 +116,6 @@ impl App {
             self.settings.windows.open_also(tools.clone());
         }
         self.settings.panels = self.panels.as_ref().and_then(|t| ron::to_string(t).ok());
-        self.settings.screen_zoom = self.screen.font_size;
         self.settings.show_macro_code = self.show_macro_code;
         self.settings.follow_source = self.follow_source;
         self.settings.vars_format = self.vars_format;

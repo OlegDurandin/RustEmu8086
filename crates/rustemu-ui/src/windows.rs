@@ -109,6 +109,42 @@ fn more_examples_window(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+const AUTO_SYNTAX: &str = "Detected from the source (NASM for bits 16, section, times, resb, %define, \
+     byte [..]...); a program that does not assemble that way is tried in the other syntax";
+
+/// The Options menu: the most used settings and the options window with all of them.
+pub fn options_menu(app: &mut App, ui: &mut Ui) {
+    use crate::app::SyntaxChoice;
+    use crate::workspace::Layout;
+    if !app.tablet_layout {
+        ui.label(RichText::new("windows").weak());
+        ui.radio_value(&mut app.settings.layout, Layout::Classic, "classic windows (Emu8086)");
+        ui.radio_value(&mut app.settings.layout, Layout::Panels, "panels");
+        ui.separator();
+    }
+    ui.label(RichText::new("assembler syntax").weak());
+    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(AUTO_SYNTAX);
+    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
+    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
+    // The tablet layout has a theme of its own.
+    if app.fixed_theme.is_none() {
+        ui.separator();
+        ui.label(RichText::new("theme").weak());
+        let mut changed = false;
+        for (t, name) in [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark"), (ThemeChoice::System, "system")] {
+            changed |= ui.radio_value(&mut app.settings.theme, t, name).changed();
+        }
+        if changed {
+            app.apply_theme(ui.ctx());
+        }
+    }
+    ui.separator();
+    if ui.button("all options…").clicked() {
+        app.options_open = true;
+        ui.close();
+    }
+}
+
 /// "choose code template" (File -> New), like Emu8086.
 fn new_dialog(app: &mut App, ctx: &egui::Context) {
     let Some(mut choice) = app.new_dialog else { return };
@@ -215,18 +251,13 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                 ui.label("assembler syntax");
                 ui.horizontal(|ui| {
                     use crate::app::SyntaxChoice;
-                    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(
-                        "NASM when the source uses bits 16, section, times, resb, %define, byte [..]...",
-                    );
+                    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(AUTO_SYNTAX);
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
                 });
                 ui.end_row();
                 ui.label("editor font size");
                 ui.add(egui::Slider::new(&mut app.settings.font_size, 10.0..=24.0).text("pt"));
-                ui.end_row();
-                ui.label("emulator screen");
-                ui.add(egui::Slider::new(&mut app.screen.font_size, 10.0..=22.0).text("zoom"));
                 ui.end_row();
                 ui.label("step delay");
                 ui.add(egui::Slider::new(&mut app.settings.step_delay_ms, 0..=1000).suffix(" ms").text("run speed"));

@@ -24,8 +24,9 @@ count db 3
 - `times`, `resb` / `resw` / `resd`, `$$`;
 - размер без `ptr`: `byte [..]`, `word [..]`.
 
-Ещё NASM выбирают расширение файла `.nasm` и строка `#nasm#`. Явно: окно **options** → *assembler syntax*
-(auto / Emu8086 / NASM), в командной строке — `rustemu asm файл --syntax nasm`. Сообщение о сборке говорит,
+Ещё NASM выбирают расширение файла `.nasm` и строка `#nasm#`. Если программа не собирается в определённом
+так синтаксисе, но собирается в другом, используется другой (например, `push word 5` или `` `a` `` без других
+признаков NASM). Явно: меню **Options** или окно **options** → *assembler syntax* (auto / Emu8086 / NASM), в командной строке — `rustemu asm файл --syntax nasm`. Сообщение о сборке говорит,
 каким синтаксисом собрана программа.
 
 Заготовки: **new** → галочка *use NASM syntax* (COM, BIN, boot sector); примеры `hello_nasm.asm` и
