@@ -75,6 +75,8 @@ pub struct Settings {
     /// The disassembler shows the program's data as `DB`/`DW` and the zeros after it as `DUP`.
     pub disasm_data: bool,
     pub follow_source: bool,
+    /// Language of the reference and of its tooltips in the editor.
+    pub reference_lang: crate::reference::Lang,
     pub vars_format: crate::debug::NumFormat,
     /// Assembler syntax: detected, Emu8086/MASM or NASM.
     pub syntax: SyntaxChoice,
@@ -126,6 +128,7 @@ impl Default for Settings {
             show_macro_code: true,
             disasm_data: true,
             follow_source: true,
+            reference_lang: Default::default(),
             vars_format: Default::default(),
             syntax: SyntaxChoice::Auto,
             sessions: Vec::new(),
@@ -272,6 +275,8 @@ pub struct Watch {
 
 /// State of the 'write .bin file to floppy' dialog.
 pub struct BinToFloppy {
+    /// Write the program loaded in the emulator, not a file.
+    pub loaded: bool,
     pub path: String,
     pub drive: usize,
     pub cyl: usize,
@@ -584,6 +589,7 @@ impl App {
         app.show_macro_code = app.settings.show_macro_code;
         app.follow_source = app.settings.follow_source;
         app.vars_format = app.settings.vars_format;
+        app.reference.lang = app.settings.reference_lang;
         let last = app.settings.last_file.clone();
         match last {
             Some(p) if p.exists() => app.open_path(&p),

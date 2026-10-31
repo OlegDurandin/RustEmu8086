@@ -1,13 +1,18 @@
 //! Built-in reference: 8086/80186 instructions, assembler directives, BIOS and DOS interrupts and
-//! a guide to the NASM syntax.
+//! a guide to the NASM syntax, in English and Russian ([`Lang`]).
 
 mod directives;
 mod instructions;
 mod interrupts;
+mod ru;
+mod ru_directives;
+mod ru_instructions;
+mod ru_interrupts;
 
 pub use directives::*;
 pub use instructions::*;
 pub use interrupts::*;
+pub use ru::{FunctionText, GuideSection, Lang, flag_titles, nasm_section, syntax_in};
 
 /// Finds an instruction entry by name or alias (case-insensitive).
 pub fn find_instruction(name: &str) -> Option<usize> {
@@ -30,18 +35,18 @@ pub fn find_interrupt(number: u8) -> Option<usize> {
 }
 
 /// Readable effect of a flag code.
-pub fn flag_effect(c: char) -> &'static str {
+pub fn flag_effect(c: char, lang: Lang) -> &'static str {
     match c {
-        'r' => "changed",
-        'u' => "undefined",
-        '0' => "cleared (0)",
-        '1' => "set (1)",
-        _ => "unchanged",
+        'r' => lang.pick("changed", "меняется"),
+        'u' => lang.pick("undefined", "не определён"),
+        '0' => lang.pick("cleared (0)", "сбрасывается (0)"),
+        '1' => lang.pick("set (1)", "устанавливается (1)"),
+        _ => lang.pick("unchanged", "не меняется"),
     }
 }
 
 /// One line like `O=changed S=changed ... (D I T unchanged)`.
-pub fn flags_summary(flags: &str) -> String {
+pub fn flags_summary(flags: &str, lang: Lang) -> String {
     let changed: Vec<String> = flags
         .chars()
         .zip(FLAG_NAMES)
@@ -52,7 +57,12 @@ pub fn flags_summary(flags: &str) -> String {
             v => format!("{n}={v}"),
         })
         .collect();
-    if changed.is_empty() { "flags: not affected".into() } else { format!("flags: {}", changed.join(" ")) }
+    match (changed.is_empty(), lang) {
+        (true, Lang::En) => "flags: not affected".into(),
+        (true, Lang::Ru) => "флаги не меняются".into(),
+        (false, Lang::En) => format!("flags: {}", changed.join(" ")),
+        (false, Lang::Ru) => format!("флаги: {}", changed.join(" ")),
+    }
 }
 
 /// An article of the reference.
@@ -68,23 +78,31 @@ pub enum Topic {
 
 impl Topic {
     /// Title and one line of details for the editor tooltip.
-    pub fn tooltip(self) -> (String, String) {
+    pub fn tooltip(self, lang: Lang) -> (String, String) {
         match self {
             Topic::Instr(i) => {
                 let e = &INSTRUCTIONS[i];
-                (format!("{}  {}", e.name, e.summary), flags_summary(e.flags))
+                (format!("{}  {}", e.name, e.summary_in(lang)), flags_summary(e.flags, lang))
             }
-            Topic::Directive(i) => (DIRECTIVES[i].name.to_string(), DIRECTIVES[i].summary.to_string()),
-            Topic::Nasm(i) => ("NASM syntax".to_string(), NASM_GUIDE[i].title.to_string()),
+            Topic::Directive(i) => (DIRECTIVES[i].name.to_string(), DIRECTIVES[i].summary_in(lang).to_string()),
+            Topic::Nasm(i) => {
+                (lang.pick("NASM syntax", "Синтаксис NASM").to_string(), nasm_section(i, lang).title.to_string())
+            }
             Topic::Int(i, f) => {
                 let int = &INTERRUPTS[i];
-                let head = format!("INT {:02X}h  {}", int.number, int.title);
+                let head = format!("INT {:02X}h  {}", int.number, int.title_in(lang));
                 match f.and_then(|c| int.functions.iter().find(|x| x.code == c)) {
-                    Some(func) => {
-                        (head, format!("{} = {}: {}", int.selector, hex(func.code, int.selector), func.title))
-                    }
-                    None if int.functions.is_empty() => (head, int.description.to_string()),
-                    None => (head, format!("function number in {}", int.selector)),
+                    Some(func) => (
+                        head,
+                        format!(
+                            "{} = {}: {}",
+                            int.selector,
+                            hex(func.code, int.selector),
+                            func.text_in(int.number, lang).title
+                        ),
+                    ),
+                    None if int.functions.is_empty() => (head, int.description_in(lang).to_string()),
+                    None => (head, format!("{} {}", lang.pick("function number in", "номер функции в"), int.selector)),
                 }
             }
         }
@@ -258,7 +276,8 @@ mod tests {
         assert_eq!(find_directive("#cs=0500"), find_directive("#LOAD_SEGMENT="));
         assert!(find_directive("db").is_some());
         assert!(find_interrupt(0x21).is_some());
-        assert_eq!(flags_summary(LOGIC), "flags: O=0 S Z A? P C=0");
+        assert_eq!(flags_summary(LOGIC, Lang::En), "flags: O=0 S Z A? P C=0");
+        assert_eq!(flags_summary(LOGIC, Lang::Ru), "флаги: O=0 S Z A? P C=0");
     }
 
     #[test]
@@ -347,5 +366,66 @@ mod tests {
             });
             assert!(ok, "{name}: example does not assemble with {missing:?} defined\n{src}");
         }
+    }
+
+    /// Code of an example without comments and trailing spaces, line by line.
+    fn code_only(example: &str) -> Vec<String> {
+        example.lines().map(|l| code_part(l, usize::MAX).0.trim_end().to_string()).collect()
+    }
+
+    #[test]
+    fn russian_text_is_complete() {
+        let ru = Lang::Ru;
+        for e in INSTRUCTIONS {
+            let t = e.ru().unwrap_or_else(|| panic!("no Russian text for {}", e.name));
+            assert!(!t.summary.is_empty() && (e.description.is_empty() || !t.description.is_empty()), "{}", e.name);
+            assert_eq!(
+                code_only(e.example_in(ru)),
+                code_only(e.example),
+                "{}: the Russian example has other code",
+                e.name
+            );
+        }
+        for d in DIRECTIVES {
+            let t = d.ru().unwrap_or_else(|| panic!("no Russian text for {}", d.name));
+            assert!(!t.summary.is_empty() && !t.description.is_empty(), "{}", d.name);
+            assert_eq!(
+                code_only(d.example_in(ru)),
+                code_only(d.example),
+                "{}: the Russian example has other code",
+                d.name
+            );
+        }
+        assert_eq!(ru_directives::NASM_GUIDE.len(), NASM_GUIDE.len());
+        for (i, en) in NASM_GUIDE.iter().enumerate() {
+            let s = nasm_section(i, ru);
+            assert!(!s.title.is_empty() && !s.text.is_empty(), "{}", en.title);
+            assert_eq!(code_only(s.example), code_only(en.example), "{}: the Russian example has other code", en.title);
+            assert_eq!(s.table.len(), en.table.len(), "{}", en.title);
+            for (a, b) in s.table.iter().zip(en.table) {
+                assert_eq!(a.len(), b.len(), "{}", en.title);
+            }
+        }
+        for int in INTERRUPTS {
+            assert!(int.ru().is_some(), "no Russian text for INT {:02X}h", int.number);
+            for f in int.functions {
+                let found = ru_interrupts::FUNCTIONS.iter().any(|r| r.number == int.number && r.code == f.code);
+                assert!(found, "no Russian text for INT {:02X}h function {:X}h", int.number, f.code);
+                let t = f.text_in(int.number, ru);
+                assert_eq!(code_only(t.example), code_only(f.example), "INT {:02X}h/{:X}h", int.number, f.code);
+            }
+        }
+        // No translation for an article that does not exist.
+        for t in ru_instructions::INSTRUCTIONS {
+            assert!(INSTRUCTIONS.iter().any(|e| e.name == t.key), "{}", t.key);
+        }
+        for t in ru_directives::DIRECTIVES {
+            assert!(DIRECTIVES.iter().any(|d| d.name == t.key), "{}", t.key);
+        }
+        for f in ru_interrupts::FUNCTIONS {
+            let int = INTERRUPTS.iter().find(|i| i.number == f.number).unwrap();
+            assert!(int.functions.iter().any(|x| x.code == f.code), "INT {:02X}h/{:X}h", f.number, f.code);
+        }
+        assert_eq!(Topic::Instr(0).tooltip(ru).0, format!("MOV  {}", INSTRUCTIONS[0].summary_in(ru)));
     }
 }

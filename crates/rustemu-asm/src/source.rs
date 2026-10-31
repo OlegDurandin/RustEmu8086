@@ -64,6 +64,8 @@ pub struct Preprocessor<'a> {
     pub nasm: bool,
     /// Files being processed, the outermost first (to catch an INCLUDE cycle).
     open_files: Vec<String>,
+    /// NASM `%define name(params) body` (by upper-case name): expanded where they are used.
+    nasm_functions: HashMap<String, (Vec<String>, String)>,
 }
 
 /// Deepest INCLUDE nesting (a cycle through differently spelled names stops here).
@@ -251,6 +253,7 @@ impl<'a> Preprocessor<'a> {
             out: Vec::new(),
             nasm: false,
             open_files: Vec::new(),
+            nasm_functions: HashMap::new(),
         }
     }
 
@@ -281,17 +284,38 @@ impl<'a> Preprocessor<'a> {
             .collect()
     }
 
-    /// Translates the NASM preprocessor (`%define`, `%assign`, `%macro` with `%1` and `%%label`,
-    /// `%rep`, `%if`/`%elif`/`%else`/`%endif`, `%ifdef`, `%include`) to the MASM directives this
-    /// preprocessor handles. Lines keep their numbers (one NASM line may give several).
+    /// Translates the NASM preprocessor (`%define` with and without parameters, `%assign`, `%macro`
+    /// with `%1` and `%%label`, `%rep`, `%if`/`%elif`/`%else`/`%endif`, `%ifdef`, `%include`) and
+    /// `struc` / `istruc` to the MASM directives and NASM lines the rest handles. Lines keep their
+    /// numbers (one NASM line may give several).
     fn nasm_lines(&mut self, file: usize, text: &str) -> Vec<(u32, String)> {
         let mut out = Vec::new();
         // Inside `%macro`: (parameter count, local labels used).
         let mut in_macro: Option<(usize, Vec<String>)> = None;
+        // Inside `struc name`: (name, offset of the next field as an expression).
+        let mut in_struc: Option<(String, String)> = None;
+        // Inside `istruc name`: (name, the equate holding its start address).
+        let mut in_istruc: Option<(String, String)> = None;
         for (i, raw) in text.lines().enumerate() {
             let n = i as u32 + 1;
-            let code = strip_comment(raw).trim();
             let err = |s: &mut Self, msg: String| s.errors.push(AsmError { file, line: n, col: None, len: 0, msg });
+            // Function-like %define is expanded everywhere but in the lines that define one.
+            let expanded;
+            let raw = if self.nasm_functions.is_empty() || defines_something(raw) {
+                raw
+            } else {
+                match expand_functions(raw, &self.nasm_functions) {
+                    Ok(t) => {
+                        expanded = t;
+                        expanded.as_str()
+                    }
+                    Err(msg) => {
+                        err(self, msg);
+                        raw
+                    }
+                }
+            };
+            let code = strip_comment(raw).trim();
             if let Some(directive) = code.strip_prefix('%').filter(|d| d.starts_with(|c: char| c.is_ascii_alphabetic()))
             {
                 let word: String = directive.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
@@ -300,15 +324,23 @@ impl<'a> Preprocessor<'a> {
                 let first_word = rest.split_whitespace().next().unwrap_or("");
                 let after_first = rest[first_word.len()..].trim();
                 let line = match word.as_str() {
-                    "define" | "xdefine" | "idefine" | "ixdefine" => {
-                        if first_word.contains('(') {
-                            err(self, "%define with parameters is not supported; use %macro".into());
+                    "define" | "xdefine" | "idefine" | "ixdefine" => match function_define(rest) {
+                        Some(Ok((name, params, body))) => {
+                            self.nasm_functions.insert(name.to_ascii_uppercase(), (params, body));
                             None
-                        } else {
-                            Some(format!("{first_word} EQU <{after_first}>"))
                         }
+                        Some(Err(msg)) => {
+                            err(self, msg);
+                            None
+                        }
+                        None => Some(format!("{first_word} EQU <{after_first}>")),
+                    },
+                    "undef" => {
+                        let name: String =
+                            first_word.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                        self.nasm_functions.remove(&name.to_ascii_uppercase());
+                        Some(format!("%UNDEF {first_word}"))
                     }
-                    "undef" => Some(format!("%UNDEF {first_word}")),
                     "assign" | "iassign" => Some(format!("{first_word} = {after_first}")),
                     "macro" | "imacro" => {
                         // `%macro name 2`, `%macro name 1-3`, `%macro name 1+` (no greedy last parameter).
@@ -355,11 +387,117 @@ impl<'a> Preprocessor<'a> {
                 }
                 continue;
             }
+            let words: Vec<&str> = code.split_whitespace().collect();
+            let word = |k: usize| words.get(k).map(|w| w.to_ascii_lowercase()).unwrap_or_default();
+            // struc name ... endstruc: the fields become equates of their offsets.
+            if word(0) == "struc" {
+                match words.get(1) {
+                    Some(name) => in_struc = Some((name.to_string(), "0".into())),
+                    None => err(self, "struc needs a name".into()),
+                }
+                continue;
+            }
+            if let Some((name, offset)) = &mut in_struc {
+                if word(0) == "endstruc" {
+                    out.push((n, format!("{name}_size equ {offset}")));
+                    out.push((n, format!("{name} equ 0")));
+                    in_struc = None;
+                    continue;
+                }
+                if words.is_empty() {
+                    continue;
+                }
+                // [label[:]] [resb|resw|resd|resq|rest|alignb n]
+                let is_directive = |w: &str| {
+                    matches!(w.to_ascii_lowercase().as_str(), "resb" | "resw" | "resd" | "resq" | "rest" | "alignb")
+                };
+                let (label, rest) = match code.split_once(':') {
+                    Some((l, r)) if !l.contains(char::is_whitespace) => (Some(l.trim()), r.trim()),
+                    _ if !is_directive(words[0]) => (Some(words[0]), code[words[0].len()..].trim()),
+                    _ => (None, code),
+                };
+                if let Some(label) = label {
+                    let full = if label.starts_with('.') { format!("{name}{label}") } else { label.to_string() };
+                    out.push((n, format!("{full} equ {offset}")));
+                }
+                let directive = rest.split_whitespace().next().unwrap_or("");
+                let count = rest[directive.len()..].trim();
+                let unit = match directive.to_ascii_lowercase().as_str() {
+                    "" => None,
+                    "resb" => Some(1),
+                    "resw" => Some(2),
+                    "resd" => Some(4),
+                    "resq" => Some(8),
+                    "rest" => Some(10),
+                    "alignb" => {
+                        *offset = format!("((({offset})+({count})-1)/({count})*({count}))");
+                        None
+                    }
+                    _ => {
+                        err(self, format!("only resb/resw/resd/resq/rest/alignb can be inside struc, not {directive}"));
+                        None
+                    }
+                };
+                if let Some(unit) = unit {
+                    *offset = format!("{offset}+{unit}*({count})");
+                }
+                continue;
+            }
+            // [label[:]] istruc name ... at field, data ... iend: the data padded to the offsets.
+            let istruc_at = if word(0) == "istruc" {
+                Some(0)
+            } else if word(1) == "istruc" {
+                Some(1)
+            } else {
+                None
+            };
+            if let Some(k) = istruc_at {
+                let Some(name) = words.get(k + 1) else {
+                    err(self, "istruc needs the name of a struc".into());
+                    continue;
+                };
+                if k == 1 {
+                    out.push((n, format!("{}:", words[0].trim_end_matches(':'))));
+                }
+                self.local_counter += 1;
+                let start = format!("@ISTRUC_{}", self.local_counter);
+                out.push((n, format!("{start} equ $")));
+                in_istruc = Some((name.to_string(), start));
+                continue;
+            }
+            if let Some((name, start)) = &in_istruc {
+                if word(0) == "iend" {
+                    out.push((n, format!("times ({name}_size)-($-{start}) db 0")));
+                    in_istruc = None;
+                    continue;
+                }
+                if word(0) == "at" {
+                    let args = code[2..].trim();
+                    let (field, data) = args.split_once(',').unwrap_or((args, ""));
+                    out.push((n, format!("times ({})-($-{start}) db 0", field.trim())));
+                    if !data.trim().is_empty() {
+                        out.push((n, data.trim().to_string()));
+                    }
+                    continue;
+                }
+            }
             let mut line = raw.to_string();
             if let Some((count, locals)) = &mut in_macro {
                 line = nasm_macro_body(&line, *count, locals);
             }
             out.push((n, line));
+        }
+        if let Some((name, _)) = in_struc {
+            self.errors.push(AsmError {
+                file,
+                line: 0,
+                col: None,
+                len: 0,
+                msg: format!("struc {name} has no endstruc"),
+            });
+        }
+        if let Some((name, _)) = in_istruc {
+            self.errors.push(AsmError { file, line: 0, col: None, len: 0, msg: format!("istruc {name} has no iend") });
         }
         out
     }
@@ -693,6 +831,121 @@ impl<'a> Preprocessor<'a> {
         self.error(start, "missing ENDM");
         (body, i)
     }
+}
+
+/// A line that defines or undefines a NASM macro (function-like ones are not expanded in it).
+fn defines_something(line: &str) -> bool {
+    let code = strip_comment(line).trim_start().to_ascii_lowercase();
+    ["%define", "%xdefine", "%idefine", "%ixdefine", "%undef", "%macro", "%imacro"]
+        .iter()
+        .any(|d| code.strip_prefix(d).is_some_and(|r| r.starts_with(char::is_whitespace)))
+}
+
+/// `name(a, b) body` of a function-like `%define`: `None` for an ordinary one.
+#[allow(clippy::type_complexity)]
+fn function_define(rest: &str) -> Option<Result<(String, Vec<String>, String), String>> {
+    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '?' | '@')).collect();
+    let after = rest[name.len()..].strip_prefix('(')?;
+    let Some((params, body)) = after.split_once(')') else {
+        return Some(Err(format!("%define {name}: ')' is missing")));
+    };
+    let params: Vec<String> =
+        params.split(',').map(|p| p.trim().to_ascii_uppercase()).filter(|p| !p.is_empty()).collect();
+    Some(Ok((name, params, body.trim().to_string())))
+}
+
+/// Expands the uses `name(args)` of function-like `%define`s in `line` (outside strings and the
+/// comment), again and again for the uses their bodies bring.
+fn expand_functions(line: &str, defs: &HashMap<String, (Vec<String>, String)>) -> Result<String, String> {
+    let mut text = line.to_string();
+    for _ in 0..64 {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let mut changed = false;
+        let mut quote = None;
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if let Some(q) = quote {
+                out.push(c);
+                if c == q {
+                    quote = None;
+                }
+                i += 1;
+                continue;
+            }
+            if c == ';' {
+                out.extend(&chars[i..]);
+                break;
+            }
+            if matches!(c, '\'' | '"' | '`') {
+                quote = Some(c);
+                out.push(c);
+                i += 1;
+                continue;
+            }
+            if c.is_alphabetic() || c == '_' {
+                let mut j = i;
+                while j < chars.len() && (chars[j].is_alphanumeric() || matches!(chars[j], '_' | '.' | '?' | '@')) {
+                    j += 1;
+                }
+                let name: String = chars[i..j].iter().collect();
+                let mut k = j;
+                while k < chars.len() && chars[k] == ' ' {
+                    k += 1;
+                }
+                if let Some((params, body)) = defs.get(&name.to_ascii_uppercase())
+                    && chars.get(k) == Some(&'(')
+                {
+                    // The arguments: split at the commas outside brackets and strings.
+                    let (mut depth, mut q, mut args, mut cur, mut end) = (0, None, Vec::new(), String::new(), None);
+                    for (m, &d) in chars.iter().enumerate().skip(k + 1) {
+                        match (q, d) {
+                            (Some(qc), _) if d == qc => q = None,
+                            (Some(_), _) => {}
+                            (None, '\'' | '"' | '`') => q = Some(d),
+                            (None, '(' | '[') => depth += 1,
+                            (None, ']') => depth -= 1,
+                            (None, ')') if depth == 0 => {
+                                end = Some(m);
+                                break;
+                            }
+                            (None, ')') => depth -= 1,
+                            (None, ',') if depth == 0 => {
+                                args.push(std::mem::take(&mut cur));
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        cur.push(d);
+                    }
+                    let Some(end) = end else { return Err(format!("{name}(: ')' is missing")) };
+                    if !cur.trim().is_empty() || !args.is_empty() {
+                        args.push(cur);
+                    }
+                    if args.len() != params.len() {
+                        return Err(format!("{name} takes {} argument(s), not {}", params.len(), args.len()));
+                    }
+                    let map: HashMap<String, String> =
+                        params.iter().cloned().zip(args.iter().map(|a| a.trim().to_string())).collect();
+                    out.push_str(&substitute_with(body, &map, true));
+                    changed = true;
+                    i = end + 1;
+                    continue;
+                }
+                out.push_str(&name);
+                i = j;
+                continue;
+            }
+            out.push(c);
+            i += 1;
+        }
+        if !changed {
+            return Ok(out);
+        }
+        text = out;
+    }
+    Err("a %define expands into itself".into())
 }
 
 /// A line of a NASM macro body: `%1`..`%9` / `%{1}` become the parameters `__P1`..`__P9`,

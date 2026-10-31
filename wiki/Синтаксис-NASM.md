@@ -65,15 +65,32 @@ count db 3
 - Числа `0x1F`, `1Fh`, `$1F`, `0b1010`, `1010b`, `0o17`, `17q`, `0d99`; строки `'…'`, `"…"` и `` `…` `` с
   `\n \t \r \0 \xHH`.
 - Операнды `byte` / `word` / `dword` без `ptr`, `[es:di]`, `short` / `near` / `far`, `seg:off`.
-- Препроцессор: `%define`, `%undef`, `%assign`, `%macro … %endmacro` с `%1…%9` и `%%метка`, `%rep`,
-  `%if / %elif / %else / %endif`, `%ifdef`, `%ifndef`, `%include`, `%error`.
+- Операторы как в NASM, с его порядком: `?:`, логические `|| ^^ &&`, сравнения (истина — 1), затем `| ^ &`, сдвиги,
+  `+ -`, `* / %`.
+- Препроцессор: `%define` (в том числе с параметрами: `%define SQ(x) ((x)*(x))`), `%undef`, `%assign`,
+  `%macro … %endmacro` с `%1…%9` и `%%метка`, `%rep`, `%if / %elif / %else / %endif`, `%ifdef`, `%ifndef`,
+  `%include`, `%error`.
+- Структуры: `struc … endstruc` (поля `.x resw 1` → смещение `имя.x`, размер `имя_size`) и `istruc … at … iend`.
+
+```nasm
+struc point
+    .x: resw 1
+    .y: resw 1
+endstruc
+    mov ax, [p + point.y]     ; 20
+    mov cx, point_size        ; 4
+p:  istruc point
+        at point.x, dw 10
+        at point.y, dw 20
+    iend
+```
 
 ## Чего нет
 
 - Только `-f bin`. EXE для DOS в NASM собирается через объектный формат и компоновщик — этого нет; для EXE
   используйте [синтаксис Emu8086](Синтаксис-Emu8086).
-- `%define` с параметрами, `%macro m 1+`, `%0`, `%rotate`, `incbin`, `struc`, произвольные имена секций,
-  `%push` / `%$метка`.
+- `%macro m 1+`, `%0`, `%rotate`, `%strlen` / `%substr`, `incbin`, числа с плавающей точкой в данных,
+  произвольные имена секций, `%push` / `%$метка`.
 - Дальние условные переходы собираются, как в Emu8086, парой «обратный короткий переход + `jmp near`»
   (у NASM без `cpu 8086` — инструкция 80386, которой нет у 8086), поэтому байты здесь отличаются от NASM.
 
