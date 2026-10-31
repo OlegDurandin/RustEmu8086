@@ -59,7 +59,11 @@ pub fn detect_dialect(name: &str, text: &str) -> Dialect {
             || code.starts_with("[org")
             || code.starts_with("[section")
             || code.starts_with("[cpu")
-            || matches!(first, "bits" | "use16" | "section" | "cpu" | "global" | "extern")
+            || matches!(
+                first,
+                "bits" | "use16" | "section" | "cpu" | "global" | "extern" | "struc" | "endstruc" | "iend"
+            )
+            || code.split_whitespace().nth(1) == Some("istruc")
             || (first.starts_with('%')
                 && matches!(
                     first,

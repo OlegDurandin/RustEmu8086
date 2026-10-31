@@ -391,7 +391,7 @@ fn word_at(text: &str, ci: usize) -> Option<(String, usize)> {
 /// Tooltip with a summary of an instruction, directive or interrupt; Cmd-click opens the reference.
 fn reference_hover(app: &mut App, ci: usize, out: &egui::text_edit::TextEditOutput, cmd_click: bool) {
     let Some(topic) = crate::reference::topic_at(&app.text, ci) else { return };
-    let (title, details) = topic.tooltip();
+    let (title, details) = topic.tooltip(app.reference.lang);
     out.response.response.clone().on_hover_ui_at_pointer(|ui| {
         ui.set_max_width(460.0);
         ui.label(RichText::new(title).strong().monospace());

@@ -118,6 +118,7 @@ impl App {
         self.settings.panels = self.panels.as_ref().and_then(|t| ron::to_string(t).ok());
         self.settings.show_macro_code = self.show_macro_code;
         self.settings.follow_source = self.follow_source;
+        self.settings.reference_lang = self.reference.lang;
         self.settings.vars_format = self.vars_format;
     }
 }

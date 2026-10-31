@@ -64,13 +64,89 @@ VIRTUAL DEVICES (ports)
   130  printer (OUT a character)     199  LED display (OUT word)
 
 NASM SYNTAX (see the "NASM syntax" tab)
-  chosen by bits 16, section, times, resb, %define, %macro, byte [..]  or #nasm# / .nasm / options
+  chosen by bits 16, section, times, resb, %define, %macro, byte [..]  or #nasm# / .nasm / Options
   a name is its address, memory is in brackets:  mov ax, msg   mov ax, [count]   inc word [count]
   org 100h -> COM   org 7C00h -> boot sector   other -> BIN    section .text / .data / .bss
   times n db 0   resb/resw/resd   $ $$   .local labels   0x1F 1Fh 0b101   `escapes\n`
-  %define %assign %macro..%endmacro (%1, %%label) %rep %if/%ifdef %include
+  %define (and SQ(x)) %assign %macro..%endmacro (%1, %%label) %rep %if/%ifdef %include  struc/istruc
 
 FLAGS   CF carry  ZF zero  SF sign  OF overflow  PF parity  AF aux  IF int  DF dir  TF trap
 JUMPS   unsigned: JA JAE JB JBE   signed: JG JGE JL JLE   JE/JZ JNE/JNZ JC JNC JS JO JP JCXZ
         a conditional jump that is too far is rewritten as  J(not cc) +3 / JMP near
+"#;
+
+/// [`HELP`] in Russian.
+pub const HELP_RU: &str = r#"КЛАВИШИ
+  F9 / ⌘E    собрать и загрузить в эмулятор
+  ⌘B         собрать исполняемый файл (.com/.exe/.bin) + .lst + .symbol
+  ⌘S / ⌘O    сохранить / открыть; веб-версия хранит программы в браузере ("my programs")
+  File -> Share link...  ссылка, которая открывает программу в веб-версии
+  F5 / ⌘R    запустить / остановить   F8   один шаг      ⇧F8  шаг назад
+  F10        step over: выполнить текущую строку исходника (макрос, CALL, INT) целиком
+  ⇧F11       step out: выйти из текущего макроса / процедуры (к месту вызова)
+  F8 на строке макроса (PRINT, PUTC...) заходит внутрь, F10 выполняет его как одну строку
+  щёлкните по экрану эмулятора, чтобы печатать в работающую программу
+
+ТИПЫ ПРОГРАММ
+  #make_COM#   org 100h, один сегмент, кончается RET или INT 20h
+  #make_EXE#   сегменты: data segment / code segment / stack segment, END start
+  #make_BIN#   двоичный файл, #load_segment=XXXX#, #load_offset=XXXX#, #CS=..#, #IP=..#
+  #make_BOOT#  загрузочный сектор в 0000:7C00 (org 7C00h)
+  без директивы: EXE, если есть сегменты, иначе COM
+
+ДИРЕКТИВЫ
+  ORG n   DB/DW/DD/DQ/DT   n DUP(x)   ?   EQU   =   $   LABEL
+  SEGMENT/ENDS   PROC [FAR]/ENDP   END [метка]   ASSUME (пропускается)
+  .MODEL .STACK [n] .DATA .CODE @DATA   EVEN  ALIGN n
+  INCLUDE 'файл'   MACRO/ENDM/LOCAL/EXITM   REPT n   IF/IFDEF/IFNDEF/ELSE/ENDIF
+  операторы: + - * / MOD SHL SHR AND OR XOR NOT  OFFSET SEG TYPE LENGTH SIZE LOW HIGH
+  BYTE PTR / WORD PTR / DWORD PTR, короткие формы b. и w.   SHORT / NEAR PTR / FAR PTR
+
+EMU8086.INC (include 'emu8086.inc')
+  PUTC c   GOTOXY кол,стр   PRINT 'текст'   PRINTN 'текст'   CURSOROFF  CURSORON
+  DEFINE_SCAN_NUM      CALL SCAN_NUM       ; CX = введённое число
+  DEFINE_PRINT_NUM     CALL PRINT_NUM      ; AX со знаком (нужен PRINT_NUM_UNS)
+  DEFINE_PRINT_NUM_UNS CALL PRINT_NUM_UNS  ; AX без знака
+  DEFINE_PRINT_STRING  CALL PRINT_STRING   ; DS:SI, кончается нулём
+  DEFINE_PTHIS         CALL PTHIS / DB 'текст', 0
+  DEFINE_GET_STRING    CALL GET_STRING     ; буфер DS:DI, размер DX
+  DEFINE_CLEAR_SCREEN  CALL CLEAR_SCREEN
+
+INT 21h (DOS)
+  AH=01 символ с эхом -> AL       AH=02 вывести DL       AH=06 прямой ввод-вывод (DL=FF чтение)
+  AH=07/08 символ без эха         AH=09 строка DS:DX '$' AH=0A ввод строки DS:DX
+  AH=0B есть ли клавиша           AH=0C очистить + AL    AH=25/35 вектор AL: задать/прочитать
+  AH=2A дата  AH=2C время         AH=30 версия           AH=4C выход (AL = код)
+  файлы (диск C: = ~/Documents/RustEmu8086/vdrive/C, Emulator -> Virtual drive -> show drive C:
+  folder; в options можно сделать им папку программы; в веб-версии — диск в браузере,
+  см. Emulator -> Virtual drive -> drive C: files):
+  AH=3C создать 3D открыть 3E закрыть 3F читать 40 писать 41 удалить 42 seek 43 атрибуты
+  AH=39 mkdir 3A rmdir 3B chdir 47 текущий каталог 4E/4F найти первый/следующий 56 переименовать
+
+INT 10h (видео)
+  AH=00 режим (AL = 3 текст 80x25, 13h графика 320x200x256)
+  AH=01 форма курсора  AH=02 курсор (BH страница, DH строка, DL столбец)   AH=03 где курсор
+  AH=05 страница       AH=06/07 прокрутка окна вверх/вниз   AH=08 прочитать символ+атрибут
+  AH=09 символ+атрибут (CX раз)  AH=0A символ  AH=0C/0D нарисовать/прочитать точку
+  AH=0E телетайп       AH=0F режим     AH=10h/AL=03 без мерцания  AH=13 строка
+
+INT 16h (клавиатура)  AH=00 ждать клавишу -> AH скан-код, AL ascii   AH=01 проверить (ZF=1 нет)
+INT 1Ah  AH=00 тики в CX:DX    INT 33h  мышь AX=0..4    INT 20h  выход
+
+ВИРТУАЛЬНЫЕ УСТРОЙСТВА (порты)
+  4    светофор (слово, по 3 бита на светофор: красный, жёлтый, зелёный)
+  7    шаговый двигатель (полушаговая схема обмоток; IN бит 7 = готов)
+  125  термометр (IN, градусы)       127  нагреватель (OUT 1 = включён)
+  130  принтер (OUT символ)          199  LED-дисплей (OUT слово)
+
+СИНТАКСИС NASM (см. вкладку "синтаксис NASM")
+  выбирается по bits 16, section, times, resb, %define, %macro, byte [..]  или #nasm# / .nasm / Options
+  имя — это адрес, память — в скобках:  mov ax, msg   mov ax, [count]   inc word [count]
+  org 100h -> COM   org 7C00h -> загрузочный сектор   иначе -> BIN    section .text / .data / .bss
+  times n db 0   resb/resw/resd   $ $$   .локальные метки   0x1F 1Fh 0b101   `escapes\n`
+  %define (и SQ(x)) %assign %macro..%endmacro (%1, %%метка) %rep %if/%ifdef %include  struc/istruc
+
+ФЛАГИ   CF перенос  ZF ноль  SF знак  OF переполнение  PF чётность  AF вспом.  IF прерыв.  DF напр.  TF трасс.
+ПЕРЕХОДЫ без знака: JA JAE JB JBE   со знаком: JG JGE JL JLE   JE/JZ JNE/JNZ JC JNC JS JO JP JCXZ
+        слишком далёкий условный переход собирается как  J(не cc) +3 / JMP near
 "#;

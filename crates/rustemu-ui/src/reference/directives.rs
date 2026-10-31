@@ -175,8 +175,15 @@ pub const DIRECTIVES: &[Directive] = &[
         "%DEFINE",
         ["%XDEFINE", "%UNDEF", "%ASSIGN"],
         "NASM: define a text macro (%define) or a numeric variable (%assign).",
-        "%define NAME text replaces NAME by the text in the following lines; %assign NAME expr evaluates the expression (it can be redefined). %define with parameters is not supported - use %macro.",
-        "%define CR 13\n%assign COUNT 2\nbits 16\norg 100h\n    mov al, CR\n    mov cx, COUNT\n    ret"
+        "%define NAME text replaces NAME by the text in the following lines; %define NAME(a, b) text takes arguments: NAME(1, 2) becomes the text with a and b replaced. %assign NAME expr evaluates the expression (it can be redefined).",
+        "%define CR 13\n%define SQ(x) ((x)*(x))\n%define CELL(row, col) ((row)*80 + (col))*2\n%assign COUNT 2\nbits 16\norg 100h\n    mov al, CR\n    mov ax, SQ(5)          ; 25\n    mov di, CELL(2, 10)    ; offset in video memory\n    mov cx, COUNT\n    ret"
+    ),
+    dir!(
+        "STRUC",
+        ["ENDSTRUC", "ISTRUC", "IEND", "AT"],
+        "NASM: describe a structure (struc) and fill one in (istruc).",
+        "struc name ... endstruc lists the fields with resb / resw / resd: .x resw 1 makes name.x the offset of the field, and name_size the size of the whole structure. istruc name ... iend creates one in memory: at name.x, dw 5 puts the data at that field; the fields not given are zeros.",
+        "bits 16\norg 100h\nstruc point\n    .x: resw 1\n    .y: resw 1\nendstruc\n    mov ax, [p + point.y]   ; 20\n    mov cx, point_size      ; 4\n    ret\np: istruc point\n    at point.x, dw 10\n    at point.y, dw 20\niend"
     ),
     dir!(
         "%MACRO",
@@ -227,7 +234,7 @@ pub const NASM_GUIDE: &[NasmSection] = &[
     },
     NasmSection {
         title: "Choosing the syntax",
-        text: "By default the syntax is detected. NASM is chosen when the source has any of:\n- bits 16 / [bits 16], [org ...], section .text, cpu, global\n- preprocessor directives %define, %macro, %include, %assign, %rep, %if\n- times, resb / resw / resd, $$\n- a size without PTR: byte [..], word [..]\n\nA .nasm file extension or a line #nasm# also selects NASM. Otherwise the source is Emu8086 (MASM).\n\nThe syntax can be set explicitly: options window -> assembler syntax (auto / Emu8086 / NASM); on the command line: rustemu asm file --syntax nasm. File -> New offers NASM templates (\"use NASM syntax\").",
+        text: "By default the syntax is detected. NASM is chosen when the source has any of:\n- bits 16 / [bits 16], [org ...], section .text, cpu, global\n- preprocessor directives %define, %macro, %include, %assign, %rep, %if\n- times, resb / resw / resd, $$, struc / istruc\n- a size without PTR: byte [..], word [..]\n\nA .nasm file extension or a line #nasm# also selects NASM. Otherwise the source is Emu8086 (MASM). A program that does not assemble in the detected syntax but does in the other one is assembled in that one.\n\nThe syntax can be set explicitly: Options menu (or the options window) -> assembler syntax (auto / Emu8086 / NASM); on the command line: rustemu asm file --syntax nasm. File -> New offers NASM templates (\"use NASM syntax\").",
         table: &[],
         example: "#nasm#\norg 100h\n    mov ax, [value]\n    ret\nvalue dw 1234h",
     },
@@ -253,7 +260,7 @@ pub const NASM_GUIDE: &[NasmSection] = &[
     },
     NasmSection {
         title: "Labels, numbers and strings",
-        text: "- Labels may have a colon or not (msg db ...).\n- Local labels start with a dot: .loop belongs to the label before it and is named PREVIOUS.LOOP inside the program (that name is shown in the debugger too).\n- Numbers: 0x1F, 1Fh, $1F, 0b1010, 1010b, 0o17, 17q, 0d99.\n- Strings: '...', \"...\" and `...`; backquoted strings understand \\n, \\t, \\r, \\0, \\xHH.\n- $ is the current address, $$ the start of the section.\n- Operators: | ^ & << >> + - * / % ~ !, comparisons == != < > <= >= && ||.",
+        text: "- Labels may have a colon or not (msg db ...).\n- Local labels start with a dot: .loop belongs to the label before it and is named PREVIOUS.LOOP inside the program (that name is shown in the debugger too).\n- Numbers: 0x1F, 1Fh, $1F, 0b1010, 1010b, 0o17, 17q, 0d99.\n- Strings: '...', \"...\" and `...`; backquoted strings understand \\n, \\t, \\r, \\0, \\xHH.\n- $ is the current address, $$ the start of the section.\n- Operators: | ^ & << >> + - * / % ~ !, comparisons == != < > <= >= (true is 1), logical && || ^^, and c ? a : b.",
         table: &[],
         example: "bits 16\norg 100h\nstart:\n    mov cx, 0x10\n    mov al, 1010b\n    mov bl, 0o17\n    mov ax, 'ab'         ; AL = 'a', AH = 'b'\n.again:\n    loop .again          ; the label is start.again\n    ret\ntext db `Tab\\there\\n`, 0",
     },
@@ -265,9 +272,15 @@ pub const NASM_GUIDE: &[NasmSection] = &[
     },
     NasmSection {
         title: "Preprocessor",
-        text: "- %define / %undef - text macros; %assign - numeric variables.\n- %macro name n ... %endmacro - macros with parameters %1 ... %9 and local labels %%label.\n- %rep n ... %endrep - repeat a block.\n- %if / %elif / %else / %endif, %ifdef / %ifndef - conditional assembly.\n- %include \"file\" - insert a file (read as NASM); %error stops with a message.",
+        text: "- %define / %undef - text macros; %define NAME(a, b) ... - macros with arguments used inside expressions: SQ(5); %assign - numeric variables.\n- %macro name n ... %endmacro - macros with parameters %1 ... %9 and local labels %%label.\n- %rep n ... %endrep - repeat a block.\n- %if / %elif / %else / %endif, %ifdef / %ifndef - conditional assembly.\n- %include \"file\" - insert a file (read as NASM); %error stops with a message.",
         table: &[],
         example: "bits 16\norg 100h\n%define NEWLINE 13, 10\n%assign COUNT 3\n%macro print 1\n    mov dx, %1\n    mov ah, 9\n    int 21h\n%endmacro\n%macro wait_key 0\n%%again:\n    mov ah, 1\n    int 16h\n    jz %%again\n%endmacro\n    print hello\n%rep COUNT\n    nop\n%endrep\n    ret\nhello db 'Hi', NEWLINE, '$'",
+    },
+    NasmSection {
+        title: "Structures",
+        text: "struc ... endstruc describes the fields of a record: each field is the offset from the start, name_size is the size. istruc ... iend fills one in memory with at field, data; the missing fields are zeros. Read a field as [record + struc.field] or [bx + struc.field].",
+        table: &[],
+        example: "bits 16\norg 100h\nstruc person\n    .age:  resb 1\n    .name: resb 10\nendstruc\n    mov si, alice\n    mov al, [si + person.age]     ; 30\n    lea dx, [si + person.name]\n    mov ah, 9\n    int 21h\n    ret\nalice: istruc person\n    at person.age, db 30\n    at person.name, db 'Alice$'\niend",
     },
     NasmSection {
         title: "Debugging NASM programs",
@@ -277,7 +290,7 @@ pub const NASM_GUIDE: &[NasmSection] = &[
     },
     NasmSection {
         title: "Not supported",
-        text: "- Output formats other than -f bin (no EXE, no object files).\n- %define with parameters, a greedy last macro parameter (%macro m 1+), %0, %rotate.\n- incbin, struc, section names other than .text / .data / .bss, context macros (%push, %$label).\n- Far conditional jumps: without cpu 8086 NASM emits the 80386 form (0F 8x), which the 8086 does not have; RustEmu8086, like Emu8086, uses a short jump with the opposite condition over a near JMP, so these bytes differ from NASM.",
+        text: "- Output formats other than -f bin (no EXE, no object files).\n- A greedy last macro parameter (%macro m 1+), %0, %rotate; %strlen, %substr and other string functions.\n- incbin, floating-point numbers in data, section names other than .text / .data / .bss, context macros (%push, %$label).\n- Far conditional jumps: without cpu 8086 NASM emits the 80386 form (0F 8x), which the 8086 does not have; RustEmu8086, like Emu8086, uses a short jump with the opposite condition over a near JMP, so these bytes differ from NASM.",
         table: &[],
         example: "",
     },
