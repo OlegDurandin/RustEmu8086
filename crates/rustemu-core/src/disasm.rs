@@ -65,6 +65,82 @@ impl ModRm {
     }
 }
 
+/// An 8087 instruction (ESC D8..DF) in MASM syntax: `FLD QWORD PTR [x]`, `FADD ST(2), ST`.
+fn fpu_text(op: u8, m: &ModRm) -> String {
+    const ARITH: [&str; 8] = ["FADD", "FMUL", "FCOM", "FCOMP", "FSUB", "FSUBR", "FDIV", "FDIVR"];
+    const IARITH: [&str; 8] = ["FIADD", "FIMUL", "FICOM", "FICOMP", "FISUB", "FISUBR", "FIDIV", "FIDIVR"];
+    let r = m.reg as usize;
+    let st = |i: u8| if i == 0 { "ST".to_string() } else { format!("ST({i})") };
+    if m.md != 3 {
+        let mem = |size: &str, name: &str| format!("{name} {size} PTR {}", m.mem);
+        let plain = |name: &str| format!("{name} {}", m.mem);
+        return match (op, r) {
+            (0xD8, _) => mem("DWORD", ARITH[r]),
+            (0xDC, _) => mem("QWORD", ARITH[r]),
+            (0xDA, _) => mem("DWORD", IARITH[r]),
+            (0xDE, _) => mem("WORD", IARITH[r]),
+            (0xD9, 0) => mem("DWORD", "FLD"),
+            (0xD9, 2) => mem("DWORD", "FST"),
+            (0xD9, 3) => mem("DWORD", "FSTP"),
+            (0xD9, 4) => plain("FLDENV"),
+            (0xD9, 5) => plain("FLDCW"),
+            (0xD9, 6) => plain("FNSTENV"),
+            (0xD9, 7) => plain("FNSTCW"),
+            (0xDB, 0) => mem("DWORD", "FILD"),
+            (0xDB, 2) => mem("DWORD", "FIST"),
+            (0xDB, 3) => mem("DWORD", "FISTP"),
+            (0xDB, 5) => mem("TBYTE", "FLD"),
+            (0xDB, 7) => mem("TBYTE", "FSTP"),
+            (0xDD, 0) => mem("QWORD", "FLD"),
+            (0xDD, 2) => mem("QWORD", "FST"),
+            (0xDD, 3) => mem("QWORD", "FSTP"),
+            (0xDD, 4) => plain("FRSTOR"),
+            (0xDD, 6) => plain("FNSAVE"),
+            (0xDD, 7) => plain("FNSTSW"),
+            (0xDF, 0) => mem("WORD", "FILD"),
+            (0xDF, 2) => mem("WORD", "FIST"),
+            (0xDF, 3) => mem("WORD", "FISTP"),
+            (0xDF, 4) => mem("TBYTE", "FBLD"),
+            (0xDF, 5) => mem("QWORD", "FILD"),
+            (0xDF, 6) => mem("TBYTE", "FBSTP"),
+            (0xDF, 7) => mem("QWORD", "FISTP"),
+            _ => format!("ESC {}, {}", ((op & 7) << 3) | m.reg, m.mem),
+        };
+    }
+    let i = m.rm;
+    const D9E0: [&str; 8] = ["FCHS", "FABS", "", "", "FTST", "FXAM", "", ""];
+    const D9E8: [&str; 8] = ["FLD1", "FLDL2T", "FLDL2E", "FLDPI", "FLDLG2", "FLDLN2", "FLDZ", ""];
+    const D9F0: [&str; 8] = ["F2XM1", "FYL2X", "FPTAN", "FPATAN", "FXTRACT", "FPREM1", "FDECSTP", "FINCSTP"];
+    const D9F8: [&str; 8] = ["FPREM", "FYL2XP1", "FSQRT", "FSINCOS", "FRNDINT", "FSCALE", "FSIN", "FCOS"];
+    let name = match (op, r) {
+        (0xD8, 2 | 3) => format!("{} {}", ARITH[r], st(i)),
+        (0xD8, _) => format!("{} ST, {}", ARITH[r], st(i)),
+        (0xDC, 2 | 3) => format!("{} {}", ARITH[r], st(i)),
+        // ST(i) = ST(i) op ST: SUB / SUBR and DIV / DIVR swap places.
+        (0xDC, _) => format!("{} {}, ST", ARITH[if r >= 4 { r ^ 1 } else { r }], st(i)),
+        (0xDE, 3) if i == 1 => "FCOMPP".into(),
+        (0xDE, 2 | 3) => format!("FCOMP {}", st(i)),
+        (0xDE, _) => format!("{}P {}, ST", ARITH[if r >= 4 { r ^ 1 } else { r }], st(i)),
+        (0xD9, 0) => format!("FLD {}", st(i)),
+        (0xD9, 1) => format!("FXCH {}", st(i)),
+        (0xD9, 2) if i == 0 => "FNOP".into(),
+        (0xD9, 4) => D9E0[i as usize].into(),
+        (0xD9, 5) => D9E8[i as usize].into(),
+        (0xD9, 6) => D9F0[i as usize].into(),
+        (0xD9, 7) => D9F8[i as usize].into(),
+        (0xDA, 5) if i == 1 => "FUCOMPP".into(),
+        (0xDB, 4) => ["FNENI", "FNDISI", "FNCLEX", "FNINIT", "", "", "", ""][i as usize].into(),
+        (0xDD, 0) => format!("FFREE {}", st(i)),
+        (0xDD, 2) => format!("FST {}", st(i)),
+        (0xDD, 3) => format!("FSTP {}", st(i)),
+        (0xDD, 4) => format!("FUCOM {}", st(i)),
+        (0xDD, 5) => format!("FUCOMP {}", st(i)),
+        (0xDF, 4) if i == 0 => "FNSTSW AX".into(),
+        _ => String::new(),
+    };
+    if name.is_empty() { format!("ESC {}, {}", ((op & 7) << 3) | m.reg, i) } else { name }
+}
+
 fn reg(r: u8, w: bool) -> &'static str {
     if w { REG16_NAMES[r as usize] } else { REG8_NAMES[r as usize] }
 }
@@ -305,7 +381,7 @@ pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
         0xD7 => format!("XLATB{}", seg_suffix(seg)),
         0xD8..=0xDF => {
             let m = read_modrm(&mut r, seg);
-            format!("ESC {}, {}", ((op & 7) << 3) | m.reg, m.operand(true))
+            fpu_text(op, &m)
         }
         0xE0 => format!("LOOPNE {}", rel8(&mut r)),
         0xE1 => format!("LOOPE {}", rel8(&mut r)),
@@ -375,4 +451,24 @@ pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
 fn seg_suffix(seg: Option<&str>) -> String {
     // Shown in the MASM manner as a segment prefix on the source operand.
     seg.map(|s| format!(" {s}:")).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod fpu_tests {
+    use super::disassemble;
+
+    #[test]
+    fn names_8087_instructions() {
+        let d = |b: &[u8]| disassemble(b, 0x100).text;
+        assert_eq!(d(&[0xD9, 0xFA]), "FSQRT");
+        assert_eq!(d(&[0xDD, 0x06, 0x34, 0x12]), "FLD QWORD PTR [1234h]");
+        assert_eq!(d(&[0xDB, 0x2F]), "FLD TBYTE PTR [BX]");
+        assert_eq!(d(&[0xD8, 0xC1]), "FADD ST, ST(1)");
+        assert_eq!(d(&[0xDC, 0xE9]), "FSUB ST(1), ST");
+        assert_eq!(d(&[0xDE, 0xF9]), "FDIVP ST(1), ST");
+        assert_eq!(d(&[0xDE, 0xD9]), "FCOMPP");
+        assert_eq!(d(&[0xDF, 0xE0]), "FNSTSW AX");
+        assert_eq!(d(&[0xDE, 0x07]), "FIADD WORD PTR [BX]");
+        assert_eq!(d(&[0xD9, 0xEB]), "FLDPI");
+    }
 }

@@ -7,6 +7,8 @@ pub enum Tok {
     Num(i64),
     /// Quoted string ('...' or "...").
     Str(Vec<u8>),
+    /// Floating-point number (`1.5`, `3.0e-2`): digits, a point and digits, an optional exponent.
+    Float(String),
     /// Single punctuation character: + - * / ( ) [ ] , : ? $ = < > % ! & | ^ ~
     P(char),
 }
@@ -170,6 +172,32 @@ fn tokenize_with(line: &str, nasm: bool) -> Result<Vec<Token>, (usize, String)> 
             continue;
         }
         if c.is_ascii_digit() {
+            // A floating-point number: digits '.' digits [e [+-] digits].
+            let mut j = i;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j + 1 < b.len() && b[j] == b'.' && b[j + 1].is_ascii_digit() {
+                j += 1;
+                while j < b.len() && b[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j < b.len() && (b[j] == b'e' || b[j] == b'E') {
+                    let mut k = j + 1;
+                    if k < b.len() && (b[k] == b'+' || b[k] == b'-') {
+                        k += 1;
+                    }
+                    if k < b.len() && b[k].is_ascii_digit() {
+                        while k < b.len() && b[k].is_ascii_digit() {
+                            k += 1;
+                        }
+                        j = k;
+                    }
+                }
+                out.push(Token { tok: Tok::Float(line[start..j].to_string()), col: start });
+                i = j;
+                continue;
+            }
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                 i += 1;
             }

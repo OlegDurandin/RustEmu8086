@@ -9,9 +9,14 @@ pub enum Op {
     R8(u8),
     R16(u8),
     Sr(u8),
+    /// 8087 register ST(i).
+    St(u8),
     Mem(Mem),
     Imm(Val),
-    Far { seg: Val, off: Val },
+    Far {
+        seg: Val,
+        off: Val,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +83,7 @@ pub fn classify(op: &Operand, env: &dyn Env) -> R<Op> {
                 Expr::Reg(Reg::R8(r)) => return Ok(Op::R8(*r)),
                 Expr::Reg(Reg::R16(r)) => return Ok(Op::R16(*r)),
                 Expr::Reg(Reg::Seg(r)) => return Ok(Op::Sr(*r)),
+                Expr::Reg(Reg::St(i)) => return Ok(Op::St(*i)),
                 _ => {}
             }
             let mut v = eval(e, env)?;
@@ -337,7 +343,8 @@ fn simple(m: &str) -> Option<&'static [u8]> {
 
 /// Whether `m` is a known instruction mnemonic.
 pub fn is_mnemonic(m: &str) -> bool {
-    simple(m).is_some()
+    is_fpu(m)
+        || simple(m).is_some()
         || jcc_code(m).is_some()
         || ALU.contains(&m)
         || SHIFT.contains(&m)
@@ -417,6 +424,9 @@ pub fn encode(prefixes: &[String], mnem: &str, ops: &[Operand], env: &dyn Env, c
     let want =
         |k: usize| -> R<()> { if n != k { Err(format!("{mnem} expects {k} operand(s), got {n}")) } else { Ok(()) } };
 
+    if is_fpu(mnem) {
+        return fpu(mnem, &ops);
+    }
     if let Some(code) = simple(mnem) {
         want(0)?;
         e.bytes.extend_from_slice(code);
@@ -942,4 +952,248 @@ fn mov(e: &mut Enc, a: &Op, b: &Op) -> R<()> {
         }
         _ => Err("invalid MOV operands".into()),
     }
+}
+
+// ---- 8087 ---------------------------------------------------------------------------------------
+
+/// Arithmetic with a real operand: the ModR/M reg field of each (D8 / DC).
+const FPU_ARITH: [&str; 8] = ["FADD", "FMUL", "FCOM", "FCOMP", "FSUB", "FSUBR", "FDIV", "FDIVR"];
+/// The same with an integer operand (DE word / DA dword).
+const FPU_INT: [&str; 8] = ["FIADD", "FIMUL", "FICOM", "FICOMP", "FISUB", "FISUBR", "FIDIV", "FIDIVR"];
+/// Arithmetic that pops: ST(i) = ST(i) op ST(0), DE C0+...
+const FPU_POP: [(&str, u8); 6] = [("FADDP", 0), ("FMULP", 1), ("FSUBP", 4), ("FSUBRP", 5), ("FDIVP", 6), ("FDIVRP", 7)];
+
+/// 8087 (and a few 80287/80387) instructions without operands: FWAIT (9Bh) first where it has one.
+fn fpu_plain(m: &str) -> Option<&'static [u8]> {
+    Some(match m {
+        "F2XM1" => &[0xD9, 0xF0],
+        "FABS" => &[0xD9, 0xE1],
+        "FCHS" => &[0xD9, 0xE0],
+        "FCLEX" => &[0x9B, 0xDB, 0xE2],
+        "FNCLEX" => &[0xDB, 0xE2],
+        "FCOMPP" => &[0xDE, 0xD9],
+        "FDECSTP" => &[0xD9, 0xF6],
+        "FDISI" => &[0x9B, 0xDB, 0xE1],
+        "FNDISI" => &[0xDB, 0xE1],
+        "FENI" => &[0x9B, 0xDB, 0xE0],
+        "FNENI" => &[0xDB, 0xE0],
+        "FINCSTP" => &[0xD9, 0xF7],
+        "FINIT" => &[0x9B, 0xDB, 0xE3],
+        "FNINIT" => &[0xDB, 0xE3],
+        "FLD1" => &[0xD9, 0xE8],
+        "FLDL2T" => &[0xD9, 0xE9],
+        "FLDL2E" => &[0xD9, 0xEA],
+        "FLDPI" => &[0xD9, 0xEB],
+        "FLDLG2" => &[0xD9, 0xEC],
+        "FLDLN2" => &[0xD9, 0xED],
+        "FLDZ" => &[0xD9, 0xEE],
+        "FNOP" => &[0xD9, 0xD0],
+        "FPATAN" => &[0xD9, 0xF3],
+        "FPREM" => &[0xD9, 0xF8],
+        "FPREM1" => &[0xD9, 0xF5],
+        "FPTAN" => &[0xD9, 0xF2],
+        "FRNDINT" => &[0xD9, 0xFC],
+        "FSCALE" => &[0xD9, 0xFD],
+        "FSQRT" => &[0xD9, 0xFA],
+        "FTST" => &[0xD9, 0xE4],
+        "FXAM" => &[0xD9, 0xE5],
+        "FXTRACT" => &[0xD9, 0xF4],
+        "FYL2X" => &[0xD9, 0xF1],
+        "FYL2XP1" => &[0xD9, 0xF9],
+        "FSIN" => &[0xD9, 0xFE],
+        "FCOS" => &[0xD9, 0xFF],
+        "FSINCOS" => &[0xD9, 0xFB],
+        "FUCOMPP" => &[0xDA, 0xE9],
+        _ => return None,
+    })
+}
+
+/// All 8087 mnemonics (and the 80287 / 80387 ones accepted).
+pub const FPU_MNEMONICS: &[&str] = &[
+    "F2XM1", "FABS", "FCHS", "FCLEX", "FNCLEX", "FCOMPP", "FDECSTP", "FDISI", "FNDISI", "FENI", "FNENI", "FINCSTP",
+    "FINIT", "FNINIT", "FLD1", "FLDL2T", "FLDL2E", "FLDPI", "FLDLG2", "FLDLN2", "FLDZ", "FNOP", "FPATAN", "FPREM",
+    "FPREM1", "FPTAN", "FRNDINT", "FSCALE", "FSQRT", "FTST", "FXAM", "FXTRACT", "FYL2X", "FYL2XP1", "FSIN", "FCOS",
+    "FSINCOS", "FUCOMPP", "FADD", "FMUL", "FCOM", "FCOMP", "FSUB", "FSUBR", "FDIV", "FDIVR", "FIADD", "FIMUL", "FICOM",
+    "FICOMP", "FISUB", "FISUBR", "FIDIV", "FIDIVR", "FADDP", "FMULP", "FSUBP", "FSUBRP", "FDIVP", "FDIVRP", "FLD",
+    "FST", "FSTP", "FILD", "FIST", "FISTP", "FBLD", "FBSTP", "FXCH", "FFREE", "FUCOM", "FUCOMP", "FLDCW", "FSTCW",
+    "FNSTCW", "FSTSW", "FNSTSW", "FSTENV", "FNSTENV", "FLDENV", "FSAVE", "FNSAVE", "FRSTOR", "FWAIT",
+];
+
+/// An 8087 mnemonic (its ST operands are parsed as registers).
+pub fn is_fpu(m: &str) -> bool {
+    fpu_plain(m).is_some()
+        || FPU_ARITH.contains(&m)
+        || FPU_INT.contains(&m)
+        || FPU_POP.iter().any(|p| p.0 == m)
+        || matches!(
+            m,
+            "FLD"
+                | "FST"
+                | "FSTP"
+                | "FILD"
+                | "FIST"
+                | "FISTP"
+                | "FBLD"
+                | "FBSTP"
+                | "FXCH"
+                | "FFREE"
+                | "FUCOM"
+                | "FUCOMP"
+                | "FLDCW"
+                | "FSTCW"
+                | "FNSTCW"
+                | "FSTSW"
+                | "FNSTSW"
+                | "FSTENV"
+                | "FNSTENV"
+                | "FLDENV"
+                | "FSAVE"
+                | "FNSAVE"
+                | "FRSTOR"
+        )
+}
+
+/// Encodes an 8087 instruction. A memory operand without a size is a double word (as in NASM).
+fn fpu(m: &str, ops: &[Op]) -> R<Enc> {
+    let mut e = Enc::default();
+    let n = ops.len();
+    // Opcode + ModR/M for a memory operand (segment prefix first), FWAIT before when `wait`.
+    let mem = |e: &mut Enc, wait: bool, op: u8, reg: u8, o: &Op| -> R<()> {
+        let (prefix, rm) = modrm(reg, o)?;
+        if wait {
+            e.b(0x9B);
+        }
+        if let Some(p) = prefix {
+            e.b(p);
+        }
+        e.b(op);
+        e.bytes.extend_from_slice(&rm);
+        Ok(())
+    };
+    let reg2 = |e: &mut Enc, op: u8, base: u8, i: u8| {
+        e.b(op);
+        e.b(base + i);
+    };
+    let size = |o: &Op| match o {
+        Op::Mem(x) => x.size.unwrap_or(4),
+        _ => 0,
+    };
+    let bad = || Err(format!("invalid operands for {m}"));
+    if let Some(code) = fpu_plain(m) {
+        if n != 0 {
+            return Err(format!("{m} has no operands"));
+        }
+        e.bytes.extend_from_slice(code);
+        return Ok(e);
+    }
+    if let Some(r) = FPU_ARITH.iter().position(|x| *x == m) {
+        let r = r as u8;
+        match ops {
+            // FADD = FADDP ST(1), ST; FCOM = FCOM ST(1)
+            [] if r == 2 || r == 3 => reg2(&mut e, 0xD8, 0xC0 | r << 3, 1),
+            [] => {
+                let p = if r >= 4 { r ^ 1 } else { r };
+                reg2(&mut e, 0xDE, 0xC0 | p << 3, 1);
+            }
+            [Op::St(i)] => reg2(&mut e, 0xD8, 0xC0 | r << 3, *i),
+            [o @ Op::Mem(_)] => match size(o) {
+                4 => mem(&mut e, false, 0xD8, r, o)?,
+                8 => mem(&mut e, false, 0xDC, r, o)?,
+                s => return Err(format!("{m} takes a dword or qword operand, not {s} bytes")),
+            },
+            [Op::St(0), Op::St(i)] if r != 2 && r != 3 => reg2(&mut e, 0xD8, 0xC0 | r << 3, *i),
+            [Op::St(i), Op::St(0)] if r != 2 && r != 3 => {
+                let p = if r >= 4 { r ^ 1 } else { r };
+                reg2(&mut e, 0xDC, 0xC0 | p << 3, *i);
+            }
+            _ => return bad(),
+        }
+        return Ok(e);
+    }
+    if let Some(r) = FPU_INT.iter().position(|x| *x == m) {
+        match ops {
+            [o @ Op::Mem(_)] => match size(o) {
+                2 => mem(&mut e, false, 0xDE, r as u8, o)?,
+                4 => mem(&mut e, false, 0xDA, r as u8, o)?,
+                s => return Err(format!("{m} takes a word or dword operand, not {s} bytes")),
+            },
+            _ => return bad(),
+        }
+        return Ok(e);
+    }
+    if let Some(&(_, r)) = FPU_POP.iter().find(|p| p.0 == m) {
+        let p = if r >= 4 { r ^ 1 } else { r };
+        let i = match ops {
+            [] => 1,
+            [Op::St(i)] | [Op::St(i), Op::St(0)] => *i,
+            _ => return bad(),
+        };
+        reg2(&mut e, 0xDE, 0xC0 | p << 3, i);
+        return Ok(e);
+    }
+    match (m, ops) {
+        ("FLD", [Op::St(i)]) => reg2(&mut e, 0xD9, 0xC0, *i),
+        ("FST", [Op::St(i)]) => reg2(&mut e, 0xDD, 0xD0, *i),
+        ("FSTP", [Op::St(i)]) => reg2(&mut e, 0xDD, 0xD8, *i),
+        ("FLD" | "FST" | "FSTP", [o @ Op::Mem(_)]) => {
+            let r = match m {
+                "FLD" => 0,
+                "FST" => 2,
+                _ => 3,
+            };
+            match (size(o), m) {
+                (4, _) => mem(&mut e, false, 0xD9, r, o)?,
+                (8, _) => mem(&mut e, false, 0xDD, r, o)?,
+                (10, "FLD") => mem(&mut e, false, 0xDB, 5, o)?,
+                (10, "FSTP") => mem(&mut e, false, 0xDB, 7, o)?,
+                (s, _) => return Err(format!("{m} takes a dword, qword or tbyte operand, not {s} bytes")),
+            }
+        }
+        ("FILD" | "FIST" | "FISTP", [o @ Op::Mem(_)]) => {
+            let r = match m {
+                "FILD" => 0,
+                "FIST" => 2,
+                _ => 3,
+            };
+            match (size(o), m) {
+                (2, _) => mem(&mut e, false, 0xDF, r, o)?,
+                (4, _) => mem(&mut e, false, 0xDB, r, o)?,
+                (8, "FILD") => mem(&mut e, false, 0xDF, 5, o)?,
+                (8, "FISTP") => mem(&mut e, false, 0xDF, 7, o)?,
+                (s, _) => return Err(format!("{m} takes a word, dword or qword operand, not {s} bytes")),
+            }
+        }
+        ("FBLD" | "FBSTP", [o @ Op::Mem(_)]) => {
+            mem(&mut e, false, 0xDF, if m == "FBLD" { 4 } else { 6 }, o)?;
+        }
+        ("FXCH", []) => reg2(&mut e, 0xD9, 0xC8, 1),
+        ("FXCH", [Op::St(i)] | [Op::St(0), Op::St(i)] | [Op::St(i), Op::St(0)]) => reg2(&mut e, 0xD9, 0xC8, *i),
+        ("FFREE", [Op::St(i)]) => reg2(&mut e, 0xDD, 0xC0, *i),
+        ("FUCOM", []) => reg2(&mut e, 0xDD, 0xE0, 1),
+        ("FUCOM", [Op::St(i)]) => reg2(&mut e, 0xDD, 0xE0, *i),
+        ("FUCOMP", []) => reg2(&mut e, 0xDD, 0xE8, 1),
+        ("FUCOMP", [Op::St(i)]) => reg2(&mut e, 0xDD, 0xE8, *i),
+        // FSTSW AX (80287)
+        ("FSTSW", [Op::R16(0)]) => e.bytes.extend_from_slice(&[0x9B, 0xDF, 0xE0]),
+        ("FNSTSW", [Op::R16(0)]) => e.bytes.extend_from_slice(&[0xDF, 0xE0]),
+        (_, [o @ Op::Mem(_)]) => {
+            let (wait, op, r) = match m {
+                "FLDCW" => (false, 0xD9, 5),
+                "FSTCW" => (true, 0xD9, 7),
+                "FNSTCW" => (false, 0xD9, 7),
+                "FSTSW" => (true, 0xDD, 7),
+                "FNSTSW" => (false, 0xDD, 7),
+                "FLDENV" => (false, 0xD9, 4),
+                "FSTENV" => (true, 0xD9, 6),
+                "FNSTENV" => (false, 0xD9, 6),
+                "FRSTOR" => (false, 0xDD, 4),
+                "FSAVE" => (true, 0xDD, 6),
+                "FNSAVE" => (false, 0xDD, 6),
+                _ => return bad(),
+            };
+            mem(&mut e, wait, op, r, o)?;
+        }
+        _ => return bad(),
+    }
+    Ok(e)
 }

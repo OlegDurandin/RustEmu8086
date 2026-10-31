@@ -9,8 +9,8 @@ use crate::app::{App, Breakpoint, Watch};
 
 pub fn debugger_windows(app: &mut App, ctx: &egui::Context) {
     let w = &app.windows;
-    let (mut bps, mut watch, mut calls, mut alu, mut cond) =
-        (w.breakpoints, w.watch, w.call_stack, w.alu, w.stop_condition);
+    let (mut bps, mut watch, mut calls, mut alu, mut fpu, mut cond) =
+        (w.breakpoints, w.watch, w.call_stack, w.alu, w.fpu, w.stop_condition);
     if !app.panels() {
         egui::Window::new("breakpoints")
             .open(&mut bps)
@@ -32,6 +32,11 @@ pub fn debugger_windows(app: &mut App, ctx: &egui::Context) {
             .default_pos(pos2(240.0, 600.0))
             .default_width(520.0)
             .show(ctx, |ui| alu_ui(app, ui));
+        egui::Window::new("FPU")
+            .open(&mut fpu)
+            .default_pos(pos2(760.0, 380.0))
+            .default_width(520.0)
+            .show(ctx, |ui| fpu_ui(app, ui));
     }
     egui::Window::new("stop on condition")
         .open(&mut cond)
@@ -39,7 +44,7 @@ pub fn debugger_windows(app: &mut App, ctx: &egui::Context) {
         .default_width(460.0)
         .show(ctx, |ui| stop_condition_ui(app, ui));
     let w = &mut app.windows;
-    (w.breakpoints, w.watch, w.call_stack, w.alu, w.stop_condition) = (bps, watch, calls, alu, cond);
+    (w.breakpoints, w.watch, w.call_stack, w.alu, w.fpu, w.stop_condition) = (bps, watch, calls, alu, fpu, cond);
     value_viewer_window(app, ctx);
 }
 
@@ -426,6 +431,83 @@ pub fn call_stack_ui(app: &mut App, ui: &mut Ui) {
 fn bin(v: u32, bits: u32) -> String {
     let s = format!("{v:0w$b}", w = bits as usize);
     s.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" ")
+}
+
+/// The 8087: ST(0)..ST(7) (value, tag, 80-bit hex), the condition codes, TOP, the exceptions and
+/// the control word. What changed during the last step / run is red.
+pub(crate) fn fpu_ui(app: &mut App, ui: &mut Ui) {
+    use rustemu_core::fpu::{Tag, sw, to_f64};
+    let changed = egui::Color32::from_rgb(220, 40, 40);
+    let (f, prev) = (&app.session.machine.sys.fpu, &app.prev_fpu);
+    egui::Grid::new("fpu_regs").striped(true).spacing([14.0, 2.0]).show(ui, |ui| {
+        for h in ["", "value", "tag", "80-bit hex"] {
+            ui.label(RichText::new(h).weak());
+        }
+        ui.end_row();
+        for i in 0..8 {
+            let (v, tag) = (f.st(i), f.st_tag(i));
+            let hot = v != prev.st(i) || tag != prev.st_tag(i);
+            let text = |s: String| {
+                let t = RichText::new(s).monospace();
+                if hot { t.color(changed) } else { t }
+            };
+            ui.label(text(format!("ST({i})")));
+            let value = match tag {
+                Tag::Empty => "empty".to_string(),
+                _ => {
+                    let x = to_f64(v);
+                    if x.is_nan() { "NaN".into() } else { format!("{x}") }
+                }
+            };
+            ui.label(text(value));
+            ui.label(RichText::new(format!("{tag:?}").to_lowercase()).weak());
+            let hex: String = v.iter().rev().map(|b| format!("{b:02X}")).collect();
+            ui.label(text(format!("{} {}", &hex[..4], &hex[4..])));
+            ui.end_row();
+        }
+    });
+    ui.add_space(6.0);
+    let bit = |w: u16, b: u16| (w & b != 0) as u8;
+    let s = f.status;
+    ui.horizontal(|ui| {
+        ui.monospace(format!("TOP = {}", f.top()));
+        ui.separator();
+        let cc = format!("C3 C2 C1 C0 = {} {} {} {}", bit(s, sw::C3), bit(s, sw::C2), bit(s, sw::C1), bit(s, sw::C0));
+        let cc_changed = (s ^ prev.status) & (sw::C0 | sw::C1 | sw::C2 | sw::C3) != 0;
+        let t = RichText::new(cc).monospace();
+        ui.label(if cc_changed { t.color(changed) } else { t }).on_hover_text(
+            "Condition codes: FCOM / FTST / FXAM results (C3 = ZF, C2 = PF, C0 = CF after FSTSW + SAHF)",
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.monospace(format!("status {s:04X}h"));
+        for (b, name, what) in [
+            (sw::IE, "IE", "invalid operation"),
+            (sw::DE, "DE", "denormal operand"),
+            (sw::ZE, "ZE", "zero divide"),
+            (sw::OE, "OE", "overflow"),
+            (sw::UE, "UE", "underflow"),
+            (sw::PE, "PE", "precision (inexact)"),
+        ] {
+            let t = RichText::new(name).monospace();
+            ui.label(if s & b != 0 { t.color(changed).strong() } else { t.weak() }).on_hover_text(what);
+        }
+    });
+    let c = f.control;
+    let precision = ["24 bits", "-", "53 bits", "64 bits"][((c >> 8) & 3) as usize];
+    let rounding = ["to nearest", "down", "up", "toward zero"][((c >> 10) & 3) as usize];
+    ui.monospace(format!("control {c:04X}h  precision {precision}, rounding {rounding}, masks {:02X}h", c & 0x3F));
+    // The bytes as Emu8086's FPU window shows them: the environment (FSTENV) and ST(0)..ST(7) as in
+    // memory (FSAVE), lowest byte first.
+    egui::CollapsingHeader::new("raw bytes (as in Emu8086)").id_salt("fpu_raw").show(ui, |ui| {
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(" ");
+        ui.weak("control register:").on_hover_text("The environment as FSTENV stores it: control word, status word, tag word, instruction and operand addresses");
+        ui.monospace(hex(&f.env_bytes()));
+        ui.weak("FPU registers:").on_hover_text("ST(0)..ST(7), 10 bytes each, as FSAVE stores them");
+        for i in 0..8 {
+            ui.monospace(hex(&f.st(i)));
+        }
+    });
 }
 
 pub(crate) fn alu_ui(app: &mut App, ui: &mut Ui) {
