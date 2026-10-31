@@ -164,6 +164,62 @@ table dw 1, 2, 3
 farptr dd 0xB8000000
 ",
     ),
+    (
+        "define_with_parameters_and_struc",
+        "bits 16
+org 100h
+%define SQ(x) ((x)*(x))
+%define MAX(a, b) ((a) > (b) ? (a) : (b))
+%define CELL(row, col) ((row)*80 + (col))*2
+%define TWICE(x) SQ(x) + SQ(x)
+struc point
+    .x:     resw 1
+    .y:     resw 1
+    .name   resb 10
+    .flag   resb 1
+            alignb 2
+endstruc
+NAMELEN equ 8
+struc rec
+    .id resd 1
+    .tag resb NAMELEN
+endstruc
+start:
+    mov ax, SQ(3)
+    mov bx, MAX(4, 9)
+    mov di, CELL(2, 10)
+    mov cx, TWICE(2)
+    mov ax, [p1 + point.y]
+    mov si, p1
+    mov word [si + point.x], 5
+    mov cx, point_size
+    mov dx, rec_size
+    lea bx, [p2 + point.name]
+    ret
+section .data
+p1: istruc point
+    at point.x, dw 10
+    at point.y, dw 20
+    at point.name, db 'hi', 0
+iend
+p2: istruc point
+    at point.y, dw SQ(5)
+iend
+arr: times 3 dw MAX(1, 2)
+r: istruc rec
+    at rec.id, dd 0x12345678
+    at rec.tag, db 'tag'
+iend
+",
+    ),
+    (
+        "operators",
+        "bits 16
+org 100h
+db (3 > 2), (2 == 2), (1 != 1), !0, (1 && 2), (0 || 3), 2 ^^ 2
+db 1 | 2 == 3, 5 ? 7 : 9, 0 ? 7 : 9, 6 & 3, 1 << 3 | 1, -1 < 0
+",
+    ),
 ];
 
 #[test]
@@ -192,7 +248,10 @@ fn nasm_specific_errors() {
     assert!(err("bits 16\ninc [si]\n").contains("size not specified"));
     assert!(err("bits 32\n").contains("16-bit"));
     assert!(err("bits 16\nsection .weird\n").contains("only .text, .data and .bss"));
-    assert!(err("%define f(x) x+1\nbits 16\n").contains("%define with parameters"));
+    assert!(err("%define f(x, y) x+y\nbits 16\nmov ax, f(1)\n").contains("takes 2 argument(s), not 1"));
+    assert!(err("%define f(x) f(x)\nbits 16\nmov ax, f(1)\n").contains("expands into itself"));
+    assert!(err("bits 16\nstruc s\n.a resw 1\n").contains("has no endstruc"));
+    assert!(err("bits 16\nstruc s\n.a dw 1\nendstruc\n").contains("only resb"));
     assert!(err("bits 16\nmov ax, nothing\n").contains("NOTHING"));
 }
 
@@ -233,6 +292,8 @@ fn dialect_detection() {
         "org 100h\ntimes 10 db 0\n",
         "buf resb 10\n",
         "#nasm#\norg 100h\n",
+        "struc point\n.x resw 1\nendstruc\n",
+        "p: istruc point\niend\n",
     ];
     for s in nasm {
         assert_eq!(detect_dialect("a.asm", s), Dialect::Nasm, "{s}");

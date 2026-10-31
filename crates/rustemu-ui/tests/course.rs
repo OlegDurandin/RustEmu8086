@@ -219,3 +219,23 @@ fn lesson_links_open_the_current_programs() {
         problems.join("\n")
     );
 }
+
+/// Lesson 19: the kernel goes to the floppy from sector 2, the loader to the boot sector; booting
+/// from the floppy runs the loader (with its source) and then the kernel.
+#[test]
+fn lesson_19_boots_from_the_floppy() {
+    let Some(course) = course() else { return };
+    let programs = course.join("programs");
+    let mut s = Session::new();
+    s.load_path(&programs.join("19_kernel.asm")).unwrap();
+    let kernel = s.loaded_bytes().unwrap().to_vec();
+    assert_eq!(s.write_floppy(0, 0, 0, 2, &kernel), Ok(1));
+    s.load_path(&programs.join("19_loader.asm")).unwrap();
+    s.write_boot_sector(0).unwrap();
+    s.boot_from_floppy(0).unwrap();
+    assert!(s.program.is_some(), "the loader keeps its source after booting from the floppy");
+    s.machine.run(1_000_000);
+    let screen = screen(&s);
+    assert!(screen.contains("Loading kernel...") && screen.contains("Kernel started from the floppy!"), "{screen}");
+    assert_eq!(s.machine.cpu.cs(), 0x0800);
+}

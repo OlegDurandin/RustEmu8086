@@ -4,7 +4,7 @@
 use egui::{Align, FontId, RichText, Ui};
 
 use crate::highlight::{Palette, highlight};
-use crate::reference::{self as r, DIRECTIVES, Group, INSTRUCTIONS, INTERRUPTS, NASM_GUIDE, Topic};
+use crate::reference::{self as r, DIRECTIVES, Group, INSTRUCTIONS, INTERRUPTS, Lang, NASM_GUIDE, Topic};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum Tab {
@@ -24,6 +24,8 @@ pub struct RefState {
     pub tab: Tab,
     pub search: String,
     pub topic: Option<Topic>,
+    /// Language of the articles and of the editor tooltips (kept in the settings).
+    pub lang: Lang,
     /// Scroll the list and the article to the selected topic on the next frame.
     scroll: bool,
 }
@@ -51,9 +53,6 @@ impl RefState {
     }
 }
 
-const FLAG_TITLES: [&str; 9] =
-    ["Overflow", "Direction", "Interrupt enable", "Trap", "Sign", "Zero", "Auxiliary carry", "Parity", "Carry"];
-
 pub fn reference_window(st: &mut RefState, ctx: &egui::Context) {
     let mut open = st.open;
     egui::Window::new("reference")
@@ -65,25 +64,33 @@ pub fn reference_window(st: &mut RefState, ctx: &egui::Context) {
 }
 
 pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
+    let l = st.lang;
     ui.horizontal(|ui| {
         for (t, n) in [
-            (Tab::Instructions, "instructions"),
-            (Tab::Interrupts, "interrupts"),
-            (Tab::Directives, "directives"),
-            (Tab::Nasm, "NASM syntax"),
-            (Tab::Quick, "quick reference"),
+            (Tab::Instructions, l.pick("instructions", "инструкции")),
+            (Tab::Interrupts, l.pick("interrupts", "прерывания")),
+            (Tab::Directives, l.pick("directives", "директивы")),
+            (Tab::Nasm, l.pick("NASM syntax", "синтаксис NASM")),
+            (Tab::Quick, l.pick("quick reference", "шпаргалка")),
         ] {
             ui.selectable_value(&mut st.tab, t, n);
         }
         ui.separator();
         if st.tab != Tab::Quick {
-            ui.add(egui::TextEdit::singleline(&mut st.search).hint_text("search").desired_width(180.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut st.search).hint_text(l.pick("search", "поиск")).desired_width(160.0),
+            );
         }
+        // The language of the articles (and of the tooltips in the editor).
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.selectable_value(&mut st.lang, Lang::Ru, "RU").on_hover_text("Справочник на русском");
+            ui.selectable_value(&mut st.lang, Lang::En, "EN").on_hover_text("Reference in English");
+        });
     });
     ui.separator();
     if st.tab == Tab::Quick {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.label(RichText::new(crate::help::HELP).monospace().size(12.5));
+            ui.label(RichText::new(l.pick(crate::help::HELP, crate::help::HELP_RU)).monospace().size(12.5));
         });
         return;
     }
@@ -119,13 +126,13 @@ pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
             };
             egui::ScrollArea::vertical().id_salt(("ref_article", salt)).auto_shrink([false, false]).show(ui, |ui| {
                 match topic {
-                    Some(Topic::Instr(i)) => instruction_article(ui, i),
-                    Some(Topic::Directive(i)) => directive_article(ui, i),
-                    Some(Topic::Int(i, f)) => interrupt_article(ui, i, f, scroll),
-                    Some(Topic::Nasm(i)) => nasm_article(ui, i),
+                    Some(Topic::Instr(i)) => instruction_article(ui, i, l),
+                    Some(Topic::Directive(i)) => directive_article(ui, i, l),
+                    Some(Topic::Int(i, f)) => interrupt_article(ui, i, f, scroll, l),
+                    Some(Topic::Nasm(i)) => nasm_article(ui, i, l),
                     // The guide opens at its overview.
-                    None if st.tab == Tab::Nasm => nasm_article(ui, 0),
-                    None => intro(ui, st.tab),
+                    None if st.tab == Tab::Nasm => nasm_article(ui, 0, l),
+                    None => intro(ui, st.tab, l),
                 }
             });
         });
@@ -133,8 +140,8 @@ pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
 }
 
 fn matches(search: &str, texts: &[&str]) -> bool {
-    let s = search.trim().to_ascii_lowercase();
-    s.is_empty() || texts.iter().any(|t| t.to_ascii_lowercase().contains(&s))
+    let s = search.trim().to_lowercase();
+    s.is_empty() || texts.iter().any(|t| t.to_lowercase().contains(&s))
 }
 
 fn list_item(st: &mut RefState, ui: &mut Ui, topic: Topic, text: RichText, scroll: bool) {
@@ -149,12 +156,13 @@ fn list_item(st: &mut RefState, ui: &mut Ui, topic: Topic, text: RichText, scrol
 }
 
 fn instruction_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
+    let l = st.lang;
     for g in Group::ALL {
         let items: Vec<usize> = (0..INSTRUCTIONS.len())
             .filter(|&i| INSTRUCTIONS[i].group == g)
             .filter(|&i| {
                 let e = &INSTRUCTIONS[i];
-                let mut texts = vec![e.name, e.summary];
+                let mut texts = vec![e.name, e.summary_in(l)];
                 texts.extend(e.aliases);
                 matches(&st.search, &texts)
             })
@@ -162,7 +170,7 @@ fn instruction_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
         if items.is_empty() {
             continue;
         }
-        ui.label(RichText::new(g.title()).strong());
+        ui.label(RichText::new(g.title_in(l)).strong());
         for i in items {
             let e = &INSTRUCTIONS[i];
             let mut name = e.name.to_string();
@@ -177,14 +185,17 @@ fn instruction_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
 }
 
 fn interrupt_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
+    let l = st.lang;
     let searching = !st.search.trim().is_empty();
     for (i, int) in INTERRUPTS.iter().enumerate() {
         let funcs: Vec<&r::Function> = int
             .functions
             .iter()
-            .filter(|f| !searching || matches(&st.search, &[f.title, &r::hex(f.code, int.selector)]))
+            .filter(|f| {
+                !searching || matches(&st.search, &[f.text_in(int.number, l).title, &r::hex(f.code, int.selector)])
+            })
             .collect();
-        let head_match = matches(&st.search, &[int.title, &format!("{:02X}h", int.number)]);
+        let head_match = matches(&st.search, &[int.title_in(l), &format!("{:02X}h", int.number)]);
         if !head_match && funcs.is_empty() {
             continue;
         }
@@ -192,14 +203,15 @@ fn interrupt_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
             st,
             ui,
             Topic::Int(i, None),
-            RichText::new(format!("INT {:02X}h  {}", int.number, int.title)),
+            RichText::new(format!("INT {:02X}h  {}", int.number, int.title_in(l))),
             scroll,
         );
         let expanded = searching || matches!(st.topic, Some(Topic::Int(j, _)) if j == i);
         if expanded {
             ui.indent(("int_funcs", i), |ui| {
                 for f in funcs {
-                    let text = format!("{}={} {}", int.selector, r::hex(f.code, int.selector), f.title);
+                    let text =
+                        format!("{}={} {}", int.selector, r::hex(f.code, int.selector), f.text_in(int.number, l).title);
                     list_item(st, ui, Topic::Int(i, Some(f.code)), RichText::new(text), scroll);
                 }
             });
@@ -209,7 +221,7 @@ fn interrupt_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
 
 fn directive_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
     for (i, d) in DIRECTIVES.iter().enumerate() {
-        let mut texts = vec![d.name, d.summary];
+        let mut texts = vec![d.name, d.summary_in(st.lang)];
         texts.extend(d.aliases);
         if matches(&st.search, &texts) {
             list_item(st, ui, Topic::Directive(i), RichText::new(d.name).monospace(), scroll);
@@ -219,25 +231,27 @@ fn directive_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
 
 /// The sections of the NASM guide and the NASM directives.
 fn nasm_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
-    for (i, s) in NASM_GUIDE.iter().enumerate() {
+    let l = st.lang;
+    for i in 0..NASM_GUIDE.len() {
+        let s = r::nasm_section(i, l);
         if matches(&st.search, &[s.title, s.text, s.example]) {
             list_item(st, ui, Topic::Nasm(i), RichText::new(s.title), scroll);
         }
     }
     ui.add_space(6.0);
-    ui.label(RichText::new("NASM directives").strong());
+    ui.label(RichText::new(l.pick("NASM directives", "Директивы NASM")).strong());
     for (i, d) in DIRECTIVES.iter().enumerate() {
-        let mut texts = vec![d.name, d.summary];
+        let mut texts = vec![d.name, d.summary_in(l)];
         texts.extend(d.aliases);
-        if d.summary.starts_with("NASM:") && matches(&st.search, &texts) {
+        if d.is_nasm() && matches(&st.search, &texts) {
             list_item(st, ui, Topic::Directive(i), RichText::new(d.name).monospace(), scroll);
         }
     }
 }
 
-fn nasm_article(ui: &mut Ui, i: usize) {
-    let s = &NASM_GUIDE[i];
-    ui.weak("NASM syntax");
+fn nasm_article(ui: &mut Ui, i: usize, l: Lang) {
+    let s = r::nasm_section(i, l);
+    ui.weak(l.pick("NASM syntax", "Синтаксис NASM"));
     ui.heading(s.title);
     for paragraph in s.text.split("\n\n") {
         ui.add_space(6.0);
@@ -271,26 +285,33 @@ fn nasm_article(ui: &mut Ui, i: usize) {
         });
     }
     if !s.example.is_empty() {
-        section(ui, "Example");
-        code_block(ui, s.example);
+        section(ui, l.pick("Example", "Пример"));
+        code_block(ui, s.example, l);
     }
 }
 
-fn intro(ui: &mut Ui, tab: Tab) {
+fn intro(ui: &mut Ui, tab: Tab, l: Lang) {
     ui.label(match tab {
-        Tab::Instructions => {
-            "8086 instructions (and the 80186 additions accepted by Emu8086): syntax, flags, examples."
-        }
-        Tab::Interrupts => "BIOS and DOS services available to programs in the emulator.",
-        _ => "Assembler directives and operators.",
+        Tab::Instructions => l.pick(
+            "8086 instructions (and the 80186 additions accepted by Emu8086): syntax, flags, examples.",
+            "Инструкции 8086 (и дополнения 80186, которые понимает Emu8086): синтаксис, флаги, примеры.",
+        ),
+        Tab::Interrupts => l.pick(
+            "BIOS and DOS services available to programs in the emulator.",
+            "Функции BIOS и DOS, доступные программам в эмуляторе.",
+        ),
+        _ => l.pick("Assembler directives and operators.", "Директивы и операторы ассемблера."),
     });
     ui.add_space(6.0);
-    ui.weak("In the editor: hover over an instruction, a directive or INT nn to see a summary; press F1 or ⌘-click to open its article here.");
+    ui.weak(l.pick(
+        "In the editor: hover over an instruction, a directive or INT nn to see a summary; press F1 or ⌘-click to open its article here.",
+        "В редакторе: наведите мышь на инструкцию, директиву или INT nn — появится краткое описание; F1 или ⌘-клик открывает статью здесь.",
+    ));
 }
 
-fn also(ui: &mut Ui, aliases: &[&str]) {
+fn also(ui: &mut Ui, aliases: &[&str], l: Lang) {
     if !aliases.is_empty() {
-        ui.weak(format!("also: {}", aliases.join(", ")));
+        ui.weak(format!("{} {}", l.pick("also:", "также:"), aliases.join(", ")));
     }
 }
 
@@ -299,40 +320,42 @@ fn section(ui: &mut Ui, title: &str) {
     ui.label(RichText::new(title).strong());
 }
 
-fn instruction_article(ui: &mut Ui, i: usize) {
+fn instruction_article(ui: &mut Ui, i: usize, l: Lang) {
     let e = &INSTRUCTIONS[i];
     ui.horizontal(|ui| {
         ui.heading(RichText::new(e.name).monospace());
-        ui.weak(e.group.title());
+        ui.weak(e.group.title_in(l));
     });
-    also(ui, e.aliases);
-    ui.label(RichText::new(e.summary).strong());
-    section(ui, "Syntax");
+    also(ui, e.aliases, l);
+    ui.label(RichText::new(e.summary_in(l)).strong());
+    section(ui, l.pick("Syntax", "Синтаксис"));
     if e.syntax.is_empty() {
         ui.monospace(e.name);
     }
     for s in e.syntax {
-        ui.monospace(if s.is_empty() { e.name.to_string() } else { format!("{} {s}", e.name) });
+        ui.monospace(if s.is_empty() { e.name.to_string() } else { format!("{} {}", e.name, r::syntax_in(s, l)) });
     }
-    if !e.description.is_empty() {
+    let description = e.description_in(l);
+    if !description.is_empty() {
         ui.add_space(6.0);
-        ui.label(e.description);
+        ui.label(description);
     }
-    section(ui, "Flags");
-    flags_table(ui, e.flags);
-    section(ui, "Example");
-    code_block(ui, e.example);
+    section(ui, l.pick("Flags", "Флаги"));
+    flags_table(ui, e.flags, l);
+    section(ui, l.pick("Example", "Пример"));
+    code_block(ui, e.example_in(l), l);
 }
 
-pub fn flags_table(ui: &mut Ui, flags: &str) {
+pub fn flags_table(ui: &mut Ui, flags: &str, l: Lang) {
     let changed = ui.visuals().hyperlink_color;
     let undefined = crate::colors::warn(ui);
+    let titles = r::flag_titles(l);
     egui::Grid::new("flags_table").spacing([10.0, 2.0]).show(ui, |ui| {
-        for (n, t) in r::FLAG_NAMES.iter().zip(FLAG_TITLES) {
+        for (n, t) in r::FLAG_NAMES.iter().zip(titles) {
             ui.label(RichText::new(*n).monospace().strong()).on_hover_text(t);
         }
         ui.end_row();
-        for ((c, n), t) in flags.chars().zip(r::FLAG_NAMES).zip(FLAG_TITLES) {
+        for ((c, n), t) in flags.chars().zip(r::FLAG_NAMES).zip(titles) {
             let text = RichText::new(match c {
                 '-' => "-".to_string(),
                 'u' => "?".to_string(),
@@ -344,48 +367,55 @@ pub fn flags_table(ui: &mut Ui, flags: &str) {
                 'u' => text.color(undefined),
                 _ => text.weak(),
             };
-            ui.label(text).on_hover_text(format!("{n} ({t}): {}", r::flag_effect(c)));
+            ui.label(text).on_hover_text(format!("{n} ({t}): {}", r::flag_effect(c, l)));
         }
         ui.end_row();
     });
-    ui.weak("r = set by the result   0 / 1 = cleared / set   ? = undefined   - = not changed");
+    ui.weak(l.pick(
+        "r = set by the result   0 / 1 = cleared / set   ? = undefined   - = not changed",
+        "r = по результату   0 / 1 = сбрасывается / устанавливается   ? = не определён   - = не меняется",
+    ));
 }
 
-fn code_block(ui: &mut Ui, code: &str) {
+fn code_block(ui: &mut Ui, code: &str, l: Lang) {
     let pal = Palette::for_theme(ui.visuals().dark_mode);
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.add(egui::Label::new(highlight(code, FontId::monospace(12.5), &pal)));
             ui.add_space(16.0);
-            if ui.small_button("copy").on_hover_text("copy the example to the clipboard").clicked() {
+            if ui
+                .small_button(l.pick("copy", "копировать"))
+                .on_hover_text(l.pick("copy the example to the clipboard", "скопировать пример в буфер обмена"))
+                .clicked()
+            {
                 ui.ctx().copy_text(code.to_string());
             }
         });
     });
 }
 
-fn directive_article(ui: &mut Ui, i: usize) {
+fn directive_article(ui: &mut Ui, i: usize, l: Lang) {
     let d = &DIRECTIVES[i];
     ui.heading(RichText::new(d.name).monospace());
-    also(ui, d.aliases);
-    ui.label(RichText::new(d.summary).strong());
+    also(ui, d.aliases, l);
+    ui.label(RichText::new(d.summary_in(l)).strong());
     ui.add_space(6.0);
-    ui.label(d.description);
-    section(ui, "Example");
-    code_block(ui, d.example);
+    ui.label(d.description_in(l));
+    section(ui, l.pick("Example", "Пример"));
+    code_block(ui, d.example_in(l), l);
 }
 
-fn interrupt_article(ui: &mut Ui, i: usize, func: Option<u16>, scroll: bool) {
+fn interrupt_article(ui: &mut Ui, i: usize, func: Option<u16>, scroll: bool, l: Lang) {
     let int = &INTERRUPTS[i];
     ui.heading(RichText::new(format!("INT {:02X}h", int.number)).monospace());
-    ui.label(RichText::new(int.title).strong());
-    ui.label(int.description);
+    ui.label(RichText::new(int.title_in(l)).strong());
+    ui.label(int.description_in(l));
     if int.functions.is_empty() {
-        section(ui, "Example");
-        code_block(ui, &format!("int {:02X}h", int.number));
+        section(ui, l.pick("Example", "Пример"));
+        code_block(ui, &format!("int {:02X}h", int.number), l);
         return;
     }
-    ui.weak(format!("The function number is passed in {}.", int.selector));
+    ui.weak(format!("{} {}.", l.pick("The function number is passed in", "Номер функции передаётся в"), int.selector));
     let band = if ui.visuals().dark_mode {
         egui::Color32::from_rgb(38, 46, 60)
     } else {
@@ -397,11 +427,12 @@ fn interrupt_article(ui: &mut Ui, i: usize, func: Option<u16>, scroll: bool) {
         let frame = egui::Frame::group(ui.style()).fill(if sel { band } else { egui::Color32::TRANSPARENT });
         let resp = frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
+            let t = f.text_in(int.number, l);
             ui.label(
-                RichText::new(format!("{} = {}   {}", int.selector, r::hex(f.code, int.selector), f.title)).strong(),
+                RichText::new(format!("{} = {}   {}", int.selector, r::hex(f.code, int.selector), t.title)).strong(),
             );
             egui::Grid::new(("func", f.code)).num_columns(2).spacing([10.0, 2.0]).show(ui, |ui| {
-                for (k, v) in [("input", f.input), ("output", f.output)] {
+                for (k, v) in [(l.pick("input", "вход"), t.input), (l.pick("output", "выход"), t.output)] {
                     if !v.is_empty() {
                         ui.weak(k);
                         ui.label(v);
@@ -409,7 +440,7 @@ fn interrupt_article(ui: &mut Ui, i: usize, func: Option<u16>, scroll: bool) {
                     }
                 }
             });
-            code_block(ui, f.example);
+            code_block(ui, t.example, l);
         });
         if sel && scroll {
             ui.scroll_to_rect(resp.response.rect.expand(8.0), Some(Align::TOP));

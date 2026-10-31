@@ -86,6 +86,11 @@ pub enum Expr {
     SegOv(u8, Box<Expr>),
 }
 
+/// A comparison (-1 / 0) as NASM's 1 / 0.
+fn one_or_zero(e: Expr) -> Expr {
+    Expr::Bin(BinOp::And, Box::new(e), Box::new(Expr::Num(1)))
+}
+
 pub struct Parser<'a> {
     pub toks: &'a [Token],
     pub pos: usize,
@@ -163,7 +168,92 @@ impl<'a> Parser<'a> {
     }
 
     pub fn expr(&mut self) -> PResult<Expr> {
+        if self.nasm {
+            return self.nasm_cond();
+        }
         self.or_expr()
+    }
+
+    /// NASM: `c ? a : b`, the lowest precedence.
+    fn nasm_cond(&mut self) -> PResult<Expr> {
+        let c = self.nasm_logic(0)?;
+        if !self.eat_p('?') {
+            return Ok(c);
+        }
+        let a = self.nasm_cond()?;
+        if !self.eat_p(':') {
+            return self.err("':' of ?: expected");
+        }
+        let b = self.nasm_cond()?;
+        // a where the mask (c != 0: all ones) is set, b elsewhere.
+        let mask = Expr::Bin(BinOp::Ne, Box::new(c), Box::new(Expr::Num(0)));
+        Ok(Expr::Bin(
+            BinOp::Or,
+            Box::new(Expr::Bin(BinOp::And, Box::new(a), Box::new(mask.clone()))),
+            Box::new(Expr::Bin(BinOp::And, Box::new(b), Box::new(Expr::Un(UnOp::Not, Box::new(mask))))),
+        ))
+    }
+
+    /// NASM's logical `||`, `^^`, `&&` (in this order of precedence): 1 or 0.
+    fn nasm_logic(&mut self, level: usize) -> PResult<Expr> {
+        if level == 3 {
+            return self.nasm_cmp();
+        }
+        let (c, op) = [('|', BinOp::Or), ('^', BinOp::Xor), ('&', BinOp::And)][level];
+        let truth = |e: Expr| Expr::Bin(BinOp::Ne, Box::new(e), Box::new(Expr::Num(0)));
+        let mut l = self.nasm_logic(level + 1)?;
+        while self.eat_two(c, c) {
+            let r = self.nasm_logic(level + 1)?;
+            l = one_or_zero(Expr::Bin(op, Box::new(truth(l)), Box::new(truth(r))));
+        }
+        Ok(l)
+    }
+
+    /// NASM comparisons: below the bitwise operators, 1 when true (MASM: -1).
+    fn nasm_cmp(&mut self) -> PResult<Expr> {
+        let mut l = self.nasm_bits(0)?;
+        loop {
+            let op = if self.eat_two('=', '=') {
+                BinOp::Eq
+            } else if self.eat_two('!', '=') || self.eat_two('<', '>') {
+                BinOp::Ne
+            } else if self.eat_two('<', '=') {
+                BinOp::Le
+            } else if self.eat_two('>', '=') {
+                BinOp::Ge
+            } else if self.eat_p('<') {
+                BinOp::Lt
+            } else if self.eat_p('>') {
+                BinOp::Gt
+            } else if self.eat_p('=') {
+                BinOp::Eq
+            } else {
+                return Ok(l);
+            };
+            let r = self.nasm_bits(0)?;
+            l = one_or_zero(Expr::Bin(op, Box::new(l), Box::new(r)));
+        }
+    }
+
+    /// NASM's bitwise `|`, `^`, `&` (in this order of precedence), above the shifts.
+    fn nasm_bits(&mut self, level: usize) -> PResult<Expr> {
+        if level == 3 {
+            return self.shift_expr();
+        }
+        let (c, op) = [('|', BinOp::Or), ('^', BinOp::Xor), ('&', BinOp::And)][level];
+        let mut l = self.nasm_bits(level + 1)?;
+        loop {
+            // A single operator character: `||` is the logical one.
+            let single = matches!(self.toks.get(self.pos), Some(t) if t.tok == Tok::P(c))
+                && !matches!((self.toks.get(self.pos), self.toks.get(self.pos + 1)),
+                    (Some(x), Some(y)) if y.tok == Tok::P(c) && y.col == x.col + 1);
+            if !single {
+                return Ok(l);
+            }
+            self.pos += 1;
+            let r = self.nasm_bits(level + 1)?;
+            l = Expr::Bin(op, Box::new(l), Box::new(r));
+        }
     }
 
     /// Consumes two adjacent punctuation characters `ab` (`==`, `!=`, `<=`, ...).
