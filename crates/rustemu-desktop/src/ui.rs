@@ -196,6 +196,7 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
         if ui.button("ASCII Codes").clicked() {
             app.windows.ascii = !app.windows.ascii;
         }
+        ui.menu_button("Options", |ui| rustemu_ui::windows::options_menu(app, ui));
         ui.menu_button("Help", |ui| {
             use rustemu_ui::reference_ui::Tab;
             for (tab, label) in [

@@ -420,15 +420,26 @@ pub fn assemble(name: &str, source: &str, loader: &mut dyn FileLoader) -> Result
     assemble_dialect(name, source, loader, None)
 }
 
-/// Assembles source text in the given dialect (`None`: detect it).
+/// Assembles source text in the given dialect (`None`: detect it). A detected dialect is a guess:
+/// when the program does not assemble in it but does in the other one, that one is used; when
+/// neither works, the errors are those of the detected dialect.
 pub fn assemble_dialect(
     name: &str,
     source: &str,
     loader: &mut dyn FileLoader,
     dialect: Option<Dialect>,
 ) -> Result<Program, AsmErrors> {
-    let dialect = dialect.unwrap_or_else(|| detect_dialect(name, source));
-    asm::assemble(name, source, loader, dialect).map_err(|(errors, files)| AsmErrors { errors, files })
+    let run = |loader: &mut dyn FileLoader, d| {
+        asm::assemble(name, source, loader, d).map_err(|(errors, files)| AsmErrors { errors, files })
+    };
+    match dialect {
+        Some(d) => run(loader, d),
+        None => {
+            let guess = detect_dialect(name, source);
+            let other = if guess == Dialect::Masm { Dialect::Nasm } else { Dialect::Masm };
+            run(loader, guess).or_else(|errors| run(loader, other).map_err(|_| errors))
+        }
+    }
 }
 
 /// Assembles source text; only the built-in include files are available.

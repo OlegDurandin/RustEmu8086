@@ -125,7 +125,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       в развёртке макроса — вызов целиком; синтаксические — токен из лексера, если строка не изменена препроцессором.
       GUI: `(строка:колонка)` в сообщениях, волнистое подчёркивание (`App::error_spans`), клик выделяет
       (`App::jump_to_message`)
-- [x] 2.9 Диалект NASM (`-f bin`): автоопределение / `#nasm#` / `.nasm` / настройка; COM / BOOT / BIN по ORG;
+- [x] 2.9 Диалект NASM (`-f bin`): автоопределение (`detect_dialect`; не собралось — `assemble_dialect` пробует другой
+      диалект, ошибки — определённого) / `#nasm#` / `.nasm` / настройка; COM / BOOT / BIN по ORG;
       тест `nasm_dialect` сверяет программы с настоящим `nasm -f bin` байт в байт. Нет: EXE, `%define` с
       параметрами, `%0`/`%rotate`/greedy-параметры, `incbin`, `struc`, контекстные макросы; дальний Jcc — пара 8086
 - [ ] 2.8 Недостающее: `STRUC`, `IRP/IRPC`, `ASSUME`-автопрефиксы, `.binf`-файл — проверить,
@@ -184,7 +185,8 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 5.12 Отладка на уровне исходника: `Session::view_at` (ленивый вход в макрос: на первой инструкции
       развёртки показывается строка вызова; `LineInfo.chain` — вся цепочка вложенности), Step Over/Out
       (`Session::step_goal`/`run_step_goal`, глубина по CALL/INT↔RET/IRET), кнопка Step out (⇧F11)
-- [x] 5.13 Интерфейс как в Emu8086: меню File/Edit/Bookmarks/Assembler/Emulator/Math/ASCII Codes/Help,
+- [x] 5.13 Интерфейс как в Emu8086: меню File/Edit/Bookmarks/Assembler/Emulator/Math/ASCII Codes/Options/Help (Options — `windows::options_menu`:
+      окна, синтаксис, тема, all options…; и в меню ⋮ планшета),
       панель New/Open/Examples/Save/Compile/Emulate/Calculator/Convertor/Options/Help/About, окно
       «choose code template» при New, закладки (`editcmd.rs`), калькулятор (`calc.rs`, `rustemu_asm::evaluate`),
       окно options, горячие клавиши редактора Emu8086 (⌃Q/⌃W/⌃L/⌃U/⌃G/⌃H, F2/F3)
@@ -264,7 +266,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       включает `rustemu-ui` только для нативной цели). Итого wasm 10,3 → 7,2 МБ, gzip 4,0 → 2,7 МБ. Прогресс загрузки —
       initializer trunk `progress.mjs`; trunk передаёт размер wasm до wasm-opt, хук `wasm_size.sh` (Trunk.toml) ставит настоящий
 - [ ] 6.6 Синтаксис FASM (`#fasm#`) — не поддерживается
-- [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, масштаб экрана, задержка,
+- [x] 6.2 Настройки и сессия (`Settings` через eframe persistence): тема, шрифт, задержка (размер экрана — размер окна screen: `Fit::Whole`, по центру; зума нет),
       открытые окна (положения хранит egui; окна программы — эмулятор, экран, память… — при запуске закрыты, как в
       Emu8086, и открываются при первом emulate: `App::deferred_tools`, `Windows::take_program_tools`), галочки отладки; сессия файла (`FileSession`, последние 30, ключ —
       путь или `example:имя`): точки останова с условиями (в т.ч. в `emu8086.inc` — по имени файла, `pending_breakpoints`),

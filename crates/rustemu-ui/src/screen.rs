@@ -15,13 +15,11 @@ pub struct ScreenState {
     texture: Option<TextureHandle>,
     /// The CP437 glyphs of the text modes (see [`glyph_atlas`]).
     glyphs: Option<TextureHandle>,
-    /// Text size: a character cell is `font_size * 1.25` high and half as wide.
-    pub font_size: f32,
 }
 
 impl ScreenState {
     pub fn new() -> Self {
-        ScreenState { font_size: 13.0, ..Default::default() }
+        ScreenState::default()
     }
 }
 
@@ -61,7 +59,9 @@ pub fn screen_window(app: &mut App, ctx: &egui::Context) {
         .id(egui::Id::unique("screen_window"))
         .open(&mut open)
         .default_pos(pos2(700.0, 64.0))
-        .resizable(false)
+        // The screen fills the window: drag its edge to make it larger or smaller.
+        .default_size([660.0, 440.0])
+        .min_size([240.0, 160.0])
         .show(ctx, |ui| screen_ui(app, ui));
     app.windows.screen = open;
 }
@@ -69,9 +69,7 @@ pub fn screen_window(app: &mut App, ctx: &egui::Context) {
 /// Size of the screen view.
 #[derive(Clone, Copy)]
 pub enum Fit {
-    /// The zoom of the screen window.
-    Zoom,
-    /// The whole screen, as large as fits (tablet layout).
+    /// The whole screen, as large as fits (the screen window, a panel, the tablet layout).
     Whole(egui::Vec2),
     /// Text as wide as fits (at most the given font size), only the rows around the cursor that fit
     /// (next to the on-screen keyboard). Graphics modes are shown whole.
@@ -80,21 +78,13 @@ pub enum Fit {
 
 /// The screen itself with keyboard and mouse input.
 pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
-    if app.screen.font_size == 0.0 {
-        app.screen.font_size = 13.0;
-    }
     let mem = &app.session.machine.sys.mem;
     let mode = Video::mode(mem);
     let (cols, rows) = (Video::cols(mem) as f32, Video::rows(mem) as f32);
     let text = Video::is_text(mem);
     let ppp = ui.ctx().pixels_per_point();
-    // Character cells of 8x16 glyph pixels. The zoomed window uses whole screen pixels per glyph
-    // pixel (sharp at any zoom); fitted views take the space there is, in whole screen pixels.
+    // Character cells of 8x16 glyph pixels, as large as fits, in whole screen pixels.
     let (cw, ch) = match fit {
-        Fit::Zoom => {
-            let k = (app.screen.font_size * 1.25 * ppp / 16.0).round().max(1.0);
-            (8.0 * k / ppp, 16.0 * k / ppp)
-        }
         Fit::Whole(max) if text => fitted_cell((max.x / cols).min(max.y / rows / 2.0), ppp),
         Fit::Cursor(max, limit) if text => fitted_cell((max.x / cols).min(limit * 0.625).min(max.y / 2.0), ppp),
         _ => (0.0, 0.0),
@@ -114,7 +104,6 @@ pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
             let k = (max.x / 640.0).min(max.y / 400.0);
             vec2(640.0 * k, 400.0 * k)
         }
-        Fit::Zoom => vec2(640.0, 400.0),
     };
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let id = resp.id;
@@ -176,43 +165,49 @@ pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
 }
 
 pub(crate) fn screen_ui(app: &mut App, ui: &mut Ui) {
-    // A panel shows the whole screen in the space it has; the window has a zoom.
-    let panel = app.panels();
-    let fit = if panel { Fit::Whole((ui.available_size() - vec2(0.0, 28.0)).max(vec2(80.0, 50.0))) } else { Fit::Zoom };
-    let focused = screen_view(app, ui, fit).has_focus();
-    ui.horizontal(|ui| {
-        let waiting = app.session.machine.is_waiting_input();
-        if waiting {
-            ui.colored_label(crate::colors::warn(ui), "⌨ waiting for input");
-        } else if focused {
-            ui.weak("keyboard → emulator");
-        } else {
-            ui.weak("click the screen to type");
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("copy").on_hover_text("Copy the text on the screen (⌘C)").clicked() {
-                ui.ctx().copy_text(screen_text(&app.session.machine.sys.mem));
+    // The whole screen in the space there is (window or panel), the controls under it; centred
+    // when the space is not 80x25-shaped.
+    let fit = Fit::Whole((ui.available_size() - vec2(0.0, 28.0)).max(vec2(80.0, 50.0)));
+    ui.vertical_centered(|ui| screen_with_controls(app, ui, fit));
+}
+
+fn screen_with_controls(app: &mut App, ui: &mut Ui, fit: Fit) {
+    let screen = screen_view(app, ui, fit);
+    let focused = screen.has_focus();
+    // The controls go right under the screen, as wide as it.
+    ui.allocate_ui(vec2(screen.rect.width(), ui.spacing().interact_size.y), |ui| {
+        ui.set_max_width(screen.rect.width());
+        ui.horizontal(|ui| {
+            let waiting = app.session.machine.is_waiting_input();
+            if waiting {
+                ui.colored_label(crate::colors::warn(ui), "⌨ waiting for input");
+            } else if focused {
+                ui.weak("keyboard → emulator");
+            } else {
+                ui.weak("click the screen to type");
             }
-            if ui
-                .small_button("paste")
-                .on_hover_text("Type the clipboard text into the program (⌘V); new lines become Enter")
-                .clicked()
-            {
-                paste_from_clipboard(app);
-                app.screen.focus_request = true;
-            }
-            if ui.small_button("clear").on_hover_text("Clear the screen").clicked() {
-                let m = &mut app.session.machine.sys.mem;
-                let mode = Video::mode(m);
-                Video::set_mode(m, mode);
-            }
-            if !panel {
-                ui.add(egui::Slider::new(&mut app.screen.font_size, 10.0..=22.0).show_value(false).text("zoom"));
-            }
-            let n = app.session.machine.sys.keys.len();
-            if n > 0 {
-                ui.weak(format!("{n} key(s) buffered"));
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("copy").on_hover_text("Copy the text on the screen (⌘C)").clicked() {
+                    ui.ctx().copy_text(screen_text(&app.session.machine.sys.mem));
+                }
+                if ui
+                    .small_button("paste")
+                    .on_hover_text("Type the clipboard text into the program (⌘V); new lines become Enter")
+                    .clicked()
+                {
+                    paste_from_clipboard(app);
+                    app.screen.focus_request = true;
+                }
+                if ui.small_button("clear").on_hover_text("Clear the screen").clicked() {
+                    let m = &mut app.session.machine.sys.mem;
+                    let mode = Video::mode(m);
+                    Video::set_mode(m, mode);
+                }
+                let n = app.session.machine.sys.keys.len();
+                if n > 0 {
+                    ui.weak(format!("{n} key(s) buffered"));
+                }
+            });
         });
     });
 }
