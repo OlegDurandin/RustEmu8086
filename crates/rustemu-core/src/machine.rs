@@ -32,7 +32,10 @@ pub struct System {
     /// Keyboard buffer: (scan code << 8) | ASCII.
     pub keys: VecDeque<u16>,
     pub irq: VecDeque<u8>,
-    /// Port I/O, an accepted IRQ or a BIOS/DOS service happened (see [`Machine::step`] history).
+    /// The 8087 coprocessor.
+    pub fpu: crate::fpu::Fpu,
+    /// Port I/O, an accepted IRQ, a BIOS/DOS service or an 8087 instruction happened (see
+    /// [`Machine::step`] history).
     pub(crate) touched: bool,
 }
 
@@ -65,6 +68,10 @@ impl Bus for System {
         let v = self.irq.pop_front();
         self.touched |= v.is_some();
         v
+    }
+    fn fpu(&mut self) -> Option<&mut crate::fpu::Fpu> {
+        self.touched = true;
+        Some(&mut self.fpu)
     }
 }
 
@@ -208,6 +215,7 @@ struct SystemSnapshot {
     wait_until: Option<web_time::Instant>,
     floppy_lens: Vec<usize>,
     floppy_undo: Vec<(u8, usize, u8)>,
+    fpu: crate::fpu::Fpu,
 }
 
 /// A saved copy of the whole machine ("save the emulator's state" in Emu8086). Files the program
@@ -215,6 +223,7 @@ struct SystemSnapshot {
 #[derive(Clone)]
 pub struct MachineState {
     cpu: Cpu,
+    fpu: crate::fpu::Fpu,
     mem: Vec<u8>,
     dev: Devices,
     keys: VecDeque<u16>,
@@ -286,6 +295,8 @@ impl Machine {
                 dev: Devices::new(),
                 keys: VecDeque::new(),
                 irq: VecDeque::new(),
+                // ... and the 8087 coprocessor (the ESC instructions).
+                fpu: crate::fpu::Fpu::new(),
                 touched: false,
             },
             breakpoints: HashSet::new(),
@@ -365,6 +376,7 @@ impl Machine {
         self.sys.keys.clear();
         self.sys.irq.clear();
         self.cpu.reset();
+        self.sys.fpu = crate::fpu::Fpu::new();
         self.output.clear();
         self.log.clear();
         self.terminated = None;
@@ -762,7 +774,8 @@ impl Machine {
                 break;
             }
         }
-        matches!(op, 0x62 | 0x6C..=0x6F | 0xCC..=0xCE | 0xD4 | 0xE4..=0xE7 | 0xEC..=0xEF | 0xF6 | 0xF7)
+        // ... and ESC: the 8087 state is saved only for its instructions.
+        matches!(op, 0x62 | 0x6C..=0x6F | 0xCC..=0xCE | 0xD4 | 0xD8..=0xDF | 0xE4..=0xE7 | 0xEC..=0xEF | 0xF6 | 0xF7)
     }
 
     fn begin_system_snapshot(&mut self) -> SystemSnapshot {
@@ -777,6 +790,7 @@ impl Machine {
             wait_until: self.wait_until,
             floppy_lens: self.floppies.iter().map(Vec::len).collect(),
             floppy_undo: Vec::new(),
+            fpu: self.sys.fpu.clone(),
         }
     }
 
@@ -790,6 +804,7 @@ impl Machine {
 
     fn system_unchanged(&self, s: &SystemSnapshot) -> bool {
         s.floppy_undo.is_empty()
+            && self.sys.fpu == s.fpu
             && self.sys.keys == s.keys
             && self.sys.irq == s.irq
             && s.dev.is_unchanged(&self.sys.dev)
@@ -863,6 +878,7 @@ impl Machine {
                     let sys = *sys;
                     self.sys.keys = sys.keys;
                     self.sys.irq = sys.irq;
+                    self.sys.fpu = sys.fpu;
                     self.sys.dev.restore(sys.dev);
                     self.dos.restore(sys.dos);
                     self.mouse = sys.mouse;
@@ -899,6 +915,7 @@ impl Machine {
     pub fn save_state(&self) -> MachineState {
         MachineState {
             cpu: self.cpu.clone(),
+            fpu: self.sys.fpu.clone(),
             mem: self.sys.mem.slice(0, crate::bus::MEM_SIZE).to_vec(),
             dev: self.sys.dev.clone(),
             keys: self.sys.keys.clone(),
@@ -919,6 +936,7 @@ impl Machine {
         self.sys.mem.set_journaling(false);
         self.sys.mem.load(0, &s.mem);
         self.cpu = s.cpu;
+        self.sys.fpu = s.fpu;
         self.sys.dev = s.dev;
         self.sys.dev.cancel_snapshot();
         self.sys.keys = s.keys;

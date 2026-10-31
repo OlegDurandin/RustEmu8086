@@ -30,6 +30,11 @@ pub trait Bus {
         self.port_out8(port.wrapping_add(1), (val >> 8) as u8);
     }
 
+    /// The 8087 coprocessor, if the machine has one (otherwise ESC instructions are ignored).
+    fn fpu(&mut self) -> Option<&mut crate::fpu::Fpu> {
+        None
+    }
+
     /// Returns the vector of a pending maskable hardware interrupt and acknowledges it.
     /// Called only when the CPU is able to accept interrupts (IF=1).
     fn take_irq(&mut self) -> Option<u8> {

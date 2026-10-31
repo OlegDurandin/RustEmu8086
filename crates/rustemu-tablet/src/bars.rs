@@ -192,6 +192,7 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
     ui.checkbox(&mut w.symbols, "Symbol table");
     ui.checkbox(&mut w.listing, "Listing");
     ui.checkbox(&mut w.alu, "ALU");
+    ui.checkbox(&mut w.fpu, "FPU");
     ui.checkbox(&mut w.stop_condition, "Stop on condition");
     ui.checkbox(&mut w.console, "Debug console");
     ui.separator();

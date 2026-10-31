@@ -38,6 +38,10 @@ impl Session {
                     let len = (start + l.len - addr).min(limit);
                     let unit = l.data_size.max(1) as u32;
                     let unit = if (addr - start).is_multiple_of(unit) { unit } else { 1 };
+                    if l.data_float && matches!(unit, 4 | 8 | 10) && len >= unit {
+                        let (len, text) = float_text(mem.slice(addr, len as usize), unit as usize);
+                        return CodeRow { len: len as u32, text, data: true };
+                    }
                     let (len, text) = data_text(mem.slice(addr, len as usize), unit as usize);
                     return CodeRow { len: len as u32, text, data: true };
                 }
@@ -73,6 +77,30 @@ fn printable(b: u8) -> bool {
 
 /// `DB`/`DW`/`DD` text for the start of `b` (elements of `unit` bytes): the number of bytes shown
 /// and the text. A run of equal values (other than characters) becomes `n DUP (v)`.
+/// `DD 1.5, 2.0` for floating-point data (4, 8 or 10 bytes each): as many as fit in a row.
+fn float_text(b: &[u8], unit: usize) -> (usize, String) {
+    let dir = match unit {
+        4 => "DD",
+        8 => "DQ",
+        _ => "DT",
+    };
+    let mut items: Vec<String> = Vec::new();
+    let mut width = 0;
+    for e in b.chunks_exact(unit) {
+        if !items.is_empty() && width >= ROW_CHARS {
+            break;
+        }
+        let s = match unit {
+            4 => format!("{:?}", f32::from_le_bytes(e.try_into().unwrap())),
+            8 => format!("{:?}", f64::from_le_bytes(e.try_into().unwrap())),
+            _ => format!("{:?}", rustemu_core::fpu::to_f64(e.try_into().unwrap())),
+        };
+        width += s.len() + 2;
+        items.push(s);
+    }
+    (items.len() * unit, format!("{dir} {}", items.join(", ")))
+}
+
 fn data_text(b: &[u8], unit: usize) -> (usize, String) {
     let unit = if matches!(unit, 2 | 4) && b.len() >= unit { unit } else { 1 };
     let dir = match unit {

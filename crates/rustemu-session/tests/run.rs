@@ -1034,3 +1034,35 @@ fn disassembly_shows_data_as_data() {
     assert_eq!(row(start + 2).text, "NOP");
     assert!(!row(start + 2).data && row(start + 3).data);
 }
+
+#[test]
+fn fpu_8087_program() {
+    let (out, ev) = run_example("fpu.asm", "");
+    assert_eq!(out, "5\r\n14142\r\npi > 3\r\n");
+    assert_eq!(ev, Event::Terminated(0));
+    // Floating-point data are shown as numbers in the disassembly.
+    let mut s = Session::new();
+    s.load_program(rustemu_asm::assemble_str("org 100h\nfld x\nret\nx dd 2.0, 0.5\ny dq -1.25\nz dt 3.0\n").unwrap())
+        .unwrap();
+    let rows = code_rows(&s, 8, true);
+    for want in ["DD 2.0, 0.5", "DQ -1.25", "DT 3.0"] {
+        assert!(rows.iter().any(|r| r.ends_with(want)), "{want}: {rows:?}");
+    }
+}
+
+#[test]
+fn fpu_step_back() {
+    let mut s = Session::new();
+    s.load_program(rustemu_asm::assemble_str("org 100h\nfinit\nfld1\nfldpi\nfaddp\nret\n").unwrap()).unwrap();
+    for _ in 0..5 {
+        s.machine.step();
+    }
+    let after = s.machine.sys.fpu.clone();
+    assert_eq!(after.top(), 7);
+    assert!((rustemu_core::fpu::to_f64(after.st(0)) - (1.0 + std::f64::consts::PI)).abs() < 1e-15);
+    // Back over FADDP and FLDPI: the stack holds 1.0 alone again.
+    assert!(s.machine.step_back() && s.machine.step_back());
+    let f = &s.machine.sys.fpu;
+    assert_eq!((f.top(), rustemu_core::fpu::to_f64(f.st(0))), (7, 1.0));
+    assert_eq!(f.st_tag(1), rustemu_core::fpu::Tag::Empty);
+}

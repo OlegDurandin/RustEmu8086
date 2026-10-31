@@ -121,6 +121,7 @@ impl App {
     /// Remembers the state before an execution command (changed registers and watches are highlighted).
     pub fn begin_exec(&mut self) {
         self.prev_cpu = self.session.machine.cpu.clone();
+        self.prev_fpu = self.session.machine.sys.fpu.clone();
         self.code_view_pinned = false;
         for i in 0..self.watches.len() {
             self.watches[i].before = self.watch_value(i).ok();
@@ -272,6 +273,7 @@ impl App {
                 if (now - self.last_step) * 1000.0 >= self.settings.step_delay_ms as f64 {
                     self.last_step = now;
                     self.prev_cpu = self.session.machine.cpu.clone();
+                    self.prev_fpu = self.session.machine.sys.fpu.clone();
                     let ev = self.session.machine.step();
                     self.handle_event(ev);
                     if self.run != RunMode::Paused && self.at_breakpoint() {

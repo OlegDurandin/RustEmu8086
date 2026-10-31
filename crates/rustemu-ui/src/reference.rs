@@ -293,7 +293,7 @@ mod tests {
             "JNC", "JNE", "JNG", "JNGE", "JNL", "JNLE", "JNO", "JNP", "JNS", "JO", "JP", "JPE", "JPO", "JS", "JZ",
             "POPA", "PUSHA", "LEAVE",
         ];
-        for m in list {
+        for m in list.into_iter().chain(rustemu_asm::encode::FPU_MNEMONICS.iter().copied()) {
             assert!(rustemu_asm::encode::is_mnemonic(m), "{m}");
             assert!(find_instruction(m).is_some(), "{m}");
         }

@@ -292,6 +292,7 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
         ui.checkbox(&mut w.watch, "Watch");
         ui.checkbox(&mut w.call_stack, "Call stack");
         ui.checkbox(&mut w.alu, "ALU");
+        ui.checkbox(&mut w.fpu, "FPU");
     });
     if ui.button("Clear all breakpoints").clicked() {
         app.bp_lines.clear();
