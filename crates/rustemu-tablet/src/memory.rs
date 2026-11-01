@@ -411,14 +411,14 @@ fn hex_typing(app: &mut App, m: &mut MemoryView, ui: &Ui, bpr: u16) {
 fn go_to(app: &mut App, m: &mut MemoryView) {
     let text = m.goto_text.trim().to_string();
     let parsed = if text.contains(':') {
-        rustemu_ui::debug::parse_addr(app, &text)
+        rustemu_ui::inspect::parse_addr(app, &text)
     } else {
         // An offset in the current segment.
         u32::from_str_radix(text.trim_end_matches(['h', 'H']), 16)
             .ok()
             .filter(|v| *v <= 0xFFFF)
             .map(|v| linear(m.seg.value(app), v as u16))
-            .or_else(|| rustemu_ui::debug::parse_addr(app, &text))
+            .or_else(|| rustemu_ui::inspect::parse_addr(app, &text))
     };
     match parsed {
         Some(a) => show_address(app, m, a),
@@ -496,7 +496,7 @@ pub(crate) fn inspector_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, rec
 
 pub(crate) fn segments_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, rect: Rect) {
     let (_, mut b) = card(ui, rect, "SEGMENTS");
-    let prev = app.prev_cpu.sregs;
+    let prev = app.exec.prev_cpu.sregs;
     let field_w = (b.available_width() * 0.55).max(90.0);
     let mut show = None;
     egui::Grid::new("t_segs").num_columns(2).spacing([10.0, 8.0]).show(&mut b, |ui| {

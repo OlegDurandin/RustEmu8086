@@ -35,84 +35,85 @@ fn fold(s: &str, case: bool) -> String {
 
 /// Selects the next (or previous) occurrence of the query, wrapping around.
 pub fn find_next(app: &mut App, backwards: bool) -> bool {
-    let q = fold(&app.find.query, app.find.case_sensitive);
+    let q = fold(&app.editor.find.query, app.editor.find.case_sensitive);
     if q.is_empty() {
         return false;
     }
-    let hay = fold(&app.text, app.find.case_sensitive);
-    let (sel_a, sel_b) = app.selection;
+    let hay = fold(&app.doc.text, app.editor.find.case_sensitive);
+    let (sel_a, sel_b) = app.editor.selection;
     let found = if backwards {
-        let before = char_to_byte(&app.text, sel_a);
+        let before = char_to_byte(&app.doc.text, sel_a);
         hay[..before].rfind(&q).or_else(|| hay.rfind(&q))
     } else {
-        let after = char_to_byte(&app.text, sel_b);
+        let after = char_to_byte(&app.doc.text, sel_b);
         hay[after..].find(&q).map(|i| i + after).or_else(|| hay.find(&q))
     };
     match found {
         Some(b) => {
-            let start = byte_to_char(&app.text, b);
-            let end = start + app.find.query.chars().count();
-            app.pending_select = Some((start, end));
-            app.selection = (start, end);
-            app.find.message.clear();
+            let start = byte_to_char(&app.doc.text, b);
+            let end = start + app.editor.find.query.chars().count();
+            app.editor.pending_select = Some((start, end));
+            app.editor.selection = (start, end);
+            app.editor.find.message.clear();
             true
         }
         None => {
-            app.find.message = "not found".into();
+            app.editor.find.message = "not found".into();
             false
         }
     }
 }
 
 fn selection_matches(app: &App) -> bool {
-    let (a, b) = app.selection;
-    let (ba, bb) = (char_to_byte(&app.text, a), char_to_byte(&app.text, b));
-    fold(&app.text[ba..bb], app.find.case_sensitive) == fold(&app.find.query, app.find.case_sensitive)
-        && !app.find.query.is_empty()
+    let (a, b) = app.editor.selection;
+    let (ba, bb) = (char_to_byte(&app.doc.text, a), char_to_byte(&app.doc.text, b));
+    fold(&app.doc.text[ba..bb], app.editor.find.case_sensitive)
+        == fold(&app.editor.find.query, app.editor.find.case_sensitive)
+        && !app.editor.find.query.is_empty()
 }
 
 pub fn replace_one(app: &mut App) {
     if selection_matches(app) {
-        let (a, b) = app.selection;
-        let (ba, bb) = (char_to_byte(&app.text, a), char_to_byte(&app.text, b));
-        let rep = app.find.replace.clone();
-        app.text.replace_range(ba..bb, &rep);
+        let (a, b) = app.editor.selection;
+        let (ba, bb) = (char_to_byte(&app.doc.text, a), char_to_byte(&app.doc.text, b));
+        let rep = app.editor.find.replace.clone();
+        app.doc.text.replace_range(ba..bb, &rep);
         let end = a + rep.chars().count();
-        app.selection = (end, end);
+        app.editor.selection = (end, end);
     }
     find_next(app, false);
 }
 
 pub fn replace_all(app: &mut App) {
-    let q = fold(&app.find.query, app.find.case_sensitive);
+    let q = fold(&app.editor.find.query, app.editor.find.case_sensitive);
     if q.is_empty() {
         return;
     }
-    let hay = fold(&app.text, app.find.case_sensitive);
-    let mut out = String::with_capacity(app.text.len());
+    let hay = fold(&app.doc.text, app.editor.find.case_sensitive);
+    let mut out = String::with_capacity(app.doc.text.len());
     let mut last = 0;
     let mut n = 0;
     for (i, _) in hay.match_indices(&q) {
-        out.push_str(&app.text[last..i]);
-        out.push_str(&app.find.replace);
+        out.push_str(&app.doc.text[last..i]);
+        out.push_str(&app.editor.find.replace);
         last = i + q.len();
         n += 1;
     }
-    out.push_str(&app.text[last..]);
-    app.text = out;
-    app.find.message = format!("{n} replaced");
+    out.push_str(&app.doc.text[last..]);
+    app.doc.text = out;
+    app.editor.find.message = format!("{n} replaced");
 }
 
 /// Adds or removes a leading `;` on every line touched by the selection.
 pub fn toggle_comment(app: &mut App) {
-    let (a, b) = app.selection;
-    let first = app.text.chars().take(a).filter(|&c| c == '\n').count();
-    let mut last = app.text.chars().take(b).filter(|&c| c == '\n').count();
+    let (a, b) = app.editor.selection;
+    let first = app.doc.text.chars().take(a).filter(|&c| c == '\n').count();
+    let mut last = app.doc.text.chars().take(b).filter(|&c| c == '\n').count();
     // A selection ending at the start of a line does not include that line.
-    if b > a && app.text.chars().nth(b.saturating_sub(1)) == Some('\n') {
+    if b > a && app.doc.text.chars().nth(b.saturating_sub(1)) == Some('\n') {
         last = last.saturating_sub(1).max(first);
     }
-    let mut lines: Vec<String> = app.text.split('\n').map(str::to_string).collect();
+    let mut lines: Vec<String> = app.doc.text.split('\n').map(str::to_string).collect();
     let range = first..=last.min(lines.len().saturating_sub(1));
     let all_commented = lines[range.clone()].iter().all(|l| l.trim().is_empty() || l.trim_start().starts_with(';'));
     for l in &mut lines[range.clone()] {
@@ -125,23 +126,23 @@ pub fn toggle_comment(app: &mut App) {
             l.insert_str(0, "; ");
         }
     }
-    app.text = lines.join("\n");
-    let start = line_start_char(&app.text, *range.start() as u32 + 1);
-    let end = line_start_char(&app.text, *range.end() as u32 + 2).saturating_sub(1);
-    app.pending_select = Some((start, end.max(start)));
+    app.doc.text = lines.join("\n");
+    let start = line_start_char(&app.doc.text, *range.start() as u32 + 1);
+    let end = line_start_char(&app.doc.text, *range.end() as u32 + 2).saturating_sub(1);
+    app.editor.pending_select = Some((start, end.max(start)));
 }
 
 pub fn find_bar(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut app.find.query).hint_text("find").desired_width(200.0));
-        if app.find.focus {
+        let r = ui.add(egui::TextEdit::singleline(&mut app.editor.find.query).hint_text("find").desired_width(200.0));
+        if app.editor.find.focus {
             r.request_focus();
-            app.find.focus = false;
+            app.editor.find.focus = false;
         }
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             let back = ui.input(|i| i.modifiers.shift);
             find_next(app, back);
-            app.find.focus = true;
+            app.editor.find.focus = true;
         }
         if ui.button("▲").on_hover_text("previous (⇧⌘G)").clicked() {
             find_next(app, true);
@@ -149,50 +150,51 @@ pub fn find_bar(app: &mut App, ui: &mut Ui) {
         if ui.button("▼").on_hover_text("next (⌘G)").clicked() {
             find_next(app, false);
         }
-        ui.checkbox(&mut app.find.case_sensitive, "Aa").on_hover_text("case sensitive");
+        ui.checkbox(&mut app.editor.find.case_sensitive, "Aa").on_hover_text("case sensitive");
         ui.separator();
-        ui.add(egui::TextEdit::singleline(&mut app.find.replace).hint_text("replace with").desired_width(160.0));
+        ui.add(egui::TextEdit::singleline(&mut app.editor.find.replace).hint_text("replace with").desired_width(160.0));
         if ui.button("replace").clicked() {
             replace_one(app);
         }
         if ui.button("all").on_hover_text("replace all").clicked() {
             replace_all(app);
         }
-        if !app.find.message.is_empty() {
-            ui.colored_label(crate::colors::warn(ui), &app.find.message);
+        if !app.editor.find.message.is_empty() {
+            ui.colored_label(crate::colors::warn(ui), &app.editor.find.message);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("✖").on_hover_text("close (Esc)").clicked() {
-                app.find.open = false;
+                app.editor.find.open = false;
             }
         });
     });
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.find.open = false;
+        app.editor.find.open = false;
     }
 }
 
 pub fn goto_dialog(app: &mut App, ctx: &egui::Context) {
-    if !app.find.goto_open {
+    if !app.editor.find.goto_open {
         return;
     }
     let mut open = true;
     egui::Window::new("Go to line").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-        let r =
-            ui.add(egui::TextEdit::singleline(&mut app.find.goto_text).hint_text("line number").desired_width(120.0));
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut app.editor.find.goto_text).hint_text("line number").desired_width(120.0),
+        );
         r.request_focus();
         if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            if let Ok(n) = app.find.goto_text.trim().parse::<u32>() {
-                app.goto_line = Some(n.max(1));
+            if let Ok(n) = app.editor.find.goto_text.trim().parse::<u32>() {
+                app.editor.goto_line = Some(n.max(1));
             }
-            app.find.goto_open = false;
+            app.editor.find.goto_open = false;
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            app.find.goto_open = false;
+            app.editor.find.goto_open = false;
         }
     });
     if !open {
-        app.find.goto_open = false;
+        app.editor.find.goto_open = false;
     }
 }
 
@@ -203,31 +205,31 @@ mod tests {
 
     fn app(text: &str) -> App {
         let mut a = App::with_settings(Settings { last_file: None, ..Settings::default() });
-        a.text = text.into();
+        a.doc.text = text.into();
         a
     }
 
     #[test]
     fn find_and_replace() {
         let mut a = app("mov ax, 1\nMOV bx, 2\nmov cx, 3\n");
-        a.find.query = "mov".into();
+        a.editor.find.query = "mov".into();
         assert!(find_next(&mut a, false));
-        assert_eq!(a.selection, (0, 3));
+        assert_eq!(a.editor.selection, (0, 3));
         assert!(find_next(&mut a, false));
-        assert_eq!(a.selection, (10, 13));
-        a.find.replace = "add".into();
+        assert_eq!(a.editor.selection, (10, 13));
+        a.editor.find.replace = "add".into();
         replace_all(&mut a);
-        assert_eq!(a.text, "add ax, 1\nadd bx, 2\nadd cx, 3\n");
+        assert_eq!(a.doc.text, "add ax, 1\nadd bx, 2\nadd cx, 3\n");
     }
 
     #[test]
     fn comments_toggle() {
         let mut a = app("nop\n  hlt\n\nret");
-        a.selection = (0, 8);
+        a.editor.selection = (0, 8);
         toggle_comment(&mut a);
-        assert_eq!(a.text, "; nop\n;   hlt\n\nret");
-        a.selection = (0, 9);
+        assert_eq!(a.doc.text, "; nop\n;   hlt\n\nret");
+        a.editor.selection = (0, 9);
         toggle_comment(&mut a);
-        assert_eq!(a.text, "nop\n  hlt\n\nret");
+        assert_eq!(a.doc.text, "nop\n  hlt\n\nret");
     }
 }

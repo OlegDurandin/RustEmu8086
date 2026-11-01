@@ -56,7 +56,7 @@ pub fn style(s: &mut egui::Style) {
     }
 }
 
-/// Installs the theme (`App::fixed_theme`: the theme setting does not apply to the tablet layout).
+/// Installs the theme (`FrontEnd::fixed_theme`: the theme setting does not apply to the tablet layout).
 pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(egui::Theme::Dark, visuals());
     ctx.style_mut_of(egui::Theme::Dark, style);

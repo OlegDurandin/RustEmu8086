@@ -15,6 +15,7 @@ mod widgets;
 
 use egui::Ui;
 use rustemu_ui::app::{App, RunMode};
+use rustemu_ui::tools::Tool;
 
 use crate::bars::{status_bar, tabs_row, top_bar};
 use crate::keypad::{KeypadState, keyboard_sheet};
@@ -32,9 +33,9 @@ pub struct TabletApp {
 impl TabletApp {
     /// The layout has its own theme (installed by `App::apply_theme`).
     pub fn new(mut app: App) -> Self {
-        app.fixed_theme = Some(theme::apply);
-        app.current_line_color = Some(pal::AMBER);
-        app.tablet_layout = true;
+        app.front.fixed_theme = Some(theme::apply);
+        app.editor.current_line_color = Some(pal::AMBER);
+        app.front.tablet_layout = true;
         TabletApp { app, state: TabletState::default() }
     }
 }
@@ -97,6 +98,15 @@ pub(crate) enum Output {
     Messages,
 }
 
+/// The tablet shows the screen, the registers and the code in its own layout, not as windows.
+struct Tablet;
+
+impl rustemu_ui::tools::Host for Tablet {
+    fn floats(&self, tool: Tool) -> bool {
+        !matches!(tool, Tool::Emulator | Tool::Screen | Tool::Source)
+    }
+}
+
 fn tablet_ui(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     app.screen.focused = false;
@@ -127,12 +137,12 @@ fn tablet_ui(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
             }
         },
     );
-    rustemu_ui::windows::shared_windows(app, &ctx);
+    rustemu_ui::windows(app, &ctx, &mut Tablet);
 }
 
 /// A new build error shows the messages.
 fn follow_errors(app: &mut App, t: &mut TabletState) {
-    let errors = app.messages.iter().any(|m| m.error);
+    let errors = app.build.messages.iter().any(|m| m.error);
     if errors && !t.had_errors {
         t.output = Output::Messages;
         t.tab = Tab::Editor;

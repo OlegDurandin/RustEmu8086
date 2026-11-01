@@ -1,35 +1,25 @@
 //! Emulator window (controls, registers, memory, disassembly) and the source window.
 
-use egui::{Color32, DragValue, FontId, RichText, Ui, pos2, vec2};
+use egui::{Color32, DragValue, FontId, RichText, Ui, vec2};
 use rustemu_core::cpu::{self, REG16_NAMES, SREG_NAMES};
 
 use rustemu_ui::app::{App, RunMode};
-use rustemu_ui::workspace::Tool;
+use rustemu_ui::tools::{Host, Tool};
 
 const CHANGED: Color32 = Color32::from_rgb(0xFF, 0x50, 0x50);
 
-pub fn emulator_window(app: &mut App, ctx: &egui::Context) {
-    if app.panels() {
-        return;
-    }
-    let mut open = app.windows.emulator;
-    egui::Window::new("emulator")
-        .id(egui::Id::unique("emulator_window"))
-        .open(&mut open)
-        .default_pos(pos2(8.0, 64.0))
-        .default_width(660.0)
-        .show(ctx, |ui| emulator_ui(app, ui));
-    app.windows.emulator = open;
-}
+/// The desktop's own tools: the emulator and the source window.
+pub struct Desktop;
 
-/// Bodies of the tools of this interface for the panels layout.
-pub fn tool_ui(app: &mut App, ui: &mut Ui, tool: Tool) -> bool {
-    match tool {
-        Tool::Emulator => emulator_ui(app, ui),
-        Tool::Source => source_ui(app, ui),
-        _ => return false,
+impl Host for Desktop {
+    fn tool_ui(&mut self, app: &mut App, ui: &mut Ui, tool: Tool) -> bool {
+        match tool {
+            Tool::Emulator => emulator_ui(app, ui),
+            Tool::Source => source_ui(app, ui),
+            _ => return false,
+        }
+        true
     }
-    true
 }
 
 /// Warning shown while the loaded program is older than the editor text.
@@ -60,16 +50,16 @@ fn emulator_ui(app: &mut App, ui: &mut Ui) {
         ui.menu_button("file", |ui| file_menu(app, ui));
         ui.menu_button("math", |ui| {
             if ui.button("multi base calculator").clicked() {
-                app.calculator.open = true;
+                app.windows[Tool::Calculator] = true;
             }
             if ui.button("base converter").clicked() {
-                app.windows.converter = true;
+                app.windows[Tool::Converter] = true;
             }
         });
         ui.menu_button("debug", |ui| debug_menu(app, ui));
         ui.menu_button("view", |ui| view_menu(app, ui));
         ui.menu_button("virtual devices", |ui| virtual_devices_menu(app, ui));
-        ui.menu_button("virtual drive", |ui| rustemu_ui::windows::virtual_drive_menu(app, ui));
+        ui.menu_button("virtual drive", |ui| rustemu_ui::drive_ui::virtual_drive_menu(app, ui));
         ui.menu_button("help", |ui| help_menu(app, ui));
     });
     let loaded = app.loaded();
@@ -153,20 +143,20 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
         app.reload();
     }
     ui.separator();
-    ui.menu_button("examples", |ui| rustemu_ui::windows::examples_menu(app, ui, true));
+    ui.menu_button("examples", |ui| rustemu_ui::examples_ui::examples_menu(app, ui, true));
     ui.separator();
     if item(ui, true, "reset emulator and ram", "") {
         app.reset_emulator_and_ram();
     }
     ui.separator();
     if item(ui, true, "set command line parameters", "") {
-        app.cmdline_dialog = Some(app.session.command_line.clone());
+        app.dialogs.cmdline = Some(app.session.command_line.clone());
     }
     ui.separator();
     if item(ui, app.loaded(), "save the emulator's state", "") {
         app.save_emulator_state();
     }
-    if item(ui, app.saved_state.is_some(), "load from previous state", "") {
+    if item(ui, app.program.saved_state.is_some(), "load from previous state", "") {
         app.load_emulator_state();
     }
     let recent: Vec<std::path::PathBuf> = app.settings.recent.iter().take(5).cloned().collect();
@@ -188,41 +178,41 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
 fn view_menu(app: &mut App, ui: &mut Ui) {
     ui.set_min_width(260.0);
     let w = &mut app.windows;
-    ui.checkbox(&mut w.console, "log and debug.exe emulation   F11");
+    ui.checkbox(&mut w[Tool::Console], "log and debug.exe emulation   F11");
     ui.separator();
-    ui.checkbox(&mut w.value_viewer, "extended value viewer");
+    ui.checkbox(&mut w[Tool::ValueViewer], "extended value viewer");
     ui.separator();
-    ui.checkbox(&mut w.stack, "stack");
+    ui.checkbox(&mut w[Tool::Stack], "stack");
     ui.separator();
-    ui.checkbox(&mut w.vars, "variables");
-    ui.checkbox(&mut w.memory, "memory");
+    ui.checkbox(&mut w[Tool::Vars], "variables");
+    ui.checkbox(&mut w[Tool::Memory], "memory");
     ui.separator();
-    ui.checkbox(&mut w.symbols, "symbol table");
-    ui.checkbox(&mut w.listing, "listing");
+    ui.checkbox(&mut w[Tool::Symbols], "symbol table");
+    ui.checkbox(&mut w[Tool::Listing], "listing");
     ui.separator();
-    ui.checkbox(&mut w.source, "original source code");
+    ui.checkbox(&mut w[Tool::Source], "original source code");
     ui.separator();
-    ui.checkbox(&mut app.options_open, "options");
+    ui.checkbox(&mut app.dialogs.options, "options");
     ui.separator();
     let w = &mut app.windows;
-    ui.checkbox(&mut w.alu, "arithmetic & logical unit");
-    ui.checkbox(&mut w.fpu, "floating point unit (8087)");
+    ui.checkbox(&mut w[Tool::Alu], "arithmetic & logical unit");
+    ui.checkbox(&mut w[Tool::Fpu], "floating point unit (8087)");
     ui.separator();
-    ui.checkbox(&mut w.flags, "flags");
+    ui.checkbox(&mut w[Tool::Flags], "flags");
     ui.separator();
-    ui.checkbox(&mut w.flag_analyser, "lexical flag analyzer");
+    ui.checkbox(&mut w[Tool::FlagAnalyser], "lexical flag analyzer");
     ui.separator();
-    ui.checkbox(&mut w.ascii, "ascii codes");
+    ui.checkbox(&mut w[Tool::Ascii], "ascii codes");
     ui.separator();
-    ui.checkbox(&mut w.screen, "emulator screen");
+    ui.checkbox(&mut w[Tool::Screen], "emulator screen");
 }
 
 /// "virtual devices" menu: the device programs of Emu8086, shown as tabs of the devices window.
 pub fn virtual_devices_menu(app: &mut App, ui: &mut Ui) {
     for (d, name) in rustemu_ui::devices_ui::Device::EXE {
         if ui.button(name).clicked() {
-            app.device_tab = d;
-            app.windows.devices = true;
+            app.view.device_tab = d;
+            app.windows[Tool::Devices] = true;
         }
     }
 }
@@ -231,7 +221,7 @@ pub fn virtual_devices_menu(app: &mut App, ui: &mut Ui) {
 fn help_menu(app: &mut App, ui: &mut Ui) {
     ui.set_min_width(240.0);
     if item(ui, true, "documentation and tutorials", "F1") {
-        app.reference.open = true;
+        app.windows[Tool::Reference] = true;
     }
     ui.separator();
     if item(ui, true, "check for an update…", "") {
@@ -240,7 +230,7 @@ fn help_menu(app: &mut App, ui: &mut Ui) {
     }
     ui.separator();
     if item(ui, true, "about…", "") {
-        app.windows.about = true;
+        app.windows[Tool::About] = true;
     }
 }
 
@@ -267,7 +257,7 @@ fn debug_menu(app: &mut App, ui: &mut Ui) {
     }
     ui.separator();
     if item(ui, true, "stop on condition…", "") {
-        app.windows.stop_condition = true;
+        app.windows[Tool::StopCondition] = true;
     }
     ui.separator();
     if item(ui, loaded && sel.is_some(), &format!("run until {at}"), "⌃F8") {
@@ -303,8 +293,8 @@ fn debug_menu(app: &mut App, ui: &mut Ui) {
 fn bottom_buttons(app: &mut App, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         let w = &mut app.windows;
-        ui.toggle_value(&mut w.screen, "screen").on_hover_text("emulator screen");
-        ui.toggle_value(&mut w.source, "source").on_hover_text("original source code");
+        ui.toggle_value(&mut w[Tool::Screen], "screen").on_hover_text("emulator screen");
+        ui.toggle_value(&mut w[Tool::Source], "source").on_hover_text("original source code");
         if ui
             .add_enabled(app.loaded(), egui::Button::new("reset"))
             .on_hover_text(
@@ -316,28 +306,28 @@ fn bottom_buttons(app: &mut App, ui: &mut Ui) {
         }
         ui.menu_button("aux", |ui| {
             let w = &mut app.windows;
-            ui.checkbox(&mut w.memory, "memory");
-            ui.checkbox(&mut w.alu, "ALU");
-            ui.checkbox(&mut w.fpu, "FPU")
+            ui.checkbox(&mut w[Tool::Memory], "memory");
+            ui.checkbox(&mut w[Tool::Alu], "ALU");
+            ui.checkbox(&mut w[Tool::Fpu], "FPU")
                 .on_hover_text("8087 floating-point unit: ST(0)..ST(7), status and control words");
-            ui.checkbox(&mut w.stop_condition, "stop on condition");
+            ui.checkbox(&mut w[Tool::StopCondition], "stop on condition");
             ui.separator();
-            ui.checkbox(&mut w.symbols, "symbol table");
-            ui.checkbox(&mut w.listing, "listing");
+            ui.checkbox(&mut w[Tool::Symbols], "symbol table");
+            ui.checkbox(&mut w[Tool::Listing], "listing");
             ui.separator();
-            ui.checkbox(&mut w.breakpoints, "breakpoints");
-            ui.checkbox(&mut w.watch, "watch");
-            ui.checkbox(&mut w.call_stack, "call stack");
-            ui.checkbox(&mut w.devices, "virtual devices");
-            ui.checkbox(&mut w.log, "log");
+            ui.checkbox(&mut w[Tool::Breakpoints], "breakpoints");
+            ui.checkbox(&mut w[Tool::Watch], "watch");
+            ui.checkbox(&mut w[Tool::CallStack], "call stack");
+            ui.checkbox(&mut w[Tool::Devices], "virtual devices");
+            ui.checkbox(&mut w[Tool::Log], "log");
         })
         .response
         .on_hover_text("auxiliary tools");
         let w = &mut app.windows;
-        ui.toggle_value(&mut w.vars, "vars").on_hover_text("show defined variables, arrays and strings");
-        ui.toggle_value(&mut w.console, "debug").on_hover_text("log and debug.exe emulation");
-        ui.toggle_value(&mut w.stack, "stack").on_hover_text("memory at SS:SP from bottom to top");
-        ui.toggle_value(&mut w.flags, "flags").on_hover_text("show flags register");
+        ui.toggle_value(&mut w[Tool::Vars], "vars").on_hover_text("show defined variables, arrays and strings");
+        ui.toggle_value(&mut w[Tool::Console], "debug").on_hover_text("log and debug.exe emulation");
+        ui.toggle_value(&mut w[Tool::Stack], "stack").on_hover_text("memory at SS:SP from bottom to top");
+        ui.toggle_value(&mut w[Tool::Flags], "flags").on_hover_text("show flags register");
     });
 }
 
@@ -367,7 +357,7 @@ fn reg_row(ui: &mut Ui, name: &str, v: &mut u16, prev: u16, split: bool) -> bool
 }
 
 fn registers(app: &mut App, ui: &mut Ui) {
-    let prev = app.prev_cpu.clone();
+    let prev = app.exec.prev_cpu.clone();
     let c = &mut app.session.machine.cpu;
     let mut view: Option<&str> = None;
     egui::Grid::new("regs").num_columns(4).spacing([6.0, 2.0]).striped(true).show(ui, |ui| {
@@ -405,7 +395,7 @@ fn registers(app: &mut App, ui: &mut Ui) {
     ui.add_space(4.0);
     let f = c.flags;
     ui.horizontal(|ui| {
-        for (b, name, desc) in rustemu_ui::debug::FLAG_ROWS {
+        for (b, name, desc) in rustemu_ui::inspect::FLAG_ROWS {
             let on = f & b != 0;
             let changed = (f ^ prev.flags) & b != 0;
             // Readable at a glance: set flags bold, changed ones red (as the registers).
@@ -429,7 +419,7 @@ fn code_view(app: &mut App, ui: &mut Ui) {
     // The window has 22 rows; a panel as many as fit above the buttons under the list.
     let rows = if app.panels() { ((ui.available_height() - 64.0) / row_h).clamp(6.0, 80.0) as usize } else { 22 };
     if let Some(code) = app.session.machine.terminated
-        && !app.code_view_pinned
+        && !app.view.code_view_pinned
     {
         // CS:IP is left in the PSP or the DOS stub: nothing there is the program's code. The
         // banner takes the place of the list, so that the window keeps its size.
@@ -442,12 +432,12 @@ fn code_view(app: &mut App, ui: &mut Ui) {
         });
         return;
     }
-    let start = rustemu_ui::debug::disasm_start(app, rows);
+    let start = rustemu_ui::inspect::disasm_start(app, rows);
     let m = &app.session.machine;
     let pc = m.cpu.pc();
     // Addresses are shown relative to CS, or to the segment of a shown breakpoint.
-    let (cs, mut ip) = match app.code_selected {
-        Some((s, o)) if app.code_view_pinned && rustemu_core::linear(s, o) == start => (s, o),
+    let (cs, mut ip) = match app.view.code_selected {
+        Some((s, o)) if app.view.code_view_pinned && rustemu_core::linear(s, o) == start => (s, o),
         _ => (m.cpu.cs(), m.cpu.ip.wrapping_sub(pc.wrapping_sub(start) as u16)),
     };
     let mut a = start;
@@ -518,7 +508,7 @@ fn code_view(app: &mut App, ui: &mut Ui) {
                     if ui.add(egui::Label::new(mk(format!("{hex:<9}"))).sense(egui::Sense::click())).clicked() {
                         select = Some((cs, row_ip));
                     }
-                    let text = match rustemu_ui::debug::jump_target(&ins.text)
+                    let text = match rustemu_ui::inspect::jump_target(&ins.text)
                         .and_then(|off| session.symbol_at(rustemu_core::linear(cs, off)))
                     {
                         Some(name) => format!("{}  ; {name}", ins.text),
@@ -559,19 +549,19 @@ fn code_view(app: &mut App, ui: &mut Ui) {
         let dy = ui.input(|i| i.smooth_scroll_delta.y);
         if dy != 0.0 {
             ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
-            app.code_wheel += dy;
+            app.view.code_wheel += dy;
         }
     }
-    let wheel_rows = (app.code_wheel / row_h).trunc();
+    let wheel_rows = (app.view.code_wheel / row_h).trunc();
     if wheel_rows != 0.0 {
-        app.code_wheel -= wheel_rows * row_h;
+        app.view.code_wheel -= wheel_rows * row_h;
         app.scroll_disasm(-wheel_rows as i32);
     }
     if let Some(off) = scroll_to {
         app.show_disasm_at(off);
     }
     ui.horizontal(|ui| {
-        if app.code_view_pinned
+        if app.view.code_view_pinned
             && ui.small_button("⌖ CS:IP").on_hover_text("Show the current instruction again (F7)").clicked()
         {
             app.show_current_instruction();
@@ -583,57 +573,38 @@ fn code_view(app: &mut App, ui: &mut Ui) {
         );
     });
     if let Some(s) = select {
-        app.code_selected = Some(s);
+        app.view.code_selected = Some(s);
     }
     if let Some(addr) = clicked_bp {
         app.toggle_breakpoint_at_addr(addr);
     }
 }
 
-pub fn source_window(app: &mut App, ctx: &egui::Context) {
-    if app.panels() {
-        return;
-    }
-    let mut open = app.windows.source;
-    egui::Window::new("original source code")
-        .id(egui::Id::unique("source_window"))
-        .open(&mut open)
-        .default_pos(pos2(700.0, 540.0))
-        .default_size([700.0, 300.0])
-        .show(ctx, |ui| source_ui(app, ui));
-    app.windows.source = open;
-}
-
-/// Innermost macro/procedure of `entries` that contains `line`.
-fn enclosing(entries: &[rustemu_asm::library::Entry], line: u32) -> Option<&rustemu_asm::library::Entry> {
-    entries.iter().filter(|e| e.line <= line && line <= e.end_line).min_by_key(|e| e.end_line - e.line)
-}
-
 fn source_ui(app: &mut App, ui: &mut Ui) {
-    if app.source_files.is_empty() {
+    if app.program.files.is_empty() {
         ui.weak("No source (binary loaded).");
         return;
     }
-    let nfiles = app.source_files.len();
+    let nfiles = app.program.files.len();
     stale_banner(app, ui);
     // Inside macro code the position is shown in the macro definition (e.g. emu8086.inc).
-    let view = app.session.current_view(app.show_macro_code).filter(|v| v.file < nfiles);
+    let view = app.session.current_view(app.settings.show_macro_code).filter(|v| v.file < nfiles);
     let shown = view.as_ref().map(|v| (v.file, v.line));
     if let Some((f, _)) = shown
-        && app.follow_source
+        && app.settings.follow_source
         && f < nfiles
     {
-        app.source_file_idx = f;
+        app.view.source_file_idx = f;
     }
     ui.horizontal(|ui| {
-        let idx = app.source_file_idx.min(nfiles - 1);
-        egui::ComboBox::from_label("file").selected_text(app.source_files[idx].0.clone()).show_ui(ui, |ui| {
-            for (i, (n, _)) in app.source_files.iter().enumerate() {
-                ui.selectable_value(&mut app.source_file_idx, i, n);
+        let idx = app.view.source_file_idx.min(nfiles - 1);
+        egui::ComboBox::from_label("file").selected_text(app.program.files[idx].0.clone()).show_ui(ui, |ui| {
+            for (i, (n, _)) in app.program.files.iter().enumerate() {
+                ui.selectable_value(&mut app.view.source_file_idx, i, n);
             }
         });
-        ui.checkbox(&mut app.follow_source, "follow execution");
-        ui.checkbox(&mut app.show_macro_code, "step into macros").on_hover_text(
+        ui.checkbox(&mut app.settings.follow_source, "follow execution");
+        ui.checkbox(&mut app.settings.show_macro_code, "step into macros").on_hover_text(
             "Show code generated by macros (PRINT, PUTC, ...) and library procedures in their definition",
         );
     });
@@ -644,21 +615,21 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
     {
         let (of, ol) = (v.file, v.line);
         let (sf, sl) = v.statement;
-        let entry = app.source_index.get(of).and_then(|idx| enclosing(idx, ol)).cloned();
+        let entry = app.program.index.get(of).and_then(|idx| rustemu_asm::library::enclosing(idx, ol)).cloned();
         let what = match &entry {
             Some(e) if e.kind == rustemu_asm::library::EntryKind::Proc => format!("procedure {}", e.name),
             Some(e) => format!("macro {}", e.name),
             None => "macro code".to_string(),
         };
-        let user_file = app.source_files.get(sf).map(|f| f.0.clone()).unwrap_or_default();
+        let user_file = app.program.files.get(sf).map(|f| f.0.clone()).unwrap_or_default();
         egui::Frame::new().fill(ui.visuals().faint_bg_color).inner_margin(4.0).corner_radius(3.0).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("▸ inside {what}")).strong().color(rustemu_ui::colors::info(ui)));
-                ui.weak(format!("({} line {ol})", app.source_files[of].0));
+                ui.weak(format!("({} line {ol})", app.program.files[of].0));
                 if ui.link(format!("statement: {user_file} line {sl}")).clicked() {
-                    app.follow_source = false;
-                    app.source_file_idx = sf;
-                    app.source_scroll_to = Some(sl);
+                    app.settings.follow_source = false;
+                    app.view.source_file_idx = sf;
+                    app.view.source_scroll_to = Some(sl);
                 }
                 ui.weak("— ⇧F11 step out");
                 if let Some(e) = &entry
@@ -670,10 +641,10 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
         });
     }
 
-    let fidx = app.source_file_idx.min(nfiles - 1);
+    let fidx = app.view.source_file_idx.min(nfiles - 1);
     let font = FontId::monospace(13.0);
     let row_h = ui.fonts_mut(|f| f.row_height(&font)) + 2.0;
-    let n = app.source_files[fidx].1.len();
+    let n = app.program.files[fidx].1.len();
     let cur_line = shown.filter(|(f, _)| *f == fidx).map(|(_, l)| l);
     // The statement that invoked the macro, highlighted more softly.
     let call_line = view
@@ -681,21 +652,21 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
         .filter(|v| v.level > 0 && v.statement.0 == fidx && cur_line != Some(v.statement.1))
         .map(|v| v.statement.1);
     let pos = cur_line.map(|l| (fidx, l));
-    if app.last_source_pos != pos
+    if app.view.last_source_pos != pos
         && let Some(l) = cur_line
     {
-        app.source_scroll_to = Some(l);
+        app.view.source_scroll_to = Some(l);
     }
-    app.last_source_pos = pos;
+    app.view.last_source_pos = pos;
     // Re-applied for a few frames: after switching to a longer file the scroll area only knows
     // the new content height from the next frame on.
-    if let Some(l) = app.source_scroll_to.take() {
-        app.source_scroll_pending = Some((l, 3));
+    if let Some(l) = app.view.source_scroll_to.take() {
+        app.view.source_scroll_pending = Some((l, 3));
     }
     let mut scroll_to = None;
-    if let Some((l, n)) = app.source_scroll_pending {
+    if let Some((l, n)) = app.view.source_scroll_pending {
         scroll_to = Some(l);
-        app.source_scroll_pending = (n > 1).then_some((l, n - 1));
+        app.view.source_scroll_pending = (n > 1).then_some((l, n - 1));
         ui.ctx().request_repaint();
     }
     let mut toggle: Option<u32> = None;
@@ -717,8 +688,8 @@ fn source_ui(app: &mut App, ui: &mut Ui) {
     sa.show_rows(ui, row_h, n, |ui, range| {
         for i in range {
             let line_no = i as u32 + 1;
-            let text = &app.source_files[fidx].1[i];
-            let bp = app.bp_lines.get(&(fidx, line_no));
+            let text = &app.program.files[fidx].1[i];
+            let bp = app.debugger.bp_lines.get(&(fidx, line_no));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let dot = if let Some(bp) = bp {

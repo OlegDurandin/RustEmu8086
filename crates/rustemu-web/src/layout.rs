@@ -18,7 +18,7 @@ pub struct WebApp {
 
 impl WebApp {
     pub fn new(mut app: App, tablet: bool, ctx: &egui::Context, on_switch: fn(bool)) -> Self {
-        app.can_switch_layout = true;
+        app.front.can_switch_layout = true;
         WebApp { layout: Some(wrap(app, tablet, ctx)), on_switch }
     }
 
@@ -44,9 +44,9 @@ fn wrap(mut app: App, tablet: bool, ctx: &egui::Context) -> Layout {
         Layout::Tablet(t)
     } else {
         // Undo the tablet theme: touch-sized spacing and its dark colours.
-        app.fixed_theme = None;
-        app.current_line_color = None;
-        app.tablet_layout = false;
+        app.front.fixed_theme = None;
+        app.editor.current_line_color = None;
+        app.front.tablet_layout = false;
         ctx.set_style_of(egui::Theme::Dark, egui::Style::default());
         app.apply_theme(ctx);
         Layout::Desktop(DesktopApp(app))
@@ -74,7 +74,7 @@ impl eframe::App for WebApp {
             Layout::Desktop(d) => d.ui(ui, frame),
             Layout::Tablet(t) => t.ui(ui, frame),
         }
-        if !std::mem::take(&mut self.app_mut().switch_layout) {
+        if !std::mem::take(&mut self.app_mut().front.switch_layout) {
             return;
         }
         let (app, tablet) = match self.layout.take().expect("layout") {
@@ -107,20 +107,20 @@ mod tests {
         h.run_steps(2);
         let spacing = h.ctx.style_of(egui::Theme::Dark).spacing.interact_size.y;
         // Desktop -> tablet from the options window.
-        h.state_mut().app_mut().options_open = true;
+        h.state_mut().app_mut().dialogs.options = true;
         h.run_steps(2);
         h.get_by_label("tablet (touch)").click();
         h.run_steps(4);
-        assert!(h.state().app().tablet_layout);
+        assert!(h.state().app().front.tablet_layout);
         assert!(h.query_by_label("Run").is_some(), "the tablet top bar is shown");
         assert_eq!(h.state().app().session.machine.cpu.instr_count, 1, "the loaded program stays");
         save(&mut h, "32_web_switch_to_tablet");
         // Tablet -> desktop from the menu: the desktop gets its own style back.
-        h.state_mut().app_mut().options_open = false;
-        h.state_mut().app_mut().switch_layout = true;
+        h.state_mut().app_mut().dialogs.options = false;
+        h.state_mut().app_mut().front.switch_layout = true;
         h.run_steps(4);
-        assert!(!h.state().app().tablet_layout);
-        assert!(h.state().app().fixed_theme.is_none());
+        assert!(!h.state().app().front.tablet_layout);
+        assert!(h.state().app().front.fixed_theme.is_none());
         assert_eq!(h.ctx.style_of(egui::Theme::Dark).spacing.interact_size.y, spacing);
         assert!(h.query_by_label_contains("emulate").is_some(), "the desktop toolbar is shown");
     }

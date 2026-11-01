@@ -1,52 +1,12 @@
-//! IDE debugger windows: breakpoints (with conditions and "stop on condition"), watches,
-//! call stack and the ALU.
+//! IDE debugger tools: breakpoints (with conditions and "stop on condition"), watches, the call
+//! stack and the extended value viewer.
 
-use egui::{Color32, FontId, RichText, Ui, pos2};
-use rustemu_core::cpu::{AluOp, flags};
+use egui::{Color32, FontId, RichText, Ui};
 use rustemu_session::FrameKind;
 
 use crate::app::{App, Breakpoint, Watch};
-
-pub fn debugger_windows(app: &mut App, ctx: &egui::Context) {
-    let w = &app.windows;
-    let (mut bps, mut watch, mut calls, mut alu, mut fpu, mut cond) =
-        (w.breakpoints, w.watch, w.call_stack, w.alu, w.fpu, w.stop_condition);
-    if !app.panels() {
-        egui::Window::new("breakpoints")
-            .open(&mut bps)
-            .default_pos(pos2(700.0, 560.0))
-            .default_width(560.0)
-            .show(ctx, |ui| breakpoints_ui(app, ui));
-        egui::Window::new("watch")
-            .open(&mut watch)
-            .default_pos(pos2(1060.0, 110.0))
-            .default_width(460.0)
-            .show(ctx, |ui| watch_ui(app, ui));
-        egui::Window::new("call stack")
-            .open(&mut calls)
-            .default_pos(pos2(1060.0, 360.0))
-            .default_width(520.0)
-            .show(ctx, |ui| call_stack_ui(app, ui));
-        egui::Window::new("ALU")
-            .open(&mut alu)
-            .default_pos(pos2(240.0, 600.0))
-            .default_width(520.0)
-            .show(ctx, |ui| alu_ui(app, ui));
-        egui::Window::new("FPU")
-            .open(&mut fpu)
-            .default_pos(pos2(760.0, 380.0))
-            .default_width(520.0)
-            .show(ctx, |ui| fpu_ui(app, ui));
-    }
-    egui::Window::new("stop on condition")
-        .open(&mut cond)
-        .default_pos(pos2(700.0, 420.0))
-        .default_width(460.0)
-        .show(ctx, |ui| stop_condition_ui(app, ui));
-    let w = &mut app.windows;
-    (w.breakpoints, w.watch, w.call_stack, w.alu, w.fpu, w.stop_condition) = (bps, watch, calls, alu, fpu, cond);
-    value_viewer_window(app, ctx);
-}
+use crate::inspect::bin;
+use crate::tools::Tool;
 
 /// Colour of a breakpoint marker: red, orange with a condition, grey when disabled.
 pub fn marker_color(bp: &Breakpoint) -> Color32 {
@@ -62,23 +22,24 @@ pub fn marker_color(bp: &Breakpoint) -> Color32 {
 /// Shows a source location: editor for the program's own file, source window for others.
 pub fn show_location(app: &mut App, file: usize, line: u32) {
     if file == 0 && !app.is_stale() {
-        app.goto_line = Some(line);
+        app.editor.goto_line = Some(line);
     }
-    if file != 0 || app.windows.source {
-        app.windows.source = true;
-        app.follow_source = false;
-        app.source_file_idx = file;
-        app.source_scroll_to = Some(line);
+    if file != 0 || app.windows[Tool::Source] {
+        app.windows[Tool::Source] = true;
+        app.settings.follow_source = false;
+        app.view.source_file_idx = file;
+        app.view.source_scroll_to = Some(line);
     }
 }
 
 pub fn file_line(app: &App, file: usize, line: u32) -> String {
-    let name = app.source_files.get(file).map_or("?", |f| f.0.as_str());
+    let name = app.program.files.get(file).map_or("?", |f| f.0.as_str());
     format!("{name}:{line}")
 }
 
 pub fn source_text(app: &App, file: usize, line: u32) -> String {
-    app.source_files
+    app.program
+        .files
         .get(file)
         .and_then(|f| f.1.get(line as usize - 1))
         .map(|t| t.trim().replace('\t', " "))
@@ -88,10 +49,10 @@ pub fn source_text(app: &App, file: usize, line: u32) -> String {
 // ---- breakpoints ----------------------------------------------------------------------------
 
 pub(crate) fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
-    if app.bp_lines.is_empty() {
+    if app.debugger.bp_lines.is_empty() {
         ui.weak("No breakpoints. Click the margin left of a line number in the editor (or press ⌘F8).");
     }
-    let keys: Vec<(usize, u32)> = app.bp_lines.keys().copied().collect();
+    let keys: Vec<(usize, u32)> = app.debugger.bp_lines.keys().copied().collect();
     let mut remove = None;
     let mut resync = false;
     let font = FontId::monospace(12.5);
@@ -104,18 +65,18 @@ pub(crate) fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
         }
         for key in keys {
             let (f, l) = key;
-            let loc = if app.source_files.is_empty() && f == 0 {
+            let loc = if app.program.files.is_empty() && f == 0 {
                 format!("{}:{l}", app.file_name())
             } else {
                 file_line(app, f, l)
             };
-            let text = if f == 0 && (app.source_files.is_empty() || app.is_stale()) {
-                app.text.lines().nth(l as usize - 1).unwrap_or("").trim().to_string()
+            let text = if f == 0 && (app.program.files.is_empty() || app.is_stale()) {
+                app.doc.text.lines().nth(l as usize - 1).unwrap_or("").trim().to_string()
             } else {
                 source_text(app, f, l)
             };
             let loaded = app.loaded() && app.session.program.is_some();
-            let bp = app.bp_lines.get_mut(&key).unwrap();
+            let bp = app.debugger.bp_lines.get_mut(&key).unwrap();
             let color = marker_color(bp);
             if ui.checkbox(&mut bp.enabled, RichText::new("●").color(color)).changed() {
                 resync = true;
@@ -153,12 +114,12 @@ pub(crate) fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
         }
     });
     if let Some(k) = remove {
-        app.bp_lines.remove(&k);
+        app.debugger.bp_lines.remove(&k);
         resync = true;
     }
     // Address breakpoints set in the disassembly (macro code).
     let mut addrs: Vec<u32> =
-        app.session.machine.breakpoints.iter().copied().filter(|a| !app.bp_addr.contains_key(a)).collect();
+        app.session.machine.breakpoints.iter().copied().filter(|a| !app.debugger.bp_addr.contains_key(a)).collect();
     addrs.sort_unstable();
     if !addrs.is_empty() {
         ui.separator();
@@ -177,33 +138,33 @@ pub(crate) fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
     }
     ui.horizontal(|ui| {
         if ui.button("enable all").clicked() {
-            app.bp_lines.values_mut().for_each(|b| b.enabled = true);
+            app.debugger.bp_lines.values_mut().for_each(|b| b.enabled = true);
             resync = true;
         }
         if ui.button("disable all").clicked() {
-            app.bp_lines.values_mut().for_each(|b| b.enabled = false);
+            app.debugger.bp_lines.values_mut().for_each(|b| b.enabled = false);
             resync = true;
         }
         if ui.button("reset hits").clicked() {
-            app.bp_lines.values_mut().for_each(|b| b.hits = 0);
+            app.debugger.bp_lines.values_mut().for_each(|b| b.hits = 0);
         }
         if ui.button("delete all").clicked() {
-            app.bp_lines.clear();
+            app.debugger.bp_lines.clear();
             app.session.machine.breakpoints.clear();
-            app.bp_addr.clear();
+            app.debugger.bp_addr.clear();
         }
     });
     if resync {
         app.sync_breakpoints();
     }
     if ui.link("stop on condition…").clicked() {
-        app.windows.stop_condition = true;
+        app.windows[Tool::StopCondition] = true;
     }
 }
 
-fn stop_condition_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn stop_condition_ui(app: &mut App, ui: &mut Ui) {
     let loaded = app.loaded() && app.session.program.is_some();
-    let sc = &mut app.stop_condition;
+    let sc = &mut app.debugger.stop_condition;
     ui.horizontal(|ui| {
         ui.checkbox(&mut sc.enabled, "");
         let r = ui.add(
@@ -267,14 +228,14 @@ pub(crate) fn watch_ui(app: &mut App, ui: &mut Ui) {
             ui.label(RichText::new(h).weak());
         }
         ui.end_row();
-        for i in 0..app.watches.len() {
+        for i in 0..app.debugger.watches.len() {
             let r = ui.add_sized(
                 [170.0, 20.0],
-                egui::TextEdit::singleline(&mut app.watches[i].text).font(egui::TextStyle::Monospace),
+                egui::TextEdit::singleline(&mut app.debugger.watches[i].text).font(egui::TextStyle::Monospace),
             );
             if r.changed() {
-                app.watches[i].compiled = None;
-                app.watches[i].before = None;
+                app.debugger.watches[i].compiled = None;
+                app.debugger.watches[i].before = None;
             }
             if !loaded {
                 ui.weak("-");
@@ -283,9 +244,12 @@ pub(crate) fn watch_ui(app: &mut App, ui: &mut Ui) {
             } else {
                 match app.watch_value(i) {
                     Ok(v) => {
-                        let bits =
-                            app.watches[i].compiled.as_ref().and_then(|c| c.as_ref().ok()).map_or(16, |e| e.bits());
-                        let changed = app.watches[i].before.is_some_and(|b| b != v);
+                        let bits = app.debugger.watches[i]
+                            .compiled
+                            .as_ref()
+                            .and_then(|c| c.as_ref().ok())
+                            .map_or(16, |e| e.bits());
+                        let changed = app.debugger.watches[i].before.is_some_and(|b| b != v);
                         let style = |t: String| {
                             let t = RichText::new(t).font(font.clone());
                             if changed { t.color(changed_color) } else { t }
@@ -311,7 +275,7 @@ pub(crate) fn watch_ui(app: &mut App, ui: &mut Ui) {
         }
     });
     if let Some(i) = remove {
-        app.watches.remove(i);
+        app.debugger.watches.remove(i);
     }
     let id = ui.make_persistent_id("new_watch");
     let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_default();
@@ -331,16 +295,11 @@ pub(crate) fn watch_ui(app: &mut App, ui: &mut Ui) {
 }
 
 pub fn add_watch(app: &mut App, text: &str) {
-    app.watches.push(Watch { text: text.to_string(), compiled: None, before: None });
-    app.windows.watch = true;
+    app.debugger.watches.push(Watch { text: text.to_string(), compiled: None, before: None });
+    app.windows[Tool::Watch] = true;
 }
 
 // ---- call stack -------------------------------------------------------------------------------
-
-/// Innermost macro/procedure of `entries` that contains `line`.
-fn enclosing(entries: &[rustemu_asm::library::Entry], line: u32) -> Option<&rustemu_asm::library::Entry> {
-    entries.iter().filter(|e| e.line <= line && line <= e.end_line).min_by_key(|e| e.end_line - e.line)
-}
 
 struct Row {
     func: String,
@@ -352,13 +311,13 @@ fn call_stack_rows(app: &App) -> Vec<Row> {
     let s = &app.session;
     let frames = s.call_stack();
     let mut rows = Vec::new();
-    let into = app.show_macro_code;
+    let into = app.settings.show_macro_code;
     let pc = s.effective_pc();
     // Macro nesting of the current instruction (innermost first).
     if let (Some(v), Some(info)) = (s.view_at(pc, into), s.line_info_at(pc)) {
         for k in (0..v.level).rev() {
             let (f, l) = info.chain[k];
-            let name = app.source_index.get(f).and_then(|idx| enclosing(idx, l)).map(|e| {
+            let name = app.program.index.get(f).and_then(|idx| rustemu_asm::library::enclosing(idx, l)).map(|e| {
                 let kind = if e.kind == rustemu_asm::library::EntryKind::Proc { "proc" } else { "macro" };
                 format!("{kind} {}", e.name)
             });
@@ -426,193 +385,6 @@ pub fn call_stack_ui(app: &mut App, ui: &mut Ui) {
     ui.weak("Return addresses found on the stack (CALL / INT) plus the macros of the current line.");
 }
 
-// ---- ALU --------------------------------------------------------------------------------------
-
-fn bin(v: u32, bits: u32) -> String {
-    let s = format!("{v:0w$b}", w = bits as usize);
-    s.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" ")
-}
-
-/// The 8087: ST(0)..ST(7) (value, tag, 80-bit hex), the condition codes, TOP, the exceptions and
-/// the control word. What changed during the last step / run is red.
-pub(crate) fn fpu_ui(app: &mut App, ui: &mut Ui) {
-    use rustemu_core::fpu::{Tag, sw, to_f64};
-    let changed = egui::Color32::from_rgb(220, 40, 40);
-    let (f, prev) = (&app.session.machine.sys.fpu, &app.prev_fpu);
-    egui::Grid::new("fpu_regs").striped(true).spacing([14.0, 2.0]).show(ui, |ui| {
-        for h in ["", "value", "tag", "80-bit hex"] {
-            ui.label(RichText::new(h).weak());
-        }
-        ui.end_row();
-        for i in 0..8 {
-            let (v, tag) = (f.st(i), f.st_tag(i));
-            let hot = v != prev.st(i) || tag != prev.st_tag(i);
-            let text = |s: String| {
-                let t = RichText::new(s).monospace();
-                if hot { t.color(changed) } else { t }
-            };
-            ui.label(text(format!("ST({i})")));
-            let value = match tag {
-                Tag::Empty => "empty".to_string(),
-                _ => {
-                    let x = to_f64(v);
-                    if x.is_nan() { "NaN".into() } else { format!("{x}") }
-                }
-            };
-            ui.label(text(value));
-            ui.label(RichText::new(format!("{tag:?}").to_lowercase()).weak());
-            let hex: String = v.iter().rev().map(|b| format!("{b:02X}")).collect();
-            ui.label(text(format!("{} {}", &hex[..4], &hex[4..])));
-            ui.end_row();
-        }
-    });
-    ui.add_space(6.0);
-    let bit = |w: u16, b: u16| (w & b != 0) as u8;
-    let s = f.status;
-    ui.horizontal(|ui| {
-        ui.monospace(format!("TOP = {}", f.top()));
-        ui.separator();
-        let cc = format!("C3 C2 C1 C0 = {} {} {} {}", bit(s, sw::C3), bit(s, sw::C2), bit(s, sw::C1), bit(s, sw::C0));
-        let cc_changed = (s ^ prev.status) & (sw::C0 | sw::C1 | sw::C2 | sw::C3) != 0;
-        let t = RichText::new(cc).monospace();
-        ui.label(if cc_changed { t.color(changed) } else { t }).on_hover_text(
-            "Condition codes: FCOM / FTST / FXAM results (C3 = ZF, C2 = PF, C0 = CF after FSTSW + SAHF)",
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.monospace(format!("status {s:04X}h"));
-        for (b, name, what) in [
-            (sw::IE, "IE", "invalid operation"),
-            (sw::DE, "DE", "denormal operand"),
-            (sw::ZE, "ZE", "zero divide"),
-            (sw::OE, "OE", "overflow"),
-            (sw::UE, "UE", "underflow"),
-            (sw::PE, "PE", "precision (inexact)"),
-        ] {
-            let t = RichText::new(name).monospace();
-            ui.label(if s & b != 0 { t.color(changed).strong() } else { t.weak() }).on_hover_text(what);
-        }
-    });
-    let c = f.control;
-    let precision = ["24 bits", "-", "53 bits", "64 bits"][((c >> 8) & 3) as usize];
-    let rounding = ["to nearest", "down", "up", "toward zero"][((c >> 10) & 3) as usize];
-    ui.monospace(format!("control {c:04X}h  precision {precision}, rounding {rounding}, masks {:02X}h", c & 0x3F));
-    // The bytes as Emu8086's FPU window shows them: the environment (FSTENV) and ST(0)..ST(7) as in
-    // memory (FSAVE), lowest byte first.
-    egui::CollapsingHeader::new("raw bytes (as in Emu8086)").id_salt("fpu_raw").show(ui, |ui| {
-        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(" ");
-        ui.weak("control register:").on_hover_text("The environment as FSTENV stores it: control word, status word, tag word, instruction and operand addresses");
-        ui.monospace(hex(&f.env_bytes()));
-        ui.weak("FPU registers:").on_hover_text("ST(0)..ST(7), 10 bytes each, as FSAVE stores them");
-        for i in 0..8 {
-            ui.monospace(hex(&f.st(i)));
-        }
-    });
-}
-
-pub(crate) fn alu_ui(app: &mut App, ui: &mut Ui) {
-    let t = app.session.machine.cpu.alu_trace;
-    if t.op == AluOp::None {
-        ui.weak("No arithmetic or logic instruction executed yet.");
-        return;
-    }
-    let addr = rustemu_core::linear(t.cs, t.ip);
-    let ago = app.session.machine.cpu.instr_count.saturating_sub(t.instr + 1);
-    ui.horizontal_wrapped(|ui| {
-        let w = if t.wide { "word" } else { "byte" };
-        ui.label(RichText::new(format!("{} ({w})", t.op.name())).strong().monospace().size(15.0));
-        ui.weak(format!("at {:04X}:{:04X}", t.cs, t.ip));
-        if let Some(v) = app.session.view_at(addr, app.show_macro_code) {
-            let txt = format!("{}  {}", file_line(app, v.file, v.line), source_text(app, v.file, v.line));
-            if ui.link(RichText::new(txt).monospace()).clicked() {
-                show_location(app, v.file, v.line);
-            }
-        }
-        if ago > 0 {
-            ui.weak(format!("({ago} instructions ago)"));
-        }
-    });
-    let bits = if t.wide { 16 } else { 8 };
-    let shift = matches!(
-        t.op,
-        AluOp::Rol | AluOp::Ror | AluOp::Rcl | AluOp::Rcr | AluOp::Shl | AluOp::Shr | AluOp::Sar | AluOp::Setmo
-    );
-    let (mul, div) = (matches!(t.op, AluOp::Mul | AluOp::Imul), matches!(t.op, AluOp::Div | AluOp::Idiv));
-    let signed_op = matches!(t.op, AluOp::Imul | AluOp::Idiv);
-    // (label, value, width in bits)
-    let mut rows: Vec<(&str, u32, u32)> = Vec::new();
-    let (a_name, b_name) = match t.op {
-        _ if mul => (if t.wide { "AX" } else { "AL" }, "operand"),
-        _ if div => (if t.wide { "DX:AX" } else { "AX" }, "divisor"),
-        _ if shift => ("value", "count"),
-        AluOp::Inc | AluOp::Dec | AluOp::Neg | AluOp::Not => ("operand", ""),
-        _ => ("operand 1", "operand 2"),
-    };
-    rows.push((a_name, t.a, if div { bits * 2 } else { bits }));
-    if !b_name.is_empty() {
-        rows.push((b_name, t.b as u32, if shift { 8 } else { bits }));
-    }
-    if div {
-        rows.push(("quotient", t.result & 0xFFFF, bits));
-        rows.push(("remainder", t.result >> 16, bits));
-    } else {
-        let label = if matches!(t.op, AluOp::Cmp) {
-            "difference"
-        } else if t.op == AluOp::Test {
-            "AND result"
-        } else {
-            "result"
-        };
-        rows.push((label, t.result, if mul { bits * 2 } else { bits }));
-    }
-    let font = FontId::monospace(13.0);
-    egui::Grid::new("alu").num_columns(5).spacing([14.0, 3.0]).striped(true).show(ui, |ui| {
-        for h in ["", "hex", "binary", "unsigned", "signed"] {
-            ui.label(RichText::new(h).weak());
-        }
-        ui.end_row();
-        let n = rows.len();
-        for (i, (name, v, w)) in rows.into_iter().enumerate() {
-            let last = i + 1 == n || (div && i + 2 == n);
-            let v = if w >= 32 { v } else { v & ((1u32 << w) - 1) };
-            let style = |s: String| {
-                let t = RichText::new(s).font(font.clone());
-                if last { t.strong() } else { t }
-            };
-            ui.label(RichText::new(name).weak());
-            ui.label(style(format!("{:0w$X}h", v, w = (w / 4) as usize)));
-            ui.label(style(bin(v, w)));
-            ui.label(style(v.to_string()));
-            let s = match w {
-                8 => v as u8 as i8 as i64,
-                16 => v as u16 as i16 as i64,
-                _ => v as i32 as i64,
-            };
-            ui.label(if signed_op || s < 0 { style(s.to_string()) } else { RichText::new("") });
-            ui.end_row();
-        }
-    });
-    if t.op == AluOp::Cmp {
-        ui.weak("CMP does not store the difference; only the flags are kept.");
-    }
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("flags").weak());
-        for (n, f) in [
-            ("CF", flags::CF),
-            ("ZF", flags::ZF),
-            ("SF", flags::SF),
-            ("OF", flags::OF),
-            ("PF", flags::PF),
-            ("AF", flags::AF),
-        ] {
-            let (before, after) = (t.flags_in & f != 0, t.flags_out & f != 0);
-            let txt = RichText::new(format!("{n} {}→{}", before as u8, after as u8)).monospace();
-            ui.label(if before != after { txt.strong().color(crate::colors::info(ui)) } else { txt.weak() });
-        }
-    });
-}
-
 // ---- extended value viewer ------------------------------------------------------------------
 
 /// Registers of the value viewer, in Emu8086's order.
@@ -637,9 +409,9 @@ impl Default for ValueViewer {
 /// Opens the viewer on a register (double-click on a register in the emulator window).
 pub fn view_register(app: &mut App, name: &str) {
     if let Some(i) = VIEW_REGS.iter().position(|r| r.eq_ignore_ascii_case(name)) {
-        app.value_viewer.reg = Some(i);
-        app.value_viewer.error = None;
-        app.windows.value_viewer = true;
+        app.debugger.value_viewer.reg = Some(i);
+        app.debugger.value_viewer.error = None;
+        app.windows[Tool::ValueViewer] = true;
     }
 }
 
@@ -678,18 +450,8 @@ pub fn parse_view_addr(c: &rustemu_core::Cpu, s: &str) -> Option<u32> {
     }
 }
 
-pub fn value_viewer_window(app: &mut App, ctx: &egui::Context) {
-    let mut open = app.windows.value_viewer;
-    egui::Window::new("extended value viewer")
-        .open(&mut open)
-        .default_pos(pos2(420.0, 200.0))
-        .resizable(false)
-        .show(ctx, |ui| value_viewer_ui(app, ui));
-    app.windows.value_viewer = open;
-}
-
-fn value_viewer_ui(app: &mut App, ui: &mut Ui) {
-    let vv = &mut app.value_viewer;
+pub(crate) fn value_viewer_ui(app: &mut App, ui: &mut Ui) {
+    let vv = &mut app.debugger.value_viewer;
     ui.horizontal(|ui| {
         let current = vv.reg.map_or("memory word", |i| VIEW_REGS[i]);
         egui::ComboBox::from_label("value of").selected_text(current).show_ui(ui, |ui| {
@@ -733,18 +495,18 @@ fn value_viewer_ui(app: &mut App, ui: &mut Ui) {
     });
     ui.horizontal(|ui| {
         let r = ui.add(
-            egui::TextEdit::singleline(&mut app.value_viewer.set_text)
+            egui::TextEdit::singleline(&mut app.debugger.value_viewer.set_text)
                 .hint_text("new value: 1234h, 4660, 1010b, 'A', -5, ax+1")
                 .font(egui::TextStyle::Monospace)
                 .desired_width(240.0),
         );
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if ui.button("set").clicked() || enter {
-            let text = app.value_viewer.set_text.clone();
-            app.value_viewer.error = set_viewed_value(app, &text).err();
+            let text = app.debugger.value_viewer.set_text.clone();
+            app.debugger.value_viewer.error = set_viewed_value(app, &text).err();
         }
     });
-    if let Some(e) = &app.value_viewer.error {
+    if let Some(e) = &app.debugger.value_viewer.error {
         ui.colored_label(crate::colors::error(ui), e);
     }
 }
@@ -756,12 +518,12 @@ pub fn set_viewed_value(app: &mut App, text: &str) -> Result<(), String> {
         return Err(format!("{v} does not fit in a word"));
     }
     let m = &mut app.session.machine;
-    match app.value_viewer.reg {
+    match app.debugger.value_viewer.reg {
         Some(i) => {
             m.set_register(VIEW_REGS[i], v as u16);
         }
         None => {
-            let a = parse_view_addr(&m.cpu, &app.value_viewer.addr).ok_or("bad address")?;
+            let a = parse_view_addr(&m.cpu, &app.debugger.value_viewer.addr).ok_or("bad address")?;
             m.sys.mem.write16(a, v as u16);
         }
     }
