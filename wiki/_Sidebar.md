@@ -1,4 +1,34 @@
-**[RustEmu8086](Home)**
+**[RustEmu8086](Home)** · [Русский](Главная)
+
+**Getting started**
+- [Installation](Installation)
+- [Your first program](First-program)
+- [Debugging](Debugging)
+
+**Language**
+- [Emu8086 syntax](Emu8086-syntax)
+- [NASM syntax](NASM-syntax)
+- [8087 coprocessor](8087-coprocessor)
+- [emu8086.inc library](Emu8086-inc-library)
+- [BIOS and DOS interrupts](BIOS-and-DOS-interrupts)
+- [Virtual devices](Virtual-devices)
+
+**The app**
+- [Editor](Editor)
+- [Keyboard shortcuts](Keyboard-shortcuts)
+- [Web version](Web-version)
+- [Tablet layout](Tablet-layout)
+- [Command line](Command-line)
+
+**More**
+- [Differences from Emu8086](Differences-from-Emu8086)
+- [Troubleshooting](Troubleshooting)
+- [For developers](For-developers)
+
+<details>
+<summary><b>Русский</b></summary>
+
+**[Главная](Главная)**
 
 **Начало**
 - [Установка](Установка)
@@ -25,4 +55,6 @@
 - [Вопросы и проблемы](Вопросы-и-проблемы)
 - [Для разработчиков](Для-разработчиков)
 
-[Открыть веб-версию →](https://olegdurandin.github.io/RustEmu8086/)
+</details>
+
+[Open the web version →](https://olegdurandin.github.io/RustEmu8086/)
