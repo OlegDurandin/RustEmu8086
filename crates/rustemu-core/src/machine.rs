@@ -907,6 +907,12 @@ impl Machine {
         self.history.iter().map(|s| &s.cpu)
     }
 
+    /// The last recorded step: the CPU before it and the memory it wrote, as (address, byte
+    /// before) in the order written (an address can repeat; its first entry is the old value).
+    pub fn last_step(&self) -> Option<(&Cpu, &[(u32, u8)])> {
+        self.history.back().map(|s| (&s.cpu, s.undo.as_slice()))
+    }
+
     pub fn clear_history(&mut self) {
         self.history.clear();
     }

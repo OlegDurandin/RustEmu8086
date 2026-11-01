@@ -239,6 +239,7 @@ impl App {
         self.build.failed = false;
         self.session.machine.timer_irq = self.settings.timer_irq;
         self.program.generation += 1;
+        self.exec.last_event = None;
         for w in &mut self.debugger.watches {
             w.compiled = None;
         }

@@ -162,6 +162,20 @@ impl App {
     }
 
     /// Saves the editor text as a download (the browser).
+    /// Shares the source as a `.asm` file through the system share sheet; a browser that cannot
+    /// share files downloads it instead, the desktop offers a link to the web version.
+    pub fn share_source(&mut self) {
+        let name = self.file_name();
+        if crate::platform::share_file(&name, self.doc.text.as_bytes()) {
+            self.status = format!("Sharing {name}");
+        } else if self.front.browser {
+            self.download_source();
+            self.status = format!("This browser cannot share files: {name} was downloaded instead");
+        } else {
+            self.dialogs.share = Some(crate::share::ShareDialog { run: false });
+        }
+    }
+
     pub fn download_source(&mut self) {
         let name = self.file_name();
         crate::platform::download(&name, self.doc.text.as_bytes());

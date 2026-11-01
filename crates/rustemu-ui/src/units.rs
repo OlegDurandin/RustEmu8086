@@ -84,7 +84,7 @@ pub(crate) fn fpu_ui(app: &mut App, ui: &mut Ui) {
     });
 }
 
-pub(crate) fn alu_ui(app: &mut App, ui: &mut Ui) {
+pub fn alu_ui(app: &mut App, ui: &mut Ui) {
     let t = app.session.machine.cpu.alu_trace;
     if t.op == AluOp::None {
         ui.weak("No arithmetic or logic instruction executed yet.");

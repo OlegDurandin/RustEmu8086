@@ -22,11 +22,13 @@ pub(crate) enum Icon {
     File,
     Trash,
     Plus,
-    Up,
-    Down,
     Menu,
     Keyboard,
     Share,
+    Folder,
+    Book,
+    Floppy,
+    Download,
 }
 
 pub(crate) fn paint_icon(p: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, color: Color32) {
@@ -105,13 +107,6 @@ pub(crate) fn paint_icon(p: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, c
             p.line_segment([c + vec2(-s * 0.35, 0.0), c + vec2(s * 0.35, 0.0)], st);
             p.line_segment([c + vec2(0.0, -s * 0.35), c + vec2(0.0, s * 0.35)], st);
         }
-        Icon::Up | Icon::Down => {
-            let k = if matches!(icon, Icon::Up) { 1.0 } else { -1.0 };
-            p.add(egui::Shape::line(
-                vec![c + vec2(-s * 0.3, s * 0.15 * k), c + vec2(0.0, -s * 0.15 * k), c + vec2(s * 0.3, s * 0.15 * k)],
-                st,
-            ));
-        }
         Icon::Menu => {
             for dy in [-0.28, 0.0, 0.28] {
                 p.circle_filled(c + vec2(0.0, dy * s), s * 0.08, color);
@@ -136,6 +131,53 @@ pub(crate) fn paint_icon(p: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, c
                 vec![c + vec2(-s * 0.15, -s * 0.27), c + vec2(0.0, -s * 0.42), c + vec2(s * 0.15, -s * 0.27)],
                 Stroke::new(1.5, color),
             ));
+        }
+        Icon::Folder => {
+            let r = Rect::from_center_size(c + vec2(0.0, s * 0.05), vec2(s * 0.8, s * 0.56));
+            p.add(egui::Shape::closed_line(
+                vec![
+                    r.left_bottom(),
+                    r.left_top(),
+                    r.left_top() + vec2(s * 0.28, 0.0),
+                    r.left_top() + vec2(s * 0.36, s * 0.1),
+                    r.right_top() + vec2(0.0, s * 0.1),
+                    r.right_bottom(),
+                ],
+                st,
+            ));
+        }
+        Icon::Book => {
+            // Two pages of an open book.
+            for k in [-1.0, 1.0] {
+                p.add(egui::Shape::closed_line(
+                    vec![
+                        c + vec2(0.0, -s * 0.3),
+                        c + vec2(k * s * 0.42, -s * 0.36),
+                        c + vec2(k * s * 0.42, s * 0.3),
+                        c + vec2(0.0, s * 0.36),
+                    ],
+                    st,
+                ));
+            }
+        }
+        Icon::Floppy => {
+            let r = Rect::from_center_size(c, vec2(s * 0.7, s * 0.7));
+            p.rect_stroke(r, 2.0, st, StrokeKind::Middle);
+            p.rect_stroke(
+                Rect::from_min_size(r.left_top() + vec2(s * 0.15, 0.0), vec2(s * 0.36, s * 0.22)),
+                1.0,
+                Stroke::new(1.5, color),
+                StrokeKind::Middle,
+            );
+            p.rect_filled(Rect::from_center_size(c + vec2(0.0, s * 0.17), vec2(s * 0.4, s * 0.2)), 1.0, color);
+        }
+        Icon::Download => {
+            p.line_segment([c + vec2(0.0, -s * 0.38), c + vec2(0.0, s * 0.14)], st);
+            p.add(egui::Shape::line(
+                vec![c + vec2(-s * 0.2, -s * 0.06), c + vec2(0.0, s * 0.14), c + vec2(s * 0.2, -s * 0.06)],
+                st,
+            ));
+            p.line_segment([c + vec2(-s * 0.34, s * 0.36), c + vec2(s * 0.34, s * 0.36)], st);
         }
         Icon::Keyboard => {
             let body = Rect::from_center_size(c, vec2(s * 0.9, s * 0.6));

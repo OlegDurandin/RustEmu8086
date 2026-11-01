@@ -262,13 +262,27 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       окно) и окном на Mac для разработки. **Нативные iPadOS/Android убраны** (решение 2026-10-28: без Apple
       Developer ID; код — в локальной ветке `archive/native-tablet`, на GitHub не отправлять). Модули: `lib.rs`
       (`TabletApp`, `TabletState`, `tablet_ui`), `theme.rs` (тёмная тема через `FrontEnd::fixed_theme`), `widgets.rs`
-      (иконки, кнопки, карточки), `bars.rs` (верхняя панель Run/Pause/Step/Reset, вкладки, меню ⋮, статус),
-      `tabs.rs` (раскладка Editor / Debugger / Memory: альбомная — три колонки на всю высоту, `three_columns`;
-      портретная — две колонки и нижний ряд; узкое окно — стопкой, `left_width`), `cards.rs`, `memory.rs`
-      (`MemoryView`: hex-редактор, инспектор, сегменты, стек, карта), `keypad.rs` (экранная клавиатура: US +
-      Esc/Tab/Ctrl/стрелки/F1–F10/Ins…PgDn, Shift/Ctrl на одну клавишу, открывается при `is_waiting_input`;
-      рядом экран `screen::Fit::Cursor`), `tests.rs` (снимки `30_tablet_*`, `31_tablet_keyboard*`). Трасса —
-      `Machine::history_cpus`. Платформы в `rustemu_ui::platform` — только desktop (`rfd`) и wasm
+      (иконки, кнопки, карточки), `bars.rs` (верхняя панель: имя файла — меню проекта New / Open from Files / Example library / Save draft / My drafts / Export .asm / Share source — `App::share_source`, `platform::share_file`: Web Share API через `Reflect`, иначе скачивание; Run/Pause/Step/Reset, вкладки, меню ⋮, статус),
+      `tabs.rs` (раскладка по UX-спецификации V2.2: у вкладки главная область + контекст; альбомная — две колонки,
+      портретная/узкая — главная сверху; Editor — исходник ~60% + Output + превью CPU, без дизассемблера; Debugger —
+      Last step + Code + инструменты слева, CPU + Output справа, Output становится инструментом, когда не помещается),
+      `cpu.rs` (AX–DX слово + байты — вычисляются из слова, `Sel`; SP BP SI DI, сегменты + IP, 9 флагов; регистр AX–DX —
+      одна ячейка: сверху слово, снизу байты, каждое — своя цель касания; изменённое — зелёным с точкой по `exec.prev_cpu`; инспектор HEX/DEC/BIN, правка через
+      `App::edit_cpu` только при `App::cpu_editable`), `debugger.rs` (Last step из `Session::last_step` —
+      `rustemu_session::step::StepView`: инструкция, строка, изменения регистров/флагов/памяти по истории шага назад
+      `Machine::last_step`, объяснение флагов по `alu_trace`; шаг, начатый в BIOS, показывается вызывающим INT;
+      Code: Source / Mixed / Assembly, последняя строка — синяя полоса, следующая — янтарная стрелка, BIOS скрыт —
+      `Session::bios_caller`, галочка *BIOS internals*; инструменты по одному — `DebugTool`, среди них Debug log — консоль `console_ui`; окном в планшете она не
+      показывается), `cards.rs` (редактор,
+      Output с плашкой ожидания клавиши, watch, точки останова, стек вызовов, трасса), `memory.rs`
+      (`MemoryView`: hex-редактор, инспектор, сегменты, стек, карта), `keypad.rs` (PC-клавиатура — нижняя панель:
+      заголовок PC Keyboard / состояние / Fn keys / Hide, клавиши ≥ 44 pt, высота ~28% окна; US +
+      Esc/Tab/Ctrl/стрелки/F1–F10/Ins…PgDn, Shift/Ctrl на одну клавишу, открывается при начале ожидания; клавиша на
+      паузе в ожидающем шаге завершает шаг; экран рядом — только на Memory), `tests.rs` (снимки `30_tablet_*`,
+      `31_tablet_keyboard*`, `32_tablet_*`; сценарии R1–R5, R11, R12 спецификации). Step недоступен при
+      `App::waiting_for_key`; причина остановки — `exec.last_event`. Трасса — `Machine::history_cpus`.
+      Дальше по спецификации: PR 4 — Output: Screen | Devices | Messages, ряд ASM-клавиш над системной клавиатурой,
+      быстрые переходы Memory (CS:IP, DS:SI, SS:SP), README со скриншотами Платформы в `rustemu_ui::platform` — только desktop (`rfd`) и wasm
 - [~] 6.8 Веб-версия (`rustemu-web`, trunk → GitHub Pages, задания `web`/`deploy-web` в CI): WebGPU с откатом на
       WebGL 2 (`rustemu_ui::wgpu_options`); время — `web-time` (std `Instant` в браузере паникует), часовой пояс —
       `js_sys::Date`; файлы — `platform::request_upload`/`take_uploads` (rfd `AsyncFileDialog`) и `download`;

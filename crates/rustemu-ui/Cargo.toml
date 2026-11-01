@@ -40,11 +40,11 @@ egui = { workspace = true, features = ["monochrome_emoji_fonts"] }
 
 # ---- the browser (rustemu-web) ---------------------------------------------------------------------
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# Uploads and downloads (src/platform.rs).
+# Uploads, downloads and the share sheet (src/platform.rs).
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Document", "Element", "HtmlAnchorElement", "HtmlElement", "Url", "Window"] }
+web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Document", "Element", "File", "FilePropertyBag", "HtmlAnchorElement", "HtmlElement", "Navigator", "Url", "Window"] }
 
 [dev-dependencies]
 # examples/make_icon.rs

@@ -220,6 +220,7 @@ impl App {
     }
 
     pub fn handle_event(&mut self, ev: Event) {
+        self.exec.last_event = Some(ev.clone());
         let m = &self.session.machine;
         let at = format!("{:04X}:{:04X}", m.cpu.cs(), m.cpu.ip);
         match ev {
