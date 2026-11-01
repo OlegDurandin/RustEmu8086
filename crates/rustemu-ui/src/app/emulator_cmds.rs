@@ -186,6 +186,7 @@ impl App {
         }
     }
 
+    /// Opens a file and loads it into the emulator: an executable as is, a source after assembling it.
     pub fn emulate_file(&mut self, p: &Path) {
         let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         if matches!(ext.as_str(), "com" | "exe" | "bin" | "boot") {
@@ -204,6 +205,7 @@ impl App {
         self.windows[Tool::Emulator] = false;
     }
 
+    /// Toggles the breakpoint on the editor line of the cursor.
     pub fn toggle_breakpoint_at_cursor(&mut self) {
         self.toggle_breakpoint_at_line(0, self.editor.cursor_line);
     }

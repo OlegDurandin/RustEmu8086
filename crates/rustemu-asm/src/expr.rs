@@ -2,6 +2,7 @@
 
 use crate::lexer::{Tok, Token};
 
+/// A register in an operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Reg {
     /// 8-bit register, encoding 0..7 (AL CL DL BL AH CH DH BH).
@@ -14,6 +15,7 @@ pub enum Reg {
     St(u8),
 }
 
+/// The register named `name` (any case), if it is one.
 pub fn parse_reg(name: &str) -> Option<Reg> {
     const R8: [&str; 8] = ["AL", "CL", "DL", "BL", "AH", "CH", "DH", "BH"];
     const R16: [&str; 8] = ["AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"];
@@ -28,57 +30,97 @@ pub fn parse_reg(name: &str) -> Option<Reg> {
     SR.iter().position(|r| *r == u).map(|i| Reg::Seg(i as u8))
 }
 
+/// Jump distance: `SHORT`, `NEAR PTR`, `FAR PTR`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dist {
+    /// Within -128..127 bytes (2-byte jump).
     Short,
+    /// Within the segment.
     Near,
+    /// To another segment (CS:IP).
     Far,
 }
 
+/// Unary operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnOp {
+    /// `-x`
     Neg,
+    /// `NOT x` (NASM `~x`)
     Not,
+    /// `OFFSET x`: the offset of a label or variable.
     Offset,
+    /// `SEG x`: the segment of a label or variable.
     Seg,
+    /// `TYPE x`: the element size of a variable (FFFFh / FFFEh for NEAR / FAR labels).
     Type,
+    /// `LENGTH x`: the element count of a variable.
     Length,
+    /// `SIZE x`: `TYPE x` * `LENGTH x`.
     Size,
+    /// `LOW x`: the low byte.
     Low,
+    /// `HIGH x`: the high byte.
     High,
 }
 
+/// Binary operators (the comparisons give -1 / 0, NASM: 1 / 0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
+    /// `+`
     Add,
+    /// `-`
     Sub,
+    /// `*`
     Mul,
+    /// `/`
     Div,
+    /// `MOD` (NASM `%`)
     Mod,
+    /// `SHL`, `<<`
     Shl,
+    /// `SHR`, `>>`
     Shr,
+    /// `AND` (NASM `&`)
     And,
+    /// `OR` (NASM `|`)
     Or,
+    /// `XOR` (NASM `^`)
     Xor,
+    /// `EQ`, `==`
     Eq,
+    /// `NE`, `!=`
     Ne,
+    /// `LT`, `<`
     Lt,
+    /// `LE`, `<=`
     Le,
+    /// `GT`, `>`
     Gt,
+    /// `GE`, `>=`
     Ge,
 }
 
+/// A parsed operand expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
+    /// A number.
     Num(i64),
+    /// A string or character constant.
     Str(Vec<u8>),
+    /// A symbol by name.
     Sym(String),
+    /// `$`: the current address.
     Here,
     /// NASM `$$`: start of the current section.
     SectionStart,
+    /// A register.
     Reg(Reg),
+    /// `[x]`: memory at `x`.
     Mem(Box<Expr>),
+    /// A unary operator.
     Un(UnOp, Box<Expr>),
+    /// A binary operator.
     Bin(BinOp, Box<Expr>, Box<Expr>),
     /// `BYTE PTR x` (size 1/2/4), `b.x`, `w.x`.
     Ptr(u8, Box<Expr>),
@@ -93,8 +135,11 @@ fn one_or_zero(e: Expr) -> Expr {
     Expr::Bin(BinOp::And, Box::new(e), Box::new(Expr::Num(1)))
 }
 
+/// Parser of operand expressions over the tokens of a line.
 pub struct Parser<'a> {
+    /// The tokens.
     pub toks: &'a [Token],
+    /// Position of the next token.
     pub pos: usize,
     /// NASM syntax: `byte [x]` without PTR, `$$`, C operators, little-endian character constants.
     pub nasm: bool,
@@ -103,32 +148,39 @@ pub struct Parser<'a> {
 type PResult<T> = Result<T, (usize, String)>;
 
 impl<'a> Parser<'a> {
+    /// A parser at the start of `toks` (MASM syntax).
     pub fn new(toks: &'a [Token]) -> Self {
         Parser { toks, pos: 0, nasm: false }
     }
 
+    /// The next token.
     pub fn peek(&self) -> Option<&Tok> {
         self.toks.get(self.pos).map(|t| &t.tok)
     }
 
+    /// The token `n` places after the next.
     pub fn peek_at(&self, n: usize) -> Option<&Tok> {
         self.toks.get(self.pos + n).map(|t| &t.tok)
     }
 
+    /// Column of the next token (or just after the last one), for error positions.
     pub fn col(&self) -> usize {
         self.toks.get(self.pos).map(|t| t.col).or_else(|| self.toks.last().map(|t| t.col + 1)).unwrap_or(0)
     }
 
+    /// No tokens left.
     pub fn at_end(&self) -> bool {
         self.pos >= self.toks.len()
     }
 
+    /// Takes the next token.
     pub fn advance(&mut self) -> Option<Tok> {
         let t = self.toks.get(self.pos).map(|t| t.tok.clone());
         self.pos += 1;
         t
     }
 
+    /// Takes the punctuation `c` if it is next.
     pub fn eat_p(&mut self, c: char) -> bool {
         if self.peek() == Some(&Tok::P(c)) {
             self.pos += 1;
@@ -156,6 +208,7 @@ impl<'a> Parser<'a> {
         !matches!(self.peek_at(1), None | Some(Tok::P(',' | ')' | ']' | '+' | '-' | '*' | '/' | ':' | '=')))
     }
 
+    /// Takes the keyword `kw` (any case) if it is next.
     pub fn eat_kw(&mut self, kw: &str) -> bool {
         if self.peek().is_some_and(|t| t.is_ident(kw)) {
             self.pos += 1;
@@ -169,6 +222,7 @@ impl<'a> Parser<'a> {
         Err((self.col(), msg.into()))
     }
 
+    /// Parses an expression with the operator precedence of the dialect.
     pub fn expr(&mut self) -> PResult<Expr> {
         if self.nasm {
             return self.nasm_cond();
@@ -550,6 +604,7 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// A token as an error message shows it.
 pub fn describe(t: &Tok) -> String {
     match t {
         Tok::Ident(s) => format!("'{s}'"),
@@ -562,18 +617,23 @@ pub fn describe(t: &Tok) -> String {
 
 // ---- evaluation ------------------------------------------------------------
 
+/// A segment of the program being assembled (its index).
 pub type SegId = usize;
 
 /// What a symbol resolves to during evaluation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymVal {
+    /// A constant.
     Const(i64),
     /// Code label or variable inside segment `seg`.
     Label {
+        /// Its segment.
         seg: SegId,
+        /// Its offset.
         off: i64,
         /// Data size for variables (1/2/4); None for code labels.
         size: Option<u8>,
+        /// Declared FAR (procedures, `LABEL FAR`).
         far: bool,
         /// Element count (for LENGTH).
         count: i64,
@@ -582,7 +642,9 @@ pub enum SymVal {
     Segment(SegId),
 }
 
+/// Symbols seen by [`eval`]: what the assembler knows in the current pass.
 pub trait Env {
+    /// The value of `name`.
     fn lookup(&self, name: &str) -> Option<SymVal>;
     /// Whether the symbol is known to exist (it may have no value yet in early passes).
     fn is_forward(&self, name: &str) -> Option<ForwardKind>;
@@ -599,13 +661,23 @@ pub trait Env {
 /// Information about symbols that are declared but not yet resolved in the current pass.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ForwardKind {
-    Label { size: Option<u8>, far: bool },
+    /// A label or variable.
+    Label {
+        /// Data size of a variable (`None`: a code label).
+        size: Option<u8>,
+        /// Declared FAR.
+        far: bool,
+    },
+    /// A constant.
     Const,
+    /// A segment name.
     Segment,
 }
 
+/// The value of an expression: a number plus the registers, memory, segment and size it refers to.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Val {
+    /// The numeric part (offsets, displacement, value).
     pub num: i64,
     /// Base/index registers (16-bit encodings).
     pub regs: Vec<u8>,
@@ -613,7 +685,9 @@ pub struct Val {
     pub mem: bool,
     /// Operand size from a variable type or PTR.
     pub size: Option<u8>,
+    /// Segment override (`ES:`).
     pub seg_ov: Option<u8>,
+    /// Jump distance given (`SHORT`, `NEAR PTR`, `FAR PTR`).
     pub dist: Option<Dist>,
     /// The value is an address inside this segment (label offset).
     pub label_seg: Option<SegId>,
@@ -638,6 +712,7 @@ impl Val {
     }
 }
 
+/// Evaluates `e` with the symbols of `env`.
 pub fn eval(e: &Expr, env: &dyn Env) -> Result<Val, String> {
     Ok(match e {
         Expr::Num(n) => Val::num(*n),

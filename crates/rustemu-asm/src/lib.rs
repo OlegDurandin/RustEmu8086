@@ -5,6 +5,8 @@
 //! assert_eq!(prog.image, [0xB8, 0x05, 0x00, 0xC3]);
 //! ```
 
+#![warn(missing_docs)]
+
 mod asm;
 pub mod encode;
 mod errpos;
@@ -33,6 +35,7 @@ pub enum Dialect {
 }
 
 impl Dialect {
+    /// Name shown to the user (`Emu8086/MASM`, `NASM`).
     pub fn name(self) -> &'static str {
         match self {
             Dialect::Masm => "Emu8086/MASM",
@@ -115,15 +118,21 @@ fn nasm_word_directive(code: &str) -> bool {
     })
 }
 
+/// Kind of the output file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
+    /// COM: one segment loaded at offset 100h (`ORG 100h`, `#make_com#`).
     Com,
+    /// EXE (MZ): segments, relocations, entry point and stack (`#make_exe#`).
     Exe,
+    /// BIN: raw bytes for `#load_segment#:#load_offset#` (`#make_bin#`).
     Bin,
+    /// Boot sector: 512 bytes for 0000:7C00h (`#make_boot#`).
     Boot,
 }
 
 impl Format {
+    /// Name shown to the user (`COM`, `EXE`, ...).
     pub fn name(self) -> &'static str {
         match self {
             Format::Com => "COM",
@@ -133,6 +142,7 @@ impl Format {
         }
     }
 
+    /// Extension of the output file, without the dot.
     pub fn extension(self) -> &'static str {
         match self {
             Format::Com => "com",
@@ -143,6 +153,7 @@ impl Format {
     }
 }
 
+/// An assembly error and where it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsmError {
     /// Index into [`Program::files`] / the file list returned with errors.
@@ -151,7 +162,9 @@ pub struct AsmError {
     pub line: u32,
     /// The part of the line the error is about: 0-based column and length, in characters.
     pub col: Option<usize>,
+    /// Length of that part in characters (with `col`).
     pub len: usize,
+    /// The message.
     pub msg: String,
 }
 
@@ -168,9 +181,13 @@ impl std::fmt::Display for AsmError {
 /// Maps a range of the load image back to a source line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineInfo {
+    /// File index (into [`Program::files`]).
     pub file: usize,
+    /// 1-based line number.
     pub line: u32,
+    /// Offset of the first byte in [`Program::image`].
     pub image_offset: u32,
+    /// Number of bytes.
     pub len: u32,
     /// True for instructions, false for data.
     pub is_code: bool,
@@ -184,35 +201,54 @@ pub struct LineInfo {
     pub chain: Vec<(usize, u32)>,
 }
 
+/// A line of the listing: the source line with its address and bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListingLine {
+    /// File index (into [`Program::files`]).
     pub file: usize,
+    /// 1-based line number.
     pub line: u32,
     /// Segment paragraph (relative to the image) and offset of the emitted bytes.
     pub segment: Option<u16>,
+    /// Offset of the emitted bytes in their segment.
     pub offset: Option<u16>,
+    /// The emitted bytes.
     pub bytes: Vec<u8>,
+    /// The source line as written.
     pub text: String,
+    /// Macro nesting of the line (0: written in the program).
     pub macro_depth: u32,
+    /// For a line of a macro expansion: (file, line) in the macro definition.
     pub origin: Option<(usize, u32)>,
 }
 
+/// What a symbol names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
+    /// A code label (`name:`), an address.
     Label,
+    /// A variable (`name db ...`): memory with a type.
     Variable,
+    /// A constant (`EQU`, `=`).
     Constant,
+    /// A segment (`SEGMENT`).
     Segment,
+    /// A procedure (`PROC`).
     Proc,
 }
 
+/// A name defined by the program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbol {
+    /// The name in upper case (macro locals: `name??NNNN`).
     pub name: String,
+    /// What it names.
     pub kind: SymbolKind,
     /// Segment paragraph relative to the image (labels and variables).
     pub segment: Option<u16>,
+    /// Offset in its segment (labels, variables, procedures) or the value (constants).
     pub value: i64,
+    /// Element size in bytes of a variable (1 for DB, 2 for DW, ...).
     pub size: Option<u8>,
 }
 
@@ -228,17 +264,23 @@ impl Symbol {
     }
 }
 
+/// A segment of an EXE.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentInfo {
+    /// The name.
     pub name: String,
+    /// Paragraph relative to the image start.
     pub paragraph: u16,
+    /// Size in bytes.
     pub size: u32,
 }
 
 /// Emu8086 `#...#` directives.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EmuDirectives {
+    /// Load segment of a BIN (`#load_segment=...#`).
     pub load_segment: Option<u16>,
+    /// Load offset of a BIN (`#load_offset=...#`).
     pub load_offset: Option<u16>,
     /// Initial register values (`#AX=1234h#`).
     pub regs: Vec<(String, u16)>,
@@ -248,8 +290,10 @@ pub struct EmuDirectives {
     pub mem: Vec<(u32, Vec<u8>)>,
 }
 
+/// An assembled program: its image and everything the debugger needs to map it to the source.
 #[derive(Debug, Clone)]
 pub struct Program {
+    /// Output format.
     pub format: Format,
     /// Load module: what is placed in memory (for EXE: without the MZ header).
     pub image: Vec<u8>,
@@ -261,12 +305,19 @@ pub struct Program {
     pub entry: (u16, u16),
     /// Initial SS (relative) and SP.
     pub stack: (u16, u16),
+    /// Image ranges and their source lines (sorted as emitted).
     pub lines: Vec<LineInfo>,
+    /// The listing.
     pub listing: Vec<ListingLine>,
+    /// The symbol table.
     pub symbols: Vec<Symbol>,
+    /// EXE segments.
     pub segments: Vec<SegmentInfo>,
+    /// Source files: the main one first, then included ones.
     pub files: Vec<String>,
+    /// Emu8086 `#...#` directives.
     pub emu: EmuDirectives,
+    /// The dialect it was assembled as.
     pub dialect: Dialect,
 }
 
@@ -370,6 +421,7 @@ fn hex_bytes(b: &[u8]) -> String {
 /// Loads include files from disk (relative to the including file and extra directories),
 /// falling back to the built-in `emu8086.inc`.
 pub struct FsLoader {
+    /// Directories searched after the folder of the including file.
     pub include_dirs: Vec<PathBuf>,
 }
 
@@ -406,7 +458,9 @@ impl FileLoader for BuiltinLoader {
 /// Error list paired with the file table it refers to.
 #[derive(Debug, Clone)]
 pub struct AsmErrors {
+    /// The errors.
     pub errors: Vec<AsmError>,
+    /// File names the errors' `file` indices refer to.
     pub files: Vec<String>,
 }
 

@@ -14,16 +14,24 @@ use crate::memdrive::MemDrive;
 
 type FindState = Option<(Arc<Vec<(String, u64)>>, usize)>;
 
+/// A date and time for DOS (INT 21h/2Ah, 2Ch) and the BIOS clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DateTime {
+    /// Year (1980..2099).
     pub year: u16,
+    /// Month 1..12.
     pub month: u8,
+    /// Day of the month 1..31.
     pub day: u8,
     /// 0 = Sunday
     pub weekday: u8,
+    /// Hour 0..23.
     pub hour: u8,
+    /// Minute 0..59.
     pub minute: u8,
+    /// Second 0..59.
     pub second: u8,
+    /// Hundredths of a second 0..99.
     pub hundredths: u8,
 }
 
@@ -359,7 +367,7 @@ impl Machine {
         Svc::Ret
     }
 
-    /// AH=0Ah: DS:DX -> [max][count][chars... CR]
+    /// AH=0Ah: DS:DX -> `[max][count][chars... CR]`
     fn buffered_input(&mut self) -> Svc {
         let (ds, dx) = (self.cpu.sregs[DS], self.cpu.regs[DX]);
         let max = self.sys.mem.read8(linear(ds, dx)).max(1) as usize;

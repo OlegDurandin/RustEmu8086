@@ -66,8 +66,11 @@ pub enum UploadFor {
 
 /// A file the user uploaded (the browser).
 pub struct Upload {
+    /// What it is for.
     pub purpose: UploadFor,
+    /// File name.
     pub name: String,
+    /// Contents.
     pub bytes: Vec<u8>,
 }
 

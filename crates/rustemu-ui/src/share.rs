@@ -15,13 +15,17 @@ const MAX_TEXT: usize = 1 << 20;
 /// A program from a link.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shared {
+    /// File name.
     pub name: String,
+    /// Source text.
     pub text: String,
+    /// Run it after opening (`&run`).
     pub run: bool,
 }
 
 /// The "share link" dialog.
 pub struct ShareDialog {
+    /// The link also runs the program.
     pub run: bool,
 }
 

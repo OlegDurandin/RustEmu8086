@@ -12,29 +12,44 @@ use rustc_apfloat::{Float, FloatConvert, Round, Status};
 
 /// Status word bits.
 pub mod sw {
+    /// Invalid operation (stack overflow or underflow, 0/0, the root of a negative number, ...).
     pub const IE: u16 = 0x0001;
+    /// Denormalized operand.
     pub const DE: u16 = 0x0002;
+    /// Division by zero.
     pub const ZE: u16 = 0x0004;
+    /// Overflow: the result is too large for the destination.
     pub const OE: u16 = 0x0008;
+    /// Underflow: the result is too small for the destination.
     pub const UE: u16 = 0x0010;
+    /// Precision: the result was rounded.
     pub const PE: u16 = 0x0020;
     /// Error summary: an unmasked exception is pending.
     pub const ES: u16 = 0x0080;
+    /// Condition code C0 (the "carry" of comparisons: below).
     pub const C0: u16 = 0x0100;
+    /// Condition code C1 (the direction of rounding; stack overflow vs underflow).
     pub const C1: u16 = 0x0200;
+    /// Condition code C2 (unordered comparison; partial remainder of FPREM).
     pub const C2: u16 = 0x0400;
+    /// TOP: the physical register of ST(0), bits 11..13.
     pub const TOP: u16 = 0x3800;
+    /// Condition code C3 (the "zero" of comparisons: equal).
     pub const C3: u16 = 0x4000;
+    /// Busy.
     pub const B: u16 = 0x8000;
 }
 
 /// Tag of a register.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tag {
+    /// A finite non-zero number.
     Valid,
+    /// Zero.
     Zero,
     /// NaN, infinity or denormal.
     Special,
+    /// No value (popped or never loaded).
     Empty,
 }
 
@@ -43,13 +58,17 @@ pub enum Tag {
 pub struct Fpu {
     /// Physical registers R0..R7, 80-bit little-endian (ST(i) is R[(TOP + i) & 7]).
     pub regs: [[u8; 10]; 8],
+    /// Control word: exception masks, precision (bits 8..9) and rounding (bits 10..11).
     pub control: u16,
     /// Status word, TOP in bits 11..13.
     pub status: u16,
+    /// Tag word: two bits per physical register ([`Tag`]).
     pub tag: u16,
-    /// Linear address and opcode (11 bits) of the last instruction, linear address of its operand.
+    /// Linear address of the last instruction (FSTENV / FSAVE store it).
     pub last_ip: u32,
+    /// Opcode of the last instruction (the low 11 bits of its ESC bytes).
     pub last_opcode: u16,
+    /// Linear address of the last memory operand.
     pub last_data: u32,
 }
 
@@ -62,8 +81,11 @@ impl Default for Fpu {
 /// Where an instruction came from (for FSTENV / FSAVE).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Ctx {
+    /// Linear address of the instruction.
     pub ip: u32,
+    /// Its opcode (11 bits).
     pub opcode: u16,
+    /// Linear address of its memory operand.
     pub data: u32,
 }
 
@@ -71,7 +93,9 @@ pub struct Ctx {
 /// operand, and load AX (FSTSW AX).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Done {
+    /// Bytes of the operand buffer to write back to memory (0: none).
     pub write: usize,
+    /// The new AX (FSTSW AX).
     pub ax: Option<u16>,
 }
 
@@ -143,6 +167,7 @@ impl Fpu {
         Fpu { regs: [[0; 10]; 8], control: 0x03FF, status: 0, tag: 0xFFFF, last_ip: 0, last_opcode: 0, last_data: 0 }
     }
 
+    /// The physical register of ST(0).
     pub fn top(&self) -> usize {
         ((self.status & sw::TOP) >> 11) as usize
     }

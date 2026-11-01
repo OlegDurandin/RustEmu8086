@@ -4,20 +4,30 @@ use egui::{Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2}
 
 use crate::app::App;
 
+/// Tabs of the virtual devices window.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Device {
+    /// Traffic lights (port 4).
     #[default]
     TrafficLights,
+    /// Stepper motor (port 7).
     Stepper,
+    /// LED display (port 199).
     Led,
+    /// Thermometer and heater (ports 125, 127).
     Thermometer,
+    /// Printer (port 130).
     Printer,
+    /// Robot (ports 9, 10, 11).
     Robot,
+    /// The last value of every port written.
     SimpleIo,
+    /// Port 3DAh and the VGA palette.
     VgaState,
 }
 
 impl Device {
+    /// The tabs with their titles, in order.
     pub const ALL: [(Device, &'static str); 8] = [
         (Device::TrafficLights, "traffic lights"),
         (Device::Stepper, "stepper motor"),

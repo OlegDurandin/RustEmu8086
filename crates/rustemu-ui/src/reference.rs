@@ -30,6 +30,7 @@ pub fn find_directive(name: &str) -> Option<usize> {
     })
 }
 
+/// Index in [`INTERRUPTS`] of the article of `INT number`.
 pub fn find_interrupt(number: u8) -> Option<usize> {
     INTERRUPTS.iter().position(|i| i.number == number)
 }
@@ -68,7 +69,9 @@ pub fn flags_summary(flags: &str, lang: Lang) -> String {
 /// An article of the reference.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Topic {
+    /// An instruction: index in [`INSTRUCTIONS`].
     Instr(usize),
+    /// A directive: index in [`DIRECTIVES`].
     Directive(usize),
     /// A section of [`NASM_GUIDE`].
     Nasm(usize),

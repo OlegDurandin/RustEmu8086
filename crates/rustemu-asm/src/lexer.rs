@@ -1,9 +1,11 @@
 //! Tokenizer for one source line.
 
+/// A token of an assembly line.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tok {
     /// Identifier, keyword, register or directive (original spelling kept, compare uppercase).
     Ident(String),
+    /// Number (decimal, `0FFh`, `1010b`, `17o`, `0x1F`).
     Num(i64),
     /// Quoted string ('...' or "...").
     Str(Vec<u8>),
@@ -13,14 +15,17 @@ pub enum Tok {
     P(char),
 }
 
+/// A token and where it is.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
+    /// The token.
     pub tok: Tok,
     /// Byte column in the line (0-based).
     pub col: usize,
 }
 
 impl Tok {
+    /// An identifier equal to `s`, ignoring case.
     pub fn is_ident(&self, s: &str) -> bool {
         matches!(self, Tok::Ident(i) if i.eq_ignore_ascii_case(s))
     }

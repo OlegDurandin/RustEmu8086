@@ -6,33 +6,50 @@ pub struct Instr {
     pub name: &'static str,
     /// Other names of the same entry.
     pub aliases: &'static [&'static str],
+    /// Group of the instruction list.
     pub group: Group,
     /// Operand forms.
     pub syntax: &'static [&'static str],
+    /// One line for lists and tooltips.
     pub summary: &'static str,
+    /// The article.
     pub description: &'static str,
     /// Effect on O D I T S Z A P C: `r` = set by the result, `-` = unchanged, `u` = undefined,
     /// `0` / `1` = cleared / set.
     pub flags: &'static str,
+    /// Example code.
     pub example: &'static str,
 }
 
+/// Groups of the instruction list.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
+    /// MOV, PUSH, XCHG, ...
     Transfer,
+    /// ADD, SUB, MUL, ...
     Arithmetic,
+    /// DAA, AAA, ... (decimal arithmetic)
     Bcd,
+    /// AND, OR, XOR, NOT, TEST
     Logic,
+    /// Shifts and rotations.
     Shift,
+    /// MOVS, CMPS, REP, ...
     String,
+    /// JMP, Jcc, CALL, LOOP, INT, ...
     Jump,
+    /// CLC, STI, PUSHF, ...
     Flags,
+    /// HLT, NOP, WAIT, ...
     Control,
+    /// The 80186 additions (PUSHA, ENTER, ...).
     I186,
+    /// The 8087 coprocessor.
     Fpu,
 }
 
 impl Group {
+    /// The groups in the order of the list.
     pub const ALL: [Group; 11] = [
         Group::Transfer,
         Group::Arithmetic,
@@ -47,6 +64,7 @@ impl Group {
         Group::Fpu,
     ];
 
+    /// Title in English.
     pub fn title(self) -> &'static str {
         match self {
             Group::Transfer => "Data transfer",
@@ -64,6 +82,7 @@ impl Group {
     }
 }
 
+/// Flag columns of the flags table, in order.
 pub const FLAG_NAMES: [&str; 9] = ["O", "D", "I", "T", "S", "Z", "A", "P", "C"];
 
 pub(super) const NONE: &str = "---------";
@@ -85,6 +104,7 @@ macro_rules! instr {
     };
 }
 
+/// All instructions of the reference.
 pub const INSTRUCTIONS: &[Instr] = &[
     // ---- data transfer -------------------------------------------------------------------
     instr!(

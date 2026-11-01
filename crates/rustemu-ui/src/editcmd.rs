@@ -33,10 +33,12 @@ pub fn map_lines(app: &mut App, f: impl Fn(&str) -> String) {
     app.editor.pending_select = Some((start, end.max(start)));
 }
 
+/// Indents the selected lines (or the cursor line) with a tab.
 pub fn indent(app: &mut App) {
     map_lines(app, |l| if l.is_empty() { String::new() } else { format!("\t{l}") });
 }
 
+/// Removes one level of indentation from the selected lines.
 pub fn outdent(app: &mut App) {
     map_lines(app, |l| {
         if let Some(rest) = l.strip_prefix('\t') {
@@ -72,24 +74,29 @@ fn map_selection(app: &mut App, f: impl Fn(&str) -> String) {
     app.editor.pending_select = Some((a, a + new.chars().count()));
 }
 
+/// The selection in lower case.
 pub fn lowercase(app: &mut App) {
     map_selection(app, str::to_lowercase);
 }
 
+/// The selection in upper case.
 pub fn uppercase(app: &mut App) {
     map_selection(app, str::to_uppercase);
 }
 
+/// Selects the whole text.
 pub fn select_all(app: &mut App) {
     app.editor.pending_select = Some((0, app.doc.text.chars().count()));
 }
 
+/// The selected text.
 pub fn selected_text(app: &App) -> String {
     let (a, b) = app.editor.selection;
     let (ba, bb) = (char_to_byte(&app.doc.text, a), char_to_byte(&app.doc.text, b));
     app.doc.text[ba..bb].to_string()
 }
 
+/// Copies the selection to the clipboard.
 pub fn copy(app: &App, ctx: &egui::Context) {
     let t = selected_text(app);
     if !t.is_empty() {
@@ -97,6 +104,7 @@ pub fn copy(app: &App, ctx: &egui::Context) {
     }
 }
 
+/// Cuts the selection to the clipboard.
 pub fn cut(app: &mut App, ctx: &egui::Context) {
     copy(app, ctx);
     let (a, _) = app.editor.selection;
@@ -116,6 +124,7 @@ pub fn paste(app: &mut App) {
 
 // ---- bookmarks ---------------------------------------------------------------------------
 
+/// Toggles the bookmark on the cursor line.
 pub fn toggle_bookmark(app: &mut App) {
     let l = app.editor.cursor_line;
     if !app.editor.bookmarks.remove(&l) {
@@ -123,6 +132,7 @@ pub fn toggle_bookmark(app: &mut App) {
     }
 }
 
+/// Moves to the next bookmark (wrapping around).
 pub fn next_bookmark(app: &mut App) {
     let cur = app.editor.cursor_line;
     let next = app.editor.bookmarks.range(cur + 1..).next().or_else(|| app.editor.bookmarks.iter().next());
@@ -131,6 +141,7 @@ pub fn next_bookmark(app: &mut App) {
     }
 }
 
+/// Moves to the previous bookmark (wrapping around).
 pub fn prev_bookmark(app: &mut App) {
     let cur = app.editor.cursor_line;
     let prev = app.editor.bookmarks.range(..cur).next_back().or_else(|| app.editor.bookmarks.iter().next_back());

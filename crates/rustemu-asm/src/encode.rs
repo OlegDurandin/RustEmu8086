@@ -6,26 +6,41 @@ use crate::parse::Operand;
 /// Classified operand.
 #[derive(Debug, Clone)]
 pub enum Op {
+    /// 8-bit register (encoding 0..7).
     R8(u8),
+    /// 16-bit register (encoding 0..7).
     R16(u8),
+    /// Segment register (encoding 0..3).
     Sr(u8),
     /// 8087 register ST(i).
     St(u8),
+    /// Memory operand.
     Mem(Mem),
+    /// Immediate value.
     Imm(Val),
+    /// Far address `seg:off` (immediate).
     Far {
+        /// The segment.
         seg: Val,
+        /// The offset.
         off: Val,
     },
 }
 
+/// A memory operand: base/index registers, displacement and attributes.
 #[derive(Debug, Clone)]
 pub struct Mem {
+    /// Base and index registers (16-bit encodings: BX BP SI DI).
     pub regs: Vec<u8>,
+    /// Displacement.
     pub disp: i64,
+    /// The displacement refers to a symbol without a value yet (early pass): use the long form.
     pub unknown: bool,
+    /// Segment override (encoding 0..3).
     pub seg_ov: Option<u8>,
+    /// Size from a variable type or PTR (1, 2, 4, ...).
     pub size: Option<u8>,
+    /// Jump distance (`SHORT`, `NEAR PTR`, `FAR PTR`).
     pub dist: Option<Dist>,
 }
 
@@ -47,16 +62,20 @@ impl Op {
 pub struct Ctx {
     /// Offset of the first byte of the instruction.
     pub loc: i64,
+    /// Segment of the instruction.
     pub seg: SegId,
     /// All code lives in one segment whose paragraph is unknown at assembly time (COM/BIN/BOOT).
     pub flat: bool,
+    /// Inside a FAR procedure: RET is encoded as RETF.
     pub in_far_proc: bool,
 }
 
 /// Encoded instruction: bytes plus offsets of 16-bit fields that hold segment values.
 #[derive(Debug, Default, Clone)]
 pub struct Enc {
+    /// The bytes.
     pub bytes: Vec<u8>,
+    /// Offsets in `bytes` of words that hold segment paragraphs (EXE relocations).
     pub relocs: Vec<usize>,
 }
 
@@ -71,6 +90,7 @@ impl Enc {
 
 type R<T> = Result<T, String>;
 
+/// Evaluates an operand and classifies it (register, memory, immediate, far address).
 pub fn classify(op: &Operand, env: &dyn Env) -> R<Op> {
     match op {
         Operand::Far(s, o) => Ok(Op::Far { seg: eval(s, env)?, off: eval(o, env)? }),
@@ -272,6 +292,7 @@ fn emit_rm(e: &mut Enc, opcode: &[u8], reg: u8, rm: &Op) -> R<()> {
     Ok(())
 }
 
+/// Condition code of a conditional jump (`JZ` -> 4), used in its opcode 70h + cc.
 pub fn jcc_code(m: &str) -> Option<u8> {
     Some(match m {
         "JO" => 0,
@@ -394,6 +415,8 @@ pub fn is_mnemonic(m: &str) -> bool {
         )
 }
 
+/// Encodes the instruction `mnem` with its prefixes and operands; `ctx` gives its address and
+/// segment. Errors are messages for the user.
 pub fn encode(prefixes: &[String], mnem: &str, ops: &[Operand], env: &dyn Env, ctx: &Ctx) -> R<Enc> {
     let mut e = Enc::default();
     for p in prefixes {

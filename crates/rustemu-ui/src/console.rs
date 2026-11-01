@@ -20,10 +20,14 @@ commands (numbers are hex, addresses are seg:off, linear or register:off):
   h a b                hex sum and difference
   cls                  clear the console";
 
+/// State of the debug console.
 #[derive(Default)]
 pub struct ConsoleState {
+    /// The command being typed.
     pub input: String,
+    /// The output, line by line.
     pub lines: Vec<String>,
+    /// Commands entered (for the Up key).
     pub history: Vec<String>,
     last_dump: Option<u32>,
     last_unasm: Option<(u16, u16)>,
@@ -89,6 +93,7 @@ fn regs_text(app: &App) -> Vec<String> {
     vec![l1.trim_end().to_string(), l2, format!("{:04X}:{:04X} {bytes:<14} {}", c.cs(), c.ip, ins.text)]
 }
 
+/// Runs a console command and appends its output.
 pub fn execute(app: &mut App, line: &str) {
     let out = run_command(app, line);
     let con = &mut app.console;
@@ -265,6 +270,7 @@ pub fn log_state(app: &mut App) {
     con.lines.extend(text);
 }
 
+/// The debug console: the log and a command line (`?` lists the commands).
 pub fn console_ui(app: &mut App, ui: &mut Ui) {
     if app.console.lines.is_empty() {
         app.console.lines.push("RustEmu8086 debug console - type ? for help".into());

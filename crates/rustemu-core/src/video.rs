@@ -3,18 +3,30 @@
 
 use crate::bus::Memory;
 
+/// The BIOS data area (segment 0040h).
 pub const BDA: u32 = 0x400;
+/// Current video mode (byte).
 pub const BDA_MODE: u32 = BDA + 0x49;
+/// Text columns (word).
 pub const BDA_COLS: u32 = BDA + 0x4A;
+/// Size of a text page in bytes (word).
 pub const BDA_PAGE_SIZE: u32 = BDA + 0x4C;
+/// Offset of the active page in video memory (word).
 pub const BDA_PAGE_START: u32 = BDA + 0x4E;
+/// Cursor positions of pages 0..7: column, row (2 bytes each).
 pub const BDA_CURSOR: u32 = BDA + 0x50;
+/// Cursor shape: end line, start line.
 pub const BDA_CURSOR_SHAPE: u32 = BDA + 0x60;
+/// Active display page (byte).
 pub const BDA_PAGE: u32 = BDA + 0x62;
+/// Text rows less one (byte).
 pub const BDA_ROWS: u32 = BDA + 0x84;
+/// Height of a character in scan lines (byte).
 pub const BDA_CHAR_HEIGHT: u32 = BDA + 0x85;
 
+/// Text video memory (B800:0000).
 pub const TEXT_BASE: u32 = 0xB8000;
+/// Mode 13h video memory (A000:0000), 320 x 200, one byte per pixel.
 pub const GFX_BASE: u32 = 0xA0000;
 
 /// Default 256-colour VGA palette (6-bit DAC values).
@@ -66,44 +78,55 @@ pub fn default_palette() -> [[u8; 3]; 256] {
     p
 }
 
+/// Video state and video memory access through the BIOS data area (no state of its own).
 pub struct Video;
 
 impl Video {
+    /// The current video mode (0..3, 7: text; 13h: 320 x 200 x 256).
     pub fn mode(mem: &Memory) -> u8 {
         mem.read8(BDA_MODE)
     }
 
+    /// The mode is a text mode.
     pub fn is_text(mem: &Memory) -> bool {
         Self::mode(mem) <= 3 || Self::mode(mem) == 7
     }
 
+    /// Text columns.
     pub fn cols(mem: &Memory) -> u16 {
         mem.read16(BDA_COLS).max(1)
     }
 
+    /// Text rows.
     pub fn rows(mem: &Memory) -> u16 {
         mem.read8(BDA_ROWS) as u16 + 1
     }
 
+    /// The active display page.
     pub fn page(mem: &Memory) -> u8 {
         mem.read8(BDA_PAGE)
     }
 
+    /// Physical address of text page `page`.
     pub fn page_base(mem: &Memory, page: u8) -> u32 {
         TEXT_BASE + page as u32 * mem.read16(BDA_PAGE_SIZE) as u32
     }
 
+    /// Cursor of `page`: (column, row).
     pub fn cursor(mem: &Memory, page: u8) -> (u16, u16) {
         let a = BDA_CURSOR + (page as u32 & 7) * 2;
         (mem.read8(a) as u16, mem.read8(a + 1) as u16)
     }
 
+    /// Moves the cursor of `page`.
     pub fn set_cursor(mem: &mut Memory, page: u8, col: u16, row: u16) {
         let a = BDA_CURSOR + (page as u32 & 7) * 2;
         mem.write8(a, col as u8);
         mem.write8(a + 1, row as u8);
     }
 
+    /// Sets a video mode as INT 10h/00h does: the BIOS data area (columns, rows, page, cursors) and,
+    /// unless bit 7 of `mode` is set, a cleared screen.
     pub fn set_mode(mem: &mut Memory, mode: u8) {
         let clear = mode & 0x80 == 0;
         let mode = mode & 0x7F;
@@ -143,11 +166,13 @@ impl Video {
         Self::page_base(mem, page) + (row as u32 * Self::cols(mem) as u32 + col as u32) * 2
     }
 
+    /// Character and attribute at (col, row) of `page`.
     pub fn read_cell(mem: &Memory, page: u8, col: u16, row: u16) -> (u8, u8) {
         let a = Self::cell(mem, page, col, row);
         (mem.read8(a), mem.read8(a + 1))
     }
 
+    /// Writes a character at (col, row) of `page`; `attr` `None` keeps the attribute.
     pub fn write_cell(mem: &mut Memory, page: u8, col: u16, row: u16, ch: u8, attr: Option<u8>) {
         if Self::is_text(mem) {
             let a = Self::cell(mem, page, col, row);
@@ -266,12 +291,14 @@ impl Video {
         Self::set_cursor(mem, page, col, row);
     }
 
+    /// Sets a pixel in mode 13h (ignored in other modes or outside the screen).
     pub fn put_pixel(mem: &mut Memory, x: u16, y: u16, color: u8) {
         if Self::mode(mem) == 0x13 && x < 320 && y < 200 {
             mem.write8(GFX_BASE + y as u32 * 320 + x as u32, color);
         }
     }
 
+    /// A pixel in mode 13h (0 in other modes or outside the screen).
     pub fn get_pixel(mem: &Memory, x: u16, y: u16) -> u8 {
         if Self::mode(mem) == 0x13 && x < 320 && y < 200 { mem.read8(GFX_BASE + y as u32 * 320 + x as u32) } else { 0 }
     }

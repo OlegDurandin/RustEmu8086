@@ -6,16 +6,19 @@ use rustemu_asm::library::{Entry, EntryKind};
 use crate::app::App;
 use crate::highlight::{Palette, highlight};
 
+/// State of the emu8086.inc library viewer.
 #[derive(Default)]
 pub struct LibraryState {
     /// Bring the library to the front (the panels layout shows it as a tab).
     pub raise: bool,
+    /// The macro or procedure shown.
     pub selected: Option<String>,
     scroll_to: Option<u32>,
     index: Vec<Entry>,
 }
 
 impl LibraryState {
+    /// Macros and procedures of emu8086.inc (indexed on first use).
     pub fn index(&mut self) -> &[Entry] {
         if self.index.is_empty() {
             self.index = rustemu_asm::library::index(rustemu_asm::EMU8086_INC);
@@ -34,6 +37,7 @@ impl LibraryState {
         }
     }
 
+    /// The macro or procedure `name` (any case).
     pub fn find(&mut self, name: &str) -> Option<Entry> {
         let u = name.to_ascii_uppercase();
         self.index().iter().find(|e| e.name == u).cloned()

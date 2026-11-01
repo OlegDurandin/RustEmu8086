@@ -6,6 +6,8 @@
 //! windows, `rustemu-tablet` - the tabbed touch layout (the web version on tablets). Each calls
 //! [`windows`] once a frame, passing its own tools as a [`tools::Host`].
 
+#![warn(missing_docs)]
+
 pub mod app;
 pub mod calc;
 pub mod colors;
