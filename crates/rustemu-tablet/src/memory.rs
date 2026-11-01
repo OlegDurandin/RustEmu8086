@@ -8,7 +8,7 @@ use rustemu_core::linear;
 use rustemu_ui::app::{App, RunMode};
 
 use crate::theme::pal;
-use crate::widgets::{HEAD_H, Icon, ROW_H, card, field_style, hex_box, small_icon, value_box};
+use crate::widgets::{HEAD_H, ROW_H, card, field_style, hex_box, value_box};
 
 /// Segment of the memory views.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -246,42 +246,6 @@ fn hex_row(app: &App, m: &MemoryView, ui: &mut Ui, font: &FontId, cols: &HexCols
     }
     None
 }
-
-/// Compact memory view of the Editor tab.
-pub(crate) fn memory_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, rect: Rect) {
-    let (mut head, mut b) = card(ui, rect, "MEMORY");
-    b.spacing_mut().item_spacing.y = 0.0;
-    let rows = (((b.available_height() - ROW_H) / ROW_H).floor() as u16).max(1);
-    let font = FontId::monospace(14.0);
-    let bpr = [16u16, 8]
-        .into_iter()
-        .find(|&n| {
-            let c = hex_cols(&b, &font, n, false);
-            c.ascii_x + n as f32 * c.char_w + 4.0 <= b.available_width()
-        })
-        .unwrap_or(8);
-    if small_icon(&mut head, Icon::Down, "next rows").clicked() {
-        m.mem_off = m.mem_off.wrapping_add(bpr * rows);
-    }
-    if small_icon(&mut head, Icon::Up, "previous rows").clicked() {
-        m.mem_off = m.mem_off.wrapping_sub(bpr * rows);
-    }
-    segment_menu(app, m, &mut head, true);
-    let cols = hex_cols(&b, &font, bpr, false);
-    hex_header(&mut b, &font, &cols, bpr);
-    let seg = m.seg.value(app);
-    let mut clicked = None;
-    for row in 0..rows {
-        let off = m.mem_off.wrapping_add(row * bpr);
-        clicked = clicked.or(hex_row(app, m, &mut b, &font, &cols, seg, off));
-    }
-    if let Some(a) = clicked {
-        m.selected = Some(a);
-        m.nibble = None;
-    }
-}
-
-// ---- memory tab --------------------------------------------------------------------------------
 
 pub(crate) fn hex_editor_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, rect: Rect) {
     let (_, mut b) = card(ui, rect, "HEX EDITOR");

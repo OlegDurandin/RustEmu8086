@@ -1,74 +1,25 @@
 //! The Editor / Debugger / Memory tabs: cards laid out for the window size.
+//!
+//! Each tab has one main area and its context: the source with the program's output and a CPU
+//! preview (Editor); the last step and the code with the full CPU and the output (Debugger); the
+//! bytes with the inspector, segments and stack (Memory). Landscape: two columns; portrait and
+//! narrow windows: the main area above its context.
 
 use egui::{Rect, Ui};
 use rustemu_ui::app::App;
 
-use crate::TabletState;
-use crate::cards::{
-    breakpoints_card, call_stack_card, disasm_card, editor_card, flags_card, output_card, registers_card, trace_card,
-    watch_card,
-};
-use crate::memory::{hex_editor_card, inspector_card, memory_card, memory_map_card, segments_card, stack_card};
+use crate::cards::{editor_card, output_card};
+use crate::debugger::{TOOLS_ROW_H, code_card, step_card, step_height, tools_area};
+use crate::memory::{hex_editor_card, inspector_card, memory_map_card, segments_card, stack_card};
 use crate::widgets::{GAP, HEAD_H, split_x, split_y};
+use crate::{Tab, TabletState, cpu};
 
-/// Height of the registers card.
-const REGS_H: f32 = HEAD_H + 7.0 * 34.0 + 22.0;
-
-/// Width of the left column (editor, disassembly) beside the registers; None when the window is
-/// too narrow for two columns (a narrow browser window) and the cards are stacked.
-fn left_width(w: f32) -> Option<f32> {
-    let right = (w * 0.42).clamp(400.0, 560.0);
-    (w - right - GAP >= 380.0).then_some(w - right - GAP)
+/// Two columns fit: a landscape window wide enough for the source beside its context.
+fn landscape(r: Rect) -> bool {
+    r.width() >= r.height() * 1.15 && r.width() >= 900.0
 }
 
-/// Shares of three full-height columns in a landscape window: the middle and right columns take a
-/// fraction of the width within limits, the left one the rest (at least `left_min`).
-struct Columns {
-    mid: (f32, f32, f32),
-    right: (f32, f32, f32),
-    left_min: f32,
-}
-
-/// Editor | registers + disassembly | output + memory. The limits let three columns fit an 11-inch
-/// iPad in landscape (1144 points for the tabs).
-const EDITOR_COLUMNS: Columns = Columns { mid: (0.33, 372.0, 470.0), right: (0.29, 365.0, 460.0), left_min: 370.0 };
-/// Disassembly | registers, watch, breakpoints | call stack + trace.
-const DEBUGGER_COLUMNS: Columns = Columns { mid: (0.28, 370.0, 420.0), right: (0.34, 370.0, 520.0), left_min: 350.0 };
-
-/// Widths of three full-height columns in a landscape window (left, middle, right): height is
-/// short there and width plentiful, so nothing goes into a bottom row. None in portrait and in
-/// windows too narrow for three columns.
-fn three_columns(w: f32, h: f32, c: &Columns) -> Option<(f32, f32, f32)> {
-    if w < h * 1.15 {
-        return None;
-    }
-    let share = |(f, min, max): (f32, f32, f32)| (w * f).clamp(min, max);
-    let (mid, right) = (share(c.mid), share(c.right));
-    let left = w - mid - right - 2.0 * GAP;
-    (left >= c.left_min).then_some((left, mid, right))
-}
-
-/// Splits `r` into three columns of the given widths.
-fn columns(r: Rect, (left, mid, _): (f32, f32, f32)) -> (Rect, Rect, Rect) {
-    let (a, rest) = split_x(r, left);
-    let (b, c) = split_x(rest, mid);
-    (a, b, c)
-}
-
-/// Height of an output card `w` wide: room for an 80x25 screen (16:10) above its hint line.
-fn output_height(w: f32) -> f32 {
-    w * 0.625 + HEAD_H + 50.0
-}
-
-fn regs_and_flags(app: &mut App, ui: &mut Ui, rect: Rect) {
-    let flags_w = 120.0;
-    let (r, f) = split_x(rect, rect.width() - flags_w - GAP);
-    registers_card(app, ui, r);
-    flags_card(app, ui, f);
-}
-
-/// Splits off the bottom row of a tab, which gives way to the on-screen keyboard (its screen shows
-/// the output then).
+/// Splits off the bottom row of a tab, which gives way to the on-screen keyboard.
 fn bottom_row(t: &TabletState, rect: Rect, h: f32) -> (Rect, Option<Rect>) {
     if t.keypad.open {
         return (rect, None);
@@ -77,109 +28,94 @@ fn bottom_row(t: &TabletState, rect: Rect, h: f32) -> (Rect, Option<Rect>) {
     (top, Some(bottom))
 }
 
-pub(crate) fn editor_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
-    if let Some(cols) = three_columns(rect.width(), rect.height(), &EDITOR_COLUMNS) {
-        // Landscape: editor | registers, disassembly | output, memory.
-        let (editor, mid, right) = columns(rect, cols);
-        editor_card(app, ui, editor);
-        let (regs, code) = split_y(mid, REGS_H.min(mid.height() * 0.6));
-        regs_and_flags(app, ui, regs);
-        disasm_card(app, ui, code, false);
-        if t.keypad.open {
-            // The keyboard sheet shows the screen.
-            memory_card(app, &mut t.mem, ui, right);
-        } else {
-            let out_h = output_height(right.width()).min(right.height() * 0.6);
-            let (out, mem) = split_y(right, out_h);
-            output_card(app, t, ui, out);
-            memory_card(app, &mut t.mem, ui, mem);
-        }
-        return;
-    }
-    let (top, bottom) = bottom_row(t, rect, (rect.height() * 0.3).clamp(200.0, 300.0));
-    let Some(left_w) = left_width(top.width()) else {
-        // Narrow window: editor, registers and output (the disassembly is on the Debugger tab).
-        let (editor, regs) = split_y(top, (top.height() - REGS_H - GAP).max(150.0));
-        editor_card(app, ui, editor);
-        regs_and_flags(app, ui, regs);
-        if let Some(bottom) = bottom {
-            output_card(app, t, ui, bottom);
-        }
-        return;
-    };
-    let (editor, right) = split_x(top, left_w);
-    editor_card(app, ui, editor);
-    let (regs, code) = split_y(right, REGS_H.min(right.height() * 0.6));
-    regs_and_flags(app, ui, regs);
-    disasm_card(app, ui, code, false);
-    if let Some(bottom) = bottom {
-        let (mem, out) = split_x(bottom, left_w);
-        memory_card(app, &mut t.mem, ui, mem);
-        output_card(app, t, ui, out);
+fn cpu_preview(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
+    if cpu::cpu_preview_card(app, &mut t.cpu, ui, rect) {
+        t.tab = Tab::Debugger;
     }
 }
 
-pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
-    // The program's output is shown here too, unless the on-screen keyboard (with its own large
-    // screen) is open.
-    let show_output = !t.keypad.open;
-    if let Some(cols) = three_columns(rect.width(), rect.height(), &DEBUGGER_COLUMNS) {
-        // Landscape: disassembly | registers, watch, breakpoints | output, call stack, trace.
-        let (code, mid, right) = columns(rect, cols);
-        disasm_card(app, ui, code, true);
-        let (regs, rest) = split_y(mid, REGS_H.min(mid.height() * 0.5));
-        regs_and_flags(app, ui, regs);
-        let (watch, bps) = split_y(rest, (rest.height() - GAP) * 0.5);
-        watch_card(app, ui, watch);
-        breakpoints_card(app, t, ui, bps);
-        let right = if show_output {
-            let (out, rest) = split_y(right, output_height(right.width()).min(right.height() * 0.45));
-            output_card(app, t, ui, out);
-            rest
-        } else {
-            right
-        };
-        let (calls, trace) = split_y(right, (right.height() * 0.35).max(HEAD_H + 60.0));
-        call_stack_card(app, ui, calls);
-        trace_card(app, ui, trace);
-        return;
-    }
-    let (top, bottom) = bottom_row(t, rect, (rect.height() * 0.32).clamp(220.0, 320.0));
-    match left_width(top.width()) {
-        Some(w) => {
-            let (code, right) = split_x(top, w);
-            disasm_card(app, ui, code, true);
-            let (regs, rest) = split_y(right, REGS_H.min(right.height() * 0.6));
-            regs_and_flags(app, ui, regs);
-            if show_output {
-                let (out, calls) = split_y(rest, output_height(rest.width()).min(rest.height() * 0.7));
-                output_card(app, t, ui, out);
-                call_stack_card(app, ui, calls);
-            } else {
-                call_stack_card(app, ui, rest);
-            }
+/// The source (about 60% of a landscape window) with the output above a CPU preview; no
+/// disassembly here (it is on the Debugger tab).
+pub(crate) fn editor_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
+    if landscape(rect) {
+        let right_w = (rect.width() * 0.41).clamp(380.0, 600.0);
+        let (editor, right) = split_x(rect, rect.width() - right_w - GAP);
+        editor_card(app, ui, editor);
+        if t.keypad.open {
+            // The keyboard is below: the output keeps the whole column.
+            output_card(app, t, ui, right);
+            return;
         }
-        None => {
-            // Narrow window: no call stack.
-            let (code, regs) = split_y(top, (top.height() - REGS_H - GAP).max(150.0));
-            disasm_card(app, ui, code, true);
-            regs_and_flags(app, ui, regs);
-        }
-    }
-    let Some(bottom) = bottom else { return };
-    if bottom.width() < 900.0 {
-        // Narrow window: the output and the watch (breakpoints are in the disassembly's margin).
-        let (out, watch) = split_x(bottom, (bottom.width() - GAP) * 0.55);
+        let cpu_h = cpu::preview_height(right.width(), &t.cpu).min(right.height() * 0.62);
+        let (out, regs) = split_y(right, right.height() - cpu_h - GAP);
         output_card(app, t, ui, out);
-        watch_card(app, ui, watch);
+        cpu_preview(app, t, ui, regs);
         return;
     }
-    let w = bottom.width() - 2.0 * GAP;
-    let (bps, rest) = split_x(bottom, w * 0.32);
-    let (watch, trace) = split_x(rest, w * 0.28);
-    breakpoints_card(app, t, ui, bps);
-    watch_card(app, ui, watch);
-    trace_card(app, ui, trace);
+    // Portrait and narrow windows: the source above, the output beside the CPU below.
+    let half = (rect.width() - GAP) / 2.0;
+    let bottom_h = if t.keypad.open {
+        (rect.height() * 0.4).max(220.0)
+    } else {
+        cpu::preview_height(half, &t.cpu).max(260.0).min(rect.height() * 0.55)
+    };
+    let (editor, bottom) = split_y(rect, rect.height() - bottom_h - GAP);
+    editor_card(app, ui, editor);
+    if t.keypad.open {
+        output_card(app, t, ui, bottom);
+        return;
+    }
+    let (out, regs) = split_x(bottom, half);
+    output_card(app, t, ui, out);
+    cpu_preview(app, t, ui, regs);
+}
+
+/// The code with the open tool below it.
+fn code_and_tools(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
+    let tools_h =
+        if t.debug.tool.is_some() { (rect.height() * 0.45).max(TOOLS_ROW_H + HEAD_H + 80.0) } else { TOOLS_ROW_H };
+    let (code, tools) = split_y(rect, (rect.height() - tools_h - GAP).max(HEAD_H + 60.0));
+    code_card(app, t, ui, code);
+    tools_area(app, t, ui, tools);
+}
+
+/// The last step above the code (about 55% of a landscape window), the full CPU and the output
+/// beside them; the tools open one at a time below the code. The output becomes one of the tools
+/// when there is no room for it beside the CPU.
+pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
+    let step_h = step_height(t);
+    const MIN_OUTPUT: f32 = HEAD_H + 150.0;
+    if landscape(rect) {
+        let (left, right) = split_x(rect, rect.width() * 0.55);
+        let w = right.width();
+        let cpu_h = cpu::full_height(w, &t.cpu).min(right.height());
+        let (regs, out) = split_y(right, cpu_h);
+        t.debug.output_tool = out.height() < MIN_OUTPUT;
+        let (step, rest) = split_y(left, step_h);
+        step_card(app, t, ui, step);
+        code_and_tools(app, t, ui, rest);
+        cpu::cpu_card(app, &mut t.cpu, ui, regs);
+        if !t.debug.output_tool {
+            output_card(app, t, ui, out);
+        }
+        return;
+    }
+    let (step, rest) = split_y(rect, step_h);
+    step_card(app, t, ui, step);
+    let wide = rect.width() >= 900.0;
+    // Portrait: the CPU beside the output; narrow: the CPU alone (the output is a tool).
+    let cpu_w = if wide { rect.width() * 0.62 } else { rect.width() };
+    let cpu_h = cpu::full_height(cpu_w, &t.cpu).min(rest.height() * 0.6);
+    t.debug.output_tool = !wide;
+    let (code, bottom) = split_y(rest, rest.height() - cpu_h - GAP);
+    code_and_tools(app, t, ui, code);
+    if wide {
+        let (regs, out) = split_x(bottom, cpu_w);
+        cpu::cpu_card(app, &mut t.cpu, ui, regs);
+        output_card(app, t, ui, out);
+    } else {
+        cpu::cpu_card(app, &mut t.cpu, ui, bottom);
+    }
 }
 
 pub(crate) fn memory_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {

@@ -5,6 +5,8 @@
 
 mod bars;
 mod cards;
+mod cpu;
+mod debugger;
 mod keypad;
 mod memory;
 mod tabs;
@@ -76,6 +78,8 @@ pub struct TabletState {
     pub(crate) output: Output,
     pub(crate) mem: MemoryView,
     pub(crate) keypad: KeypadState,
+    pub(crate) cpu: cpu::CpuView,
+    pub(crate) debug: debugger::DebugView,
     /// Errors were shown in the last frame (a new build error switches to the messages).
     had_errors: bool,
     /// Instructions per second while running: (time, instruction count) of the last sample.
@@ -98,12 +102,14 @@ pub(crate) enum Output {
     Messages,
 }
 
-/// The tablet shows the screen, the registers and the code in its own layout, not as windows.
+/// The tablet shows the screen, the registers, the code and the debug log in its own layout, not
+/// as windows.
 struct Tablet;
 
 impl rustemu_ui::tools::Host for Tablet {
     fn floats(&self, tool: Tool) -> bool {
-        !matches!(tool, Tool::Emulator | Tool::Screen | Tool::Source)
+        // The debug log is a tool of the Debugger tab.
+        !matches!(tool, Tool::Emulator | Tool::Screen | Tool::Source | Tool::Console)
     }
 }
 
@@ -120,9 +126,12 @@ fn tablet_ui(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         .frame(egui::Frame::new().fill(pal::BAR).inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }))
         .show(ui, |ui| status_bar(app, t, ui));
     if t.keypad.open {
+        let window_h = ctx.content_rect().height();
+        // The Editor and Debugger tabs show the output above the keys; Memory does not.
+        let with_screen = t.tab == Tab::Memory;
         egui::Panel::bottom("tablet_keys")
-            .frame(egui::Frame::new().fill(pal::BAR).inner_margin(egui::Margin::same(10)))
-            .show(ui, |ui| keyboard_sheet(app, &mut t.keypad, ui));
+            .frame(egui::Frame::new().fill(pal::BAR).inner_margin(egui::Margin::symmetric(10, 8)))
+            .show(ui, |ui| keyboard_sheet(app, &mut t.keypad, ui, window_h, with_screen));
     }
     egui::CentralPanel::default().frame(egui::Frame::new().fill(pal::BG).inner_margin(egui::Margin::same(10))).show(
         ui,
