@@ -81,6 +81,10 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 ## Соглашения
 - Rust edition 2024, `cargo fmt`, `cargo clippy --workspace` без предупреждений.
 - Комментарии в коде — на английском, документация проекта — на русском.
+- Doc-комментарии обязательны: в библиотечных крейтах `#![warn(missing_docs)]` (с `clippy -D warnings` — ошибка),
+  у каждого модуля `//!`. Описывать смысл и единицы (строка 1-based, физический адрес, байты), а не повторять имя;
+  для очевидных групп (варианты-мнемоники) — описание на типе и `#[allow(missing_docs)]` с причиной. Проверка
+  ссылок: `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items` (есть в CI).
 - Любое изменение CPU — прогонять SingleStepTests; изменение кодировок — `nasm_compare`.
 
 ## Команды

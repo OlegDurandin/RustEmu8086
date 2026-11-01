@@ -34,6 +34,7 @@ fn web_definitions() -> FontDefinitions {
     defs
 }
 
+/// Installs the fonts: the bundled ones plus emoji fallbacks (subsets in the browser).
 pub fn install(ctx: &egui::Context) {
     #[cfg(target_arch = "wasm32")]
     let mut defs = web_definitions();

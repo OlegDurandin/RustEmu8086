@@ -3,8 +3,10 @@
 use crate::expr::{Expr, Parser, describe, parse_reg};
 use crate::lexer::{Tok, Token, tokenize, tokenize_nasm};
 
+/// An item of DB/DW/DD/DQ/DT.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataItem {
+    /// A value or a string.
     Expr(Expr),
     /// Floating-point number in DD / DQ / DT (sign included).
     Float(String),
@@ -12,55 +14,82 @@ pub enum DataItem {
     Str(Vec<u8>),
     /// `?` - uninitialized (emitted as zero).
     Uninit,
+    /// `n DUP (items)`.
     Dup(Expr, Vec<DataItem>),
 }
 
+/// An instruction operand.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operand {
+    /// An expression (register, memory, immediate).
     Expr(Expr),
     /// `seg:off` immediate far address, e.g. `JMP 0F000h:0100h`.
     Far(Expr, Expr),
 }
 
+/// What a statement is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
+    /// Nothing (empty line or comment only).
     Empty,
+    /// An instruction.
     Instr {
+        /// Prefixes (REP, LOCK, ...).
         prefixes: Vec<String>,
+        /// The mnemonic, upper case.
         mnem: String,
+        /// The operands.
         ops: Vec<Operand>,
     },
     /// DB/DW/DD/DQ/DT; `size` is the element size in bytes.
     Data {
+        /// Element size in bytes.
         size: u8,
+        /// The items.
         items: Vec<DataItem>,
     },
     /// `name EQU expr` (not redefinable)
     Equ(String, Expr),
     /// `name = expr` (redefinable)
     Assign(String, Expr),
+    /// `ORG expr`.
     Org(Expr),
+    /// `name SEGMENT [STACK]`.
     Segment {
+        /// The name.
         name: String,
+        /// A STACK segment.
         stack: bool,
     },
+    /// `ENDS`.
     Ends,
+    /// `name PROC [NEAR|FAR]`.
     Proc {
+        /// The name.
         name: String,
+        /// Declared FAR.
         far: bool,
     },
+    /// `ENDP`.
     Endp,
     /// `name LABEL BYTE|WORD|DWORD|NEAR|FAR`
     Label {
+        /// The name.
         name: String,
+        /// Element size (BYTE 1, WORD 2, DWORD 4; `None` for NEAR / FAR).
         size: Option<u8>,
+        /// `LABEL FAR`.
         far: bool,
     },
+    /// `END [entry]`.
     End(Option<Expr>),
+    /// `EVEN`: align to 2.
     Even,
+    /// `ALIGN n`.
     Align(Expr),
     /// `.model`, `.data`, `.code`, `.stack [n]`
     Model,
+    /// A simplified segment: `.code`, `.data`, `.stack`.
     DotSeg(DotSeg),
     /// Emu8086 `#directive#` (contents without the hashes).
     Emu(String),
@@ -70,25 +99,32 @@ pub enum StmtKind {
     Times(Expr, Box<StmtKind>),
 }
 
+/// Simplified segment directives (and NASM sections).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DotSeg {
+    /// `.code` / `section .text`.
     Code,
+    /// `.data` / `section .data`.
     Data,
+    /// `.stack [size]`.
     Stack(Option<Expr>),
     /// NASM `section .bss`: uninitialized data, not stored in the output file.
     Bss,
 }
 
+/// A parsed source line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stmt {
     /// Label defined at this statement (`name:`), uppercased.
     pub label: Option<String>,
+    /// What the line is.
     pub kind: StmtKind,
     /// The label was written with a colon (`msg: db ...`): it is a plain address label, not a
     /// typed variable (Emu8086 semantics: `mov dx, msg` loads the offset).
     pub colon: bool,
 }
 
+/// A parse error: column and message.
 pub type PErr = (usize, String);
 
 const DATA_DIRS: [(&str, u8); 5] = [("DB", 1), ("DW", 2), ("DD", 4), ("DQ", 8), ("DT", 10)];
@@ -99,8 +135,10 @@ fn is_naming_directive(u: &str) -> bool {
         || matches!(u, "EQU" | "SEGMENT" | "ENDS" | "PROC" | "ENDP" | "LABEL" | "MACRO" | "GROUP" | "STRUC")
 }
 
+/// Instruction prefixes written before the mnemonic.
 pub const PREFIXES: [&str; 6] = ["REP", "REPE", "REPZ", "REPNE", "REPNZ", "LOCK"];
 
+/// Parses one line of the Emu8086 / MASM dialect.
 pub fn parse_line(line: &str) -> Result<Stmt, PErr> {
     let trimmed = line.trim();
     if trimmed.starts_with('#') {
@@ -112,6 +150,7 @@ pub fn parse_line(line: &str) -> Result<Stmt, PErr> {
     parse_tokens(&toks)
 }
 
+/// Parses the tokens of one line (MASM dialect).
 pub fn parse_tokens(toks: &[Token]) -> Result<Stmt, PErr> {
     let mut p = Parser::new(toks);
     let mut label = None;

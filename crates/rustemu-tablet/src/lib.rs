@@ -1,7 +1,16 @@
-//! The tablet layout of RustEmu8086 (used by the web version on iPads and touch screens): a top
-//! bar with the run controls, Editor / Debugger / Memory tabs of fixed cards and a status bar, in a
-//! dark theme sized for touch, plus an on-screen PC keyboard. Dialogs and tool windows are the
-//! shared ones of `rustemu_ui`.
+//! The tablet layout of RustEmu8086 (used by the web version on iPads and touch screens), in a
+//! dark theme sized for touch:
+//!
+//! - a top bar: the project menu on the file name, Run / Pause / Step / Reset (`bars.rs`);
+//! - three tabs, each a main area with its context (`tabs.rs`): **Editor** — the source, the
+//!   output and a CPU preview; **Debugger** — the last step, the code (source / mixed / assembly)
+//!   and the tools opened one at a time, the full CPU and the output (`debugger.rs`, `cpu.rs`);
+//!   **Memory** — the hex editor, the byte inspector, segments, stack and memory map (`memory.rs`);
+//! - the PC keyboard docked at the bottom (`keypad.rs`) and a status bar.
+//!
+//! Dialogs and the remaining tool windows are the shared ones of `rustemu_ui`.
+
+#![warn(missing_docs)]
 
 mod bars;
 mod cards;
@@ -28,7 +37,9 @@ use crate::widgets::GAP;
 
 /// The application: the shared state and the tablet layout's own.
 pub struct TabletApp {
+    /// The shared application state.
     pub app: App,
+    /// State of the tablet layout.
     pub state: TabletState,
 }
 

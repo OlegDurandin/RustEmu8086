@@ -9,13 +9,19 @@ use rustemu_core::linear;
 use crate::app::App;
 use crate::tools::Tool;
 
+/// How the variables window shows values.
 #[derive(Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NumFormat {
+    /// Hexadecimal.
     #[default]
     Hex,
+    /// Unsigned decimal.
     Dec,
+    /// Signed decimal.
     Signed,
+    /// Binary.
     Bin,
+    /// Characters (CP437).
     Char,
 }
 

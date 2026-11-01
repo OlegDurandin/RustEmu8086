@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::App;
 use crate::tools::{Host, Tool, tool_ui};
 
+/// How the tools are shown.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layout {
     /// Tabs and panels that do not overlap.

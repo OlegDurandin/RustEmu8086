@@ -7,8 +7,10 @@ use rustemu_core::video::{self, Video};
 
 use crate::app::App;
 
+/// State of the emulator screen.
 #[derive(Default)]
 pub struct ScreenState {
+    /// Give the screen keyboard focus at the next frame (the program waits for a key).
     pub focus_request: bool,
     /// The emulator screen has keyboard focus (keys go to the program).
     pub focused: bool,
@@ -18,6 +20,7 @@ pub struct ScreenState {
 }
 
 impl ScreenState {
+    /// A screen without focus.
     pub fn new() -> Self {
         ScreenState::default()
     }

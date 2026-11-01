@@ -21,6 +21,7 @@ pub const PAIRS: [(usize, &str, &str, &str); 4] = [
 /// The other word registers, as the CPU panel shows them.
 pub const WORDS: [(usize, &str); 4] = [(cpu::SP, "SP"), (cpu::BP, "BP"), (cpu::SI, "SI"), (cpu::DI, "DI")];
 
+/// The segment registers in the order the CPU panel shows them.
 pub const SEGMENTS: [(usize, &str); 4] = [(cpu::CS, "CS"), (cpu::DS, "DS"), (cpu::ES, "ES"), (cpu::SS, "SS")];
 
 /// The nine flags of the 8086 with what they mean.
@@ -39,15 +40,20 @@ pub const FLAGS: [(u16, &str, &str); 9] = [
 /// The byte of a general register that changed when the other did not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Half {
+    /// AH, BH, CH, DH.
     High,
+    /// AL, BL, CL, DL.
     Low,
 }
 
+/// A register the step changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegChange {
     /// The word register (`BX`).
     pub name: &'static str,
+    /// Its value before the step.
     pub before: u16,
+    /// Its value after the step.
     pub after: u16,
     /// Only one byte of AX..DX changed (`SUB BL, 1` changes BL, not BH).
     pub only: Option<Half>,
@@ -63,24 +69,33 @@ impl RegChange {
     }
 }
 
+/// A flag the step changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlagChange {
+    /// Its name (`CF`).
     pub name: &'static str,
+    /// Before the step.
     pub before: bool,
+    /// After the step.
     pub after: bool,
 }
 
 /// The last executed instruction and what it changed.
 #[derive(Clone, Debug)]
 pub struct StepView {
+    /// CS of the instruction.
     pub cs: u16,
+    /// IP of the instruction.
     pub ip: u16,
+    /// Its bytes.
     pub bytes: Vec<u8>,
     /// The instruction (`SUB BL, 01h`).
     pub text: String,
     /// Its source line.
     pub source: Option<View>,
+    /// The registers it changed (IP excluded).
     pub regs: Vec<RegChange>,
+    /// The flags it changed.
     pub flags: Vec<FlagChange>,
     /// Bytes it wrote: (physical address, before, after), each address once.
     pub writes: Vec<(u32, u8, u8)>,

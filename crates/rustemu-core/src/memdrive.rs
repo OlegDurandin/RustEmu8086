@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::dos::{E_ACCESS, E_FILE_NOT_FOUND, E_PATH_NOT_FOUND};
 
+/// The files and folders of a drive C: in memory (see the module documentation).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MemDrive {
     files: BTreeMap<String, Vec<u8>>,
@@ -43,6 +44,7 @@ impl<'a> Reader<'a> {
 }
 
 impl MemDrive {
+    /// An empty drive.
     pub fn new() -> Self {
         Self::default()
     }
@@ -76,6 +78,7 @@ impl MemDrive {
         self.files.values().map(Vec::len).sum()
     }
 
+    /// No files and no folders.
     pub fn is_empty(&self) -> bool {
         self.files.is_empty() && self.dirs.is_empty()
     }
@@ -148,6 +151,7 @@ impl MemDrive {
         out
     }
 
+    /// Reads a drive saved by [`MemDrive::to_bytes`]; `None` when the bytes are not one.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let mut r = Reader(bytes.strip_prefix(MAGIC.as_slice())?);
         let mut drive = MemDrive::new();

@@ -22,6 +22,10 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Clippy (web version, WebAssembly)
         run: cargo clippy --target wasm32-unknown-unknown -p rustemu-web -- -D warnings
+      - name: Documentation (broken links, also in private items)
+        run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
       - name: Tests
         run: cargo test --workspace
 

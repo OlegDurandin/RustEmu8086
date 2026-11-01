@@ -32,11 +32,13 @@ pub fn show_location(app: &mut App, file: usize, line: u32) {
     }
 }
 
+/// `name.asm:12` for a line of a file of the loaded program.
 pub fn file_line(app: &App, file: usize, line: u32) -> String {
     let name = app.program.files.get(file).map_or("?", |f| f.0.as_str());
     format!("{name}:{line}")
 }
 
+/// The text of a line of the loaded program (trimmed).
 pub fn source_text(app: &App, file: usize, line: u32) -> String {
     app.program
         .files
@@ -294,6 +296,7 @@ pub(crate) fn watch_ui(app: &mut App, ui: &mut Ui) {
     ui.weak("Values that changed during the last step / run are red.");
 }
 
+/// Adds a watch expression and shows the watch window.
 pub fn add_watch(app: &mut App, text: &str) {
     app.debugger.watches.push(Watch { text: text.to_string(), compiled: None, before: None });
     app.windows[Tool::Watch] = true;
@@ -350,6 +353,7 @@ fn call_stack_rows(app: &App) -> Vec<Row> {
     rows
 }
 
+/// The call stack: return addresses found on the stack and the macros of the current line.
 pub fn call_stack_ui(app: &mut App, ui: &mut Ui) {
     if !app.loaded() {
         ui.weak("No program loaded.");
@@ -395,8 +399,11 @@ pub const VIEW_REGS: [&str; 14] =
 pub struct ValueViewer {
     /// Index into [`VIEW_REGS`], or None for the memory word at `addr`.
     pub reg: Option<usize>,
+    /// The memory address typed (for a memory word).
     pub addr: String,
+    /// The new value typed (an expression).
     pub set_text: String,
+    /// Why the last change failed.
     pub error: Option<String>,
 }
 

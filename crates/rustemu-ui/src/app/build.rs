@@ -4,6 +4,7 @@ use super::*;
 use crate::tools::Tool;
 
 impl App {
+    /// Removes the error marks of the editor.
     pub fn clear_errors(&mut self) {
         self.build.error_lines.clear();
         self.build.error_spans.clear();
@@ -282,6 +283,7 @@ impl App {
         self.session.machine.dos_host_root().unwrap_or(&self.drive_dir)
     }
 
+    /// Loads the same program again (Reload): registers, memory and devices as at the start.
     pub fn reload(&mut self) {
         match self.session.reload() {
             Ok(()) => self.after_load(),
@@ -289,6 +291,7 @@ impl App {
         }
     }
 
+    /// A program is loaded in the emulator.
     pub fn loaded(&self) -> bool {
         self.session.machine.loaded.is_some()
     }

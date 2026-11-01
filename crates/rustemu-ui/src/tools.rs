@@ -15,34 +15,63 @@ use crate::workspace::Group;
 /// A tool that can be a tab of the workspace or a floating window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Tool {
+    /// The source editor (always shown).
     Editor,
+    /// Registers, disassembly and the run controls (the desktop's own body).
     Emulator,
+    /// Hex dump of memory.
     Memory,
+    /// The stack from SS:SP.
     Stack,
+    /// The program's variables and constants.
     Vars,
+    /// Watch expressions.
     Watch,
+    /// The last ALU operation.
     Alu,
+    /// The 8087 registers.
     Fpu,
+    /// The emulator screen.
     Screen,
+    /// The virtual devices of Emu8086.
     Devices,
+    /// Files of drive C: in memory (the browser).
     Drive,
+    /// The source with the current line (the desktop's own body).
     Source,
+    /// The listing.
     Listing,
+    /// The symbol table.
     Symbols,
+    /// The emu8086.inc library.
     Library,
+    /// The reference.
     Reference,
+    /// Breakpoints with conditions.
     Breakpoints,
+    /// The call stack.
     CallStack,
+    /// The DEBUG.EXE-style console and the log of every stop.
     Console,
+    /// The emulator's log.
     Log,
+    /// The flags.
     Flags,
+    /// The lexical flag analyser (which conditional jumps are taken).
     FlagAnalyser,
+    /// Stop on condition.
     StopCondition,
+    /// The extended value viewer.
     ValueViewer,
+    /// The ASCII table.
     Ascii,
+    /// The base converter.
     Converter,
+    /// About.
     About,
+    /// The multi-base calculator.
     Calculator,
+    /// "My programs" saved in the browser.
     Programs,
 }
 
@@ -61,6 +90,7 @@ struct Spec {
 }
 
 impl Tool {
+    /// Number of tools (the size of [`Windows`]).
     pub const COUNT: usize = 29;
 
     /// All tools; panels are placed in this order by the default layout, windows drawn in it.
@@ -134,6 +164,7 @@ impl Tool {
         Spec { key, title, group, scrolls, program }
     }
 
+    /// Title of the tool's tab in the panels layout.
     pub fn title(self) -> &'static str {
         self.spec().title
     }

@@ -32,16 +32,28 @@ pub fn scan_code_for(c: u8) -> u8 {
 
 /// Extended (non-ASCII) keys: scan codes with ASCII 0.
 pub mod keys {
+    /// F1 (F2..F10 follow: F1 + n).
     pub const F1: u8 = 0x3B;
+    /// F10.
     pub const F10: u8 = 0x44;
+    /// Home.
     pub const HOME: u8 = 0x47;
+    /// Up arrow.
     pub const UP: u8 = 0x48;
+    /// Page Up.
     pub const PGUP: u8 = 0x49;
+    /// Left arrow.
     pub const LEFT: u8 = 0x4B;
+    /// Right arrow.
     pub const RIGHT: u8 = 0x4D;
+    /// End.
     pub const END: u8 = 0x4F;
+    /// Down arrow.
     pub const DOWN: u8 = 0x50;
+    /// Page Down.
     pub const PGDN: u8 = 0x51;
+    /// Insert.
     pub const INS: u8 = 0x52;
+    /// Delete.
     pub const DEL: u8 = 0x53;
 }

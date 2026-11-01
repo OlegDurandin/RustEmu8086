@@ -1,15 +1,20 @@
 //! Index of macros and procedures defined in an include file (for editor help and navigation).
 
+/// What an [`Entry`] defines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
+    /// A macro (`NAME MACRO params`).
     Macro,
+    /// A procedure (`DEFINE_NAME` defines `name PROC`), called with CALL.
     Proc,
 }
 
+/// A macro or procedure of an include file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// Name in upper case.
     pub name: String,
+    /// Macro or procedure.
     pub kind: EntryKind,
     /// Parameters of a macro as written (`col, row`).
     pub params: String,

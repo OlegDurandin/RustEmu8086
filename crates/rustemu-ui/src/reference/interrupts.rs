@@ -2,19 +2,29 @@
 
 /// A BIOS / DOS interrupt.
 pub struct Interrupt {
+    /// Interrupt number.
     pub number: u8,
+    /// Title.
     pub title: &'static str,
+    /// The article.
     pub description: &'static str,
     /// Register that selects the function (empty if none).
     pub selector: &'static str,
+    /// Its functions.
     pub functions: &'static [Function],
 }
 
+/// A function of an interrupt.
 pub struct Function {
+    /// Function number (the selector register value).
     pub code: u16,
+    /// Title.
     pub title: &'static str,
+    /// Registers on entry.
     pub input: &'static str,
+    /// Registers on return.
     pub output: &'static str,
+    /// Example code.
     pub example: &'static str,
 }
 
@@ -24,6 +34,7 @@ macro_rules! func {
     };
 }
 
+/// The BIOS and DOS interrupts of the reference.
 pub const INTERRUPTS: &[Interrupt] = &[
     Interrupt {
         number: 0x10,

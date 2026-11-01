@@ -12,6 +12,7 @@ impl App {
         }
     }
 
+    /// Handles the keyboard shortcuts of the frame (F5, F8, ⌘B, ...).
     pub fn shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
         let sc = |m: Modifiers, k: Key| KeyboardShortcut::new(m, k);
