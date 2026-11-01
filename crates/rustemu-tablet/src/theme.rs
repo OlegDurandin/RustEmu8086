@@ -19,6 +19,8 @@ pub(crate) mod pal {
     pub const TEAL: Color32 = Color32::from_rgb(0x12, 0xA8, 0x9A);
     pub const AMBER: Color32 = Color32::from_rgb(0xF2, 0xB6, 0x30);
     pub const AMBER_BG: Color32 = Color32::from_rgb(0x4A, 0x3C, 0x16);
+    /// A value changed by the last step / run.
+    pub const GREEN: Color32 = Color32::from_rgb(0x3F, 0xC4, 0x6E);
     pub const RED: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D);
     pub const LABEL: Color32 = Color32::from_rgb(0xE6, 0xC0, 0x6A);
 }

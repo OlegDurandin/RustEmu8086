@@ -314,11 +314,19 @@ pub struct Exec {
     pub prev_cpu: Cpu,
     /// The 8087 before the last step / run (its changes are red in the FPU window).
     pub prev_fpu: rustemu_core::fpu::Fpu,
+    /// Why execution last stopped or what it is doing (`None`: nothing ran since the load).
+    pub last_event: Option<Event>,
 }
 
 impl Default for Exec {
     fn default() -> Self {
-        Exec { last_step: 0.0, instr_per_frame: 50_000, prev_cpu: Cpu::new(), prev_fpu: Default::default() }
+        Exec {
+            last_step: 0.0,
+            instr_per_frame: 50_000,
+            prev_cpu: Cpu::new(),
+            prev_fpu: Default::default(),
+            last_event: None,
+        }
     }
 }
 

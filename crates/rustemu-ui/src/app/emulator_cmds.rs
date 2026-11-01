@@ -10,6 +10,30 @@ impl App {
         self.view.code_selected.map(|(s, o)| rustemu_core::linear(s, o))
     }
 
+    /// The program waits for a key and none is typed yet (a step would only wait again).
+    pub fn waiting_for_key(&self) -> bool {
+        let m = &self.session.machine;
+        m.is_waiting_input() && m.sys.keys.is_empty()
+    }
+
+    /// Registers and flags may be changed by hand: a program is loaded and paused, and it is not
+    /// in the middle of waiting for a key.
+    pub fn cpu_editable(&self) -> bool {
+        self.loaded() && self.run == RunMode::Paused && !self.session.machine.is_waiting_input()
+    }
+
+    /// Changes the CPU by hand when [`App::cpu_editable`]. The step-back history stays: stepping
+    /// back returns to the state before the previous instruction, before this change too.
+    pub fn edit_cpu(&mut self, f: impl FnOnce(&mut Cpu)) -> bool {
+        if !self.cpu_editable() {
+            return false;
+        }
+        f(&mut self.session.machine.cpu);
+        let c = &self.session.machine.cpu;
+        self.status = format!("Changed by hand at {:04X}:{:04X}", c.cs(), c.ip);
+        true
+    }
+
     /// Debug -> run until: runs to the selected instruction (or a breakpoint).
     pub fn run_until_selected(&mut self) {
         let Some(addr) = self.selected_addr() else { return };
@@ -124,6 +148,7 @@ impl App {
         self.program.text = s.loaded_text;
         self.build.failed = false;
         self.program.generation += 1;
+        self.exec.last_event = None;
         for w in &mut self.debugger.watches {
             w.compiled = None;
         }
