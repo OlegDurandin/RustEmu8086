@@ -1,534 +1,145 @@
-# RustEmu8086
+<p align="center">
+  <img src="crates/rustemu-web/assets/icon-256.png" width="96" alt="">
+</p>
 
-Ассемблер, эмулятор и отладчик процессора Intel 8086 для macOS — аналог Emu8086. Есть и
-[веб-версия](#веб-версия), которая работает в браузере на любом компьютере и планшете.
-Понимает два синтаксиса: Emu8086 (MASM) и [NASM](#синтаксис-nasm).
+<h1 align="center">RustEmu8086</h1>
 
-Чем RustEmu8086 отличается от оригинала — в разделе [Отличия от Emu8086](#отличия-от-emu8086). Руководство
-пользователя — в [вики](https://github.com/OlegDurandin/RustEmu8086/wiki): первая программа, отладка, синтаксис,
-прерывания, устройства, вопросы и ответы.
+<p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
 
-## Скачать готовое приложение
+<p align="center"><b>Learn x86 assembly by watching your code execute.</b></p>
 
-Готовый `RustEmu8086.app` для Mac с Apple Silicon и Intel (macOS 11 или новее) лежит на странице
-[Releases](https://github.com/OlegDurandin/RustEmu8086/releases): скачайте `RustEmu8086-<версия>-macos.zip`,
-распакуйте и перетащите `RustEmu8086.app` в «Программы». Сборка из последнего состояния `main` есть в
-[Actions](https://github.com/OlegDurandin/RustEmu8086/actions): откройте последний успешный запуск CI, файл
-*RustEmu8086-macos* в разделе *Artifacts* (нужен вход в GitHub).
+<p align="center">
+Write 8086 assembly, run programs instruction by instruction, see registers and memory change,<br>
+and understand why your program behaves the way it does.
+</p>
 
-Приложение не подписано сертификатом Apple и не прошло нотаризацию, поэтому при первом запуске macOS
-предупредит, что не может проверить разработчика. Открыть его можно одним из способов:
+<p align="center">
+  <a href="https://olegdurandin.github.io/RustEmu8086/"><b>▶ Try in browser</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/OlegDurandin/RustEmu8086/releases">Download for macOS</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/OlegDurandin/RustEmu8086/wiki">Documentation</a>
+</p>
 
-- правый клик (или Control-клик) по приложению → **Открыть** → **Открыть** (macOS 14 и раньше);
-- **Системные настройки → Конфиденциальность и безопасность** → внизу **Всё равно открыть** (macOS 15 и новее);
-- или в Терминале: `xattr -dr com.apple.quarantine /Applications/RustEmu8086.app`.
+---
 
-Внутри приложения есть и программа командной строки: `RustEmu8086.app/Contents/MacOS/rustemu`.
+RustEmu8086 is an assembler, emulator and debugger for the Intel 8086, in the spirit of Emu8086. It runs in the
+browser on any computer or tablet, and as a native app on macOS. Nothing to install to get started: open the page,
+pick an example, press **Step**.
 
-## Сборка из исходников
+## Try it in one minute
 
-### Что нужно
-
-- macOS 11 или новее.
-- Rust 1.95 или новее. Установка: `curl https://sh.rustup.rs -sSf | sh`, обновление: `rustup update`.
-
-### Запуск графического приложения
-
-Из корня репозитория:
-
-```sh
-cargo run --release -p rustemu-desktop
+```asm
+; Sum of 1 + 2 + 3 + 4 + 5. Press Step (F8) and watch AX, BX and CX change.
+org 100h
+    mov cx, 5               ; counter
+    xor ax, ax              ; sum = 0
+    mov bx, 1
+next:
+    add ax, bx              ; sum += bx
+    inc bx
+    loop next               ; cx--, repeat while cx != 0
+    ret                     ; AX = 15
 ```
 
-Сразу открыть файл:
+**[Open this program in the emulator →](https://olegdurandin.github.io/RustEmu8086/#name=sum.asm&code=bY7BCsIwEETv_YrxptiWVi2I4qEKnoVeeo3p2hY0KWnUfL5roILVhYEwebM7WxT3G_QFKeZYsJasFSuLcTLU9ygsdZge1zMIVeEprGyQlyH2pTcOJWQjVE1xoE2NNEmaADw3_YB0ITJ8zxZS35Ul4ymnDQRTwo2pnmvtkHx2nZlKA0XObrwnqsonz3-T8x1_eK5Vcnhete7w3vBbyUVRCEMdCYtn016JLUyG-4bGkSGYl1wyzYIX)**
+Then press **F8** (or **Step**) a few times. Went too far? **⇧F8** steps back.
+
+## What you can do
+
+- **Step forwards and backwards.** Execute one instruction at a time, or step back up to 2000 instructions —
+  registers, memory, the screen and devices all return to where they were.
+- **See everything change.** Registers and flags that changed are highlighted; memory, the stack, variables and the
+  emulator screen are one click away. Hover over a register or a variable in the editor to see its value.
+- **Understand each step.** The tablet layout's *Last step* card says what the last instruction changed
+  (`BX 000Fh → 000Eh`, `CF 0 → 1`) and why the flags came out the way they did.
+- **Debug at the source level.** Breakpoints with conditions, watches, call stack, Run to cursor, Step over / out,
+  stop on condition, stepping into `emu8086.inc` macros.
+- **Two assembly languages.** The Emu8086 / MASM dialect and NASM (`nasm -f bin`), detected automatically.
+  COM, EXE, BIN and boot-sector programs.
+- **A real-feeling PC.** BIOS and DOS services (INT 10h, 16h, 21h, 13h, 33h…), text and VGA 13h graphics, a
+  keyboard, a mouse, floppies, a sandboxed drive C:, and the 8087 coprocessor.
+- **Emu8086 compatibility.** All 84 examples shipped with Emu8086 assemble and run (except one written for FASM),
+  the virtual devices too: traffic lights, stepper motor, robot, thermometer, LED display, printer.
+- **A built-in reference** for every instruction, directive and interrupt function, in English and Russian —
+  F1 on any word in the editor.
+- **Share a program as a link.** The code is packed into the link itself; a teacher sends it, and the student
+  opens a ready example.
+
+The processor is checked against 2.9 million tests recorded on a real 8088
+([SingleStepTests](https://github.com/SingleStepTests/8088)), and instruction encodings against NASM.
+
+## Get it
+
+- **In the browser** — **https://olegdurandin.github.io/RustEmu8086/**. Chrome, Safari, Firefox or Edge, on a
+  computer, an iPad or an Android tablet. On a computer you get the Emu8086-style interface, on a tablet — a
+  touch layout with a PC keyboard. Programs and files stay in your browser.
+- **macOS app** (macOS 11+, Apple Silicon and Intel) — download `RustEmu8086-<version>-macos.zip` from
+  [Releases](https://github.com/OlegDurandin/RustEmu8086/releases), unzip and drag `RustEmu8086.app` to
+  Applications. The app is not notarized; on first launch right-click it → **Open**, or on macOS 15+ allow it in
+  **System Settings → Privacy & Security** (details in
+  [Installation](https://github.com/OlegDurandin/RustEmu8086/wiki/Installation#first-launch)).
+- **Command line** — `rustemu asm / run / disasm`, included in the app
+  (`RustEmu8086.app/Contents/MacOS/rustemu`); see
+  [Command line](https://github.com/OlegDurandin/RustEmu8086/wiki/Command-line).
+
+## Documentation
+
+The [wiki](https://github.com/OlegDurandin/RustEmu8086/wiki) is the user guide, in English and Russian:
+
+- [Your first program](https://github.com/OlegDurandin/RustEmu8086/wiki/First-program) — from "Hello, World" to
+  step-by-step debugging in 10 minutes;
+- [Debugging](https://github.com/OlegDurandin/RustEmu8086/wiki/Debugging) — steps, breakpoints, watches,
+  expressions, the DEBUG.EXE console;
+- [Emu8086 syntax](https://github.com/OlegDurandin/RustEmu8086/wiki/Emu8086-syntax),
+  [NASM syntax](https://github.com/OlegDurandin/RustEmu8086/wiki/NASM-syntax),
+  [8087 coprocessor](https://github.com/OlegDurandin/RustEmu8086/wiki/8087-coprocessor),
+  [emu8086.inc library](https://github.com/OlegDurandin/RustEmu8086/wiki/Emu8086-inc-library);
+- [BIOS and DOS interrupts](https://github.com/OlegDurandin/RustEmu8086/wiki/BIOS-and-DOS-interrupts),
+  [Virtual devices](https://github.com/OlegDurandin/RustEmu8086/wiki/Virtual-devices);
+- [Web version](https://github.com/OlegDurandin/RustEmu8086/wiki/Web-version),
+  [Tablet layout](https://github.com/OlegDurandin/RustEmu8086/wiki/Tablet-layout),
+  [Keyboard shortcuts](https://github.com/OlegDurandin/RustEmu8086/wiki/Keyboard-shortcuts);
+- [Differences from Emu8086](https://github.com/OlegDurandin/RustEmu8086/wiki/Differences-from-Emu8086),
+  [Troubleshooting](https://github.com/OlegDurandin/RustEmu8086/wiki/Troubleshooting).
+
+## Building from source
+
+Requires macOS 11+ and Rust 1.95+ (`curl https://sh.rustup.rs -sSf | sh`).
 
 ```sh
-cargo run --release -p rustemu-desktop -- examples/hello.asm
+cargo run --release -p rustemu-desktop                       # the app
+cargo run --release -p rustemu-desktop -- examples/hello.asm  # open a file right away
+./scripts/bundle_macos.sh                                    # RustEmu8086.app + zip (UNIVERSAL=1: arm64 + x86_64)
+cargo run --release -p rustemu-cli -- run examples/hello.asm --input x
 ```
 
-Первая сборка занимает 1–2 минуты, дальше запуск почти мгновенный.
-
-### Как приложение `.app`
+The web version (needs `rustup target add wasm32-unknown-unknown` and [trunk](https://trunk-rs.github.io/trunk/)):
 
 ```sh
-./scripts/bundle_macos.sh
-open target/release/bundle/RustEmu8086.app
-```
-
-Скрипт собирает `target/release/bundle/RustEmu8086.app` (его можно перетащить в «Программы») и архив
-`RustEmu8086-<версия>-macos.zip`. С `UNIVERSAL=1 ./scripts/bundle_macos.sh` получается одна программа для
-Apple Silicon и Intel (нужно `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
-
-### Выпуск версии
-
-Версия задаётся в `Cargo.toml` (`[workspace.package] version`). Тег с тем же номером запускает сборку и
-публикацию релиза на GitHub:
-
-```sh
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-Описание релиза берётся из `release-notes/<тег>.md` (например, `release-notes/v0.2.0.md`); если такого файла
-нет, GitHub составит его сам.
-
-## Веб-версия
-
-То же приложение, собранное в WebAssembly: работает в браузере без установки (Chrome, Safari, Firefox, Edge;
-на компьютере, iPad и Android). Адрес — https://olegdurandin.github.io/RustEmu8086/ (публикуется из `main`
-через GitHub Actions).
-
-- На компьютере — интерфейс как в Emu8086, на iPad (в том числе с клавиатурой и трекпадом), других
-  сенсорных устройствах и в узком окне — [интерфейс планшета](#интерфейс-планшета). Переключить можно прямо в
-  приложении, без потери программы: окно **options** → *layout*, в интерфейсе планшета — меню ⋮ →
-  *Desktop layout*; выбор запоминается в браузере. Для одного посещения: `?ui=desktop` или `?ui=tablet` в адресе.
-- Ссылка на пример: `?example=palindrome.asm` открывает встроенный пример, `&run` сразу его запускает
-  (например, `…/RustEmu8086/?example=hello.asm&run`).
-- **Поделиться программой** — кнопка **share** на панели (или **File → Share link…**; в интерфейсе планшета —
-  значок «поделиться» рядом с клавиатурой): ссылка, которая открывает
-  программу из редактора на сайте; галочка *run the program when the link is opened* — сразу запустить. Удобно для
-  учёбы: преподаватель отправляет ссылку, и пример у студента уже открыт. Программа сжата прямо в ссылке
-  (`#name=…&code=…`) и никуда не загружается; часть после `#` браузер не отправляет на сервер. Ссылка работает и
-  из приложения для Mac (ведёт на сайт). Открытая по ссылке программа — новый файл: **Save** сохранит её в «Мои
-  программы»; несохранённые правки перед этим не теряются (приложение спросит). Длинные ссылки (больше 8000
-  символов) некоторые мессенджеры обрезают — тогда лучше отправить файл. **Чужая программа не видит ваших
-  файлов:** пока программа из ссылки не сохранена, она работает с пустым временным диском C: (что она на него
-  запишет, не сохраняется) — приложение говорит об этом при первом запуске и в окне **drive C:**. Чтобы
-  запустить её с вашим диском C:, сохраните её и запустите снова.
-- **Мои программы** — программы хранятся в браузере. **Save** (⌘S) сохраняет программу из редактора туда (у новой
-  сначала спросит имя), **Open** (⌘O) открывает окно *my programs*: список (последние сохранённые — сверху),
-  открыть, скачать, удалить, и **upload from computer…** — выбор файла на компьютере (`.asm` открывается и
-  попадает в список, `.com` / `.exe` / `.bin` загружается в эмулятор). **File → Download** — скачать программу
-  файлом, **compile** — скачать собранный `.com` / `.exe`. *Recent files* — последние сохранённые программы.
-- **Ничего не теряется**: то, что открыто в редакторе, вместе с несохранёнными правками вернётся при следующем
-  открытии сайта. Всё сохраняется каждые 10 секунд и при скрытии или закрытии вкладки. Если браузер не даёт
-  странице хранить данные (некоторые приватные режимы) или его хранилище переполнено, приложение предупредит
-  об этом (при переполнении — сразу и один раз, сохранение повторяется само) и спросит перед закрытием вкладки
-  с несохранёнными правками. Настройки, точки останова и прочее тоже хранятся в браузере.
-- **Диск C: для программ** — в памяти браузера: файловые функции DOS (INT 21h: создание, чтение, запись,
-  поиск, папки, переименование) работают с ним, и он сохраняется между посещениями. Окно **drive C:**
-  (*Emulator → Virtual drive → drive C: files…*, в интерфейсе планшета — меню ⋮ → *Drive C: files*): загрузить
-  файлы, которые программа будет читать, посмотреть и скачать файлы, которые она записала, удалить. Объём —
-  2 МБ на все файлы (браузер хранит данные сайта в нескольких мегабайтах); на заполненном диске запись, как
-  в DOS, пишет меньше байт, чем просили, а создание файла (больше 1024 файлов и папок) — «access denied».
-- Отличия от приложения для Mac: диск C: — в браузере, а не папка на компьютере (на Mac это папка
-  `vdrive/C`); программы — в браузере, а не файлы на диске; ⌘N, ⌘W и ⌘T браузер не отдаёт странице (пользуйтесь меню); F1–F10, Esc,
-  ⌘R, ⌘F, ⌘G, ⌘L, ⌘B, ⌘E работают как в приложении, а не как команды браузера (перезагрузка — ⌘⇧R); в окнах с текстом CP437 (таблица ASCII, дамп памяти) нет четырёх символов (☻ ☼ ⌂ ⁿ) — экран эмулятора рисует все; из эмодзи есть только значки интерфейса; эмулятор примерно в 1,5–2 раза
-  медленнее (десятки миллионов инструкций в секунду — с большим запасом для 8086).
-
-### Сборка и запуск у себя
-
-Нужны цель WebAssembly и [trunk](https://trunk-rs.github.io/trunk/):
-
-```sh
-rustup target add wasm32-unknown-unknown
-brew install trunk            # или: cargo install trunk
 cd crates/rustemu-web
-trunk serve                   # http://127.0.0.1:8080, пересобирает при изменениях
-trunk build --release         # готовый сайт — в crates/rustemu-web/dist/
+trunk serve                   # http://127.0.0.1:8080, add ?ui=tablet for the tablet layout
+trunk build --release         # the site in crates/rustemu-web/dist/
 ```
 
-Сборка идёт с профилем cargo `web` (корневой `Cargo.toml`): оптимизация по размеру и LTO, ядро эмулятора — по
-скорости; wasm ~7 МБ, ~2,7 МБ в gzip. Эмодзи-шрифты egui в браузере урезаны до символов интерфейса
-(`crates/rustemu-ui/fonts/`); добавили в интерфейс новый значок — запустите `scripts/subset_emoji_fonts.py`
-(тест `web_fonts_cover_the_ui` напомнит). Пока wasm загружается, страница показывает прогресс (`progress.mjs`).
+Tests: `cargo test --workspace`. With `nasm` installed (`brew install nasm`) encodings and whole programs are also
+compared with NASM byte for byte. The Emu8086 example corpus, the 8088 hardware tests, the crate layout, CI and the
+release process are described in [For developers](https://github.com/OlegDurandin/RustEmu8086/wiki/For-developers).
 
-Папку `dist/` можно выложить на любой статический хостинг. Для подпапки (как на GitHub Pages) укажите её:
-`trunk build --release --public-url /RustEmu8086/`.
+Found a bug or missing a feature? [Open an issue](https://github.com/OlegDurandin/RustEmu8086/issues).
 
-**Публикация на GitHub Pages.** Задание `web` в `.github/workflows/ci.yml` собирает сайт при каждом push в
-`main`, `deploy-web` — публикует. Один раз в настройках репозитория: Settings → Pages → Build and deployment →
-Source: **GitHub Actions**.
+## License
 
-## Интерфейс планшета
+MIT — see [LICENSE](LICENSE).
 
-На iPad и других планшетах RustEmu8086 работает через [веб-версию](#веб-версия): в браузере она сама
-выбирает интерфейс для касаний (настольный остаётся как в Emu8086). Отдельного приложения для iPadOS и
-Android нет и не планируется — для App Store нужны Apple Developer ID и подпись, а браузер даёт то же самое
-без установки. Сайт можно добавить на экран «Домой» (Safari → «Поделиться» → «На экран Домой»).
+The MIT license does not cover the Emu8086 materials (Emu8086 was an 8086 emulator published at emu8086.com; the
+site and the company no longer exist):
 
-Тёмная тема, крупные элементы под палец. Сверху — имя файла и кнопки **Run / Pause / Step / Reset**: Run, Step
-и Reset сами собирают программу, если текст изменился. Три вкладки:
-- **Editor** — редактор, регистры (AX–DX — по байтам, AH | AL, как в окне эмулятора на компьютере), флаги (касание переключает флаг), дизассемблер, память, вывод
-  (экран эмулятора или сообщения ассемблера);
-- **Debugger** — дизассемблер с точками останова (касание поля слева), регистры, вывод программы (экран
-  эмулятора), стек вызовов, точки останова с переключателями, watch, трасса выполнения (последние шаги из
-  истории шага назад);
-- **Memory** — hex-редактор (сегмент, переход к адресу, поиск байтов или текста, ввод в HEX или ASCII,
-  8/16/32 байт в строке), инспектор байта, сегментные регистры, стек, карта 1 МБ адресного пространства.
+- the **examples** in `examples/` (except `hello_nasm.asm` and `boot_nasm.asm`) are files from the Emu8086
+  distribution, unchanged (only the text encoding of `thermometer.asm` was converted), and belong to the authors of
+  Emu8086;
+- the **`emu8086.inc` library** (`crates/rustemu-asm/inc/`) reproduces the Emu8086 library: its macros and
+  procedures, their names, parameters and behaviour belong to the authors of Emu8086; the text of the file was
+  written for RustEmu8086.
 
-**Экранная клавиатура** — для ввода в программу, которая работает в эмуляторе. Открывается значком клавиатуры
-рядом с ⋮, касанием экрана эмулятора и сама, когда программа ждёт ввода (INT 21h / INT 16h). Раскладка US и
-клавиши, нужные DOS-программам: Esc, Tab, Ctrl, стрелки, по клавише Fn — F1–F10, Ins/Del/Home/End/PgUp/PgDn.
-Shift и Ctrl действуют на одну следующую клавишу. Рядом с клавишами — экран эмулятора крупно (строки вокруг
-курсора). Код в редакторе набирается системной клавиатурой планшета.
-
-Остальное (открыть и сохранить файл, примеры, справочник, калькулятор, устройства, переменные, диск C:,
-опции…) — в меню ⋮. В альбомной ориентации карточки стоят тремя колонками на всю высоту (на вкладке Editor:
-редактор | регистры и дизассемблер | вывод и память), в портретной — двумя колонками с нижним рядом. В узком
-окне (Split View, узкое окно браузера) карточки встают друг под другом.
-
-### Разработка интерфейса планшета
-
-Интерфейс можно смотреть обычным окном macOS, без браузера:
-
-```sh
-cargo run -p rustemu-tablet
-```
-
-Мышь работает как касание. Это удобно для проверки раскладки и логики; в браузере то же самое — `trunk serve`
-и `?ui=tablet` в адресе. Самое узкое окно Mac — на границе узкой раскладки «стопкой»; как она выглядит, видно
-на снимке `30_tablet_*_narrow.png`.
-
-Снимки интерфейса без запуска окна делают UI-тесты: `cargo test -p rustemu-tablet` сохраняет
-`target/ui-snapshots/30_tablet_*.png` (вкладки в альбомной, портретной и узкой ориентации) и
-`31_tablet_keyboard*.png` (экранная клавиатура).
-
-### Как устроено
-
-- **GUI разделён на три крейта**:
-  - `crates/rustemu-ui` — общее: состояние приложения (файлы, сборка, запуск, точки останова, настройки),
-    редактор, экран эмулятора, окна отладки и инструментов, диалоги, справочник, платформенный слой
-    `platform.rs` (файловые диалоги на Mac, загрузка и скачивание файлов в браузере, буфер обмена, ссылки);
-  - `crates/rustemu-desktop` — интерфейс в стиле Emu8086 (меню, панель, окно эмулятора), программа
-    `RustEmu8086` для macOS;
-  - `crates/rustemu-tablet` — интерфейс планшета и экранная клавиатура (библиотека для веб-версии и окно на Mac
-    для разработки).
-- `crates/rustemu-web` собирает обе раскладки в один сайт и переключает их на лету.
-- **Рендерер wgpu**: Metal на macOS, WebGPU (или WebGL 2) в браузере. Лимиты wgpu запрашиваются не выше
-  возможностей устройства.
-
-## Работа в приложении
-
-1. Создайте файл (**new**, ⌘N — окно выбора шаблона COM / EXE / BIN / BOOT, как в Emu8086),
-   откройте существующий (⌘O) или выберите пример (**File → Examples** или кнопка **examples**).
-2. Нажмите **▶ emulate** (F9). Программа соберётся и загрузится в эмулятор.
-   При ошибках сборки они появятся внизу с номером строки и колонки (`hello.asm (4:9): value 300 out of byte
-   range`), а в редакторе место ошибки подчёркнуто волнистой линией — неизвестное имя, операнд, выходящее за
-   пределы значение; клик по ошибке выделяет это место.
-3. В окне **emulator** (по умолчанию инструменты — плавающие окна, как в Emu8086; в **options → windows** можно
-   выбрать панели-вкладки, которые не перекрывают друг друга, **Emulator → Reset window layout** возвращает
-   раскладку по умолчанию):
-   - **Single step** (F8) — одна инструкция;
-   - **Step back** (⇧F8) — откат на шаг назад;
-   - **Step over** (F10) — выполнить текущую строку целиком (макрос, `CALL`, `INT`);
-   - **Step out** (⇧F11) — выйти из текущего макроса или процедуры к месту вызова;
-   - **Run / Stop** (F5) — запуск/остановка, ползунок **step delay** задаёт паузу между шагами.
-4. Если программа ждёт ввода, щёлкните по окну **emulator screen** и печатайте. **⌘V** (или кнопка **paste**)
-   вводит текст из буфера обмена, перевод строки — как Enter; **⌘C** (кнопка **copy**) копирует текст экрана.
-5. Точка останова — клик по кружку слева от строки в окне **original source code**
-   или двойной клик по инструкции в дизассемблере.
-6. Кнопки внизу окна эмулятора — как в Emu8086: **screen**, **source**, **reset** (перезагрузить программу),
-   **aux** (память, ALU, FPU, stop on condition, таблица символов, листинг, а также breakpoints, watch, call stack,
-   устройства, журнал), **vars** (переменные и константы), **debug** (журнал состояния после каждого шага и
-   команды DEBUG.EXE), **stack** (стек от SS:FFFE, текущий SP выделен), **flags** (флаги 0/1, кнопка **analyse**
-   показывает, какие условия переходов выполняются).
-7. Меню окна эмулятора — как в Emu8086: **file** (загрузка, reload, примеры, сброс эмулятора и памяти, параметры
-   командной строки, **save the emulator's state** / **load from previous state** — снимок до закрытия приложения,
-   недавние файлы), **math** (калькулятор, конвертер), **debug** (шаги, stop on condition, run until, точка останова,
-   show current instruction **F7**, set CS:IP). Пункты с адресом работают с инструкцией, выделенной кликом
-   в дизассемблере: **⌃F8** — выполнить до неё, **⌃⇧F7** — перенести туда CS:IP. **F6** — тоже шаг назад.
-   Также **view** (все окна, **extended value viewer** — значение регистра или слова памяти во всех системах
-   счисления с правкой; открывается и двойным кликом по имени регистра), **virtual devices** (устройства по именам
-   Emu8086, вкладка **VGA state** — порт 3DAh и палитра), **virtual drive** (загрузка с дискеты, запись
-   загрузочного сектора и `.bin`-файла с заданного сектора, новый дисковод FLOPPY_1..3, загрузка/сохранение образа), **help**.
-
-### Отладчик
-
-- **Точки останова в редакторе**: клик по полю слева от номера строки или **⌘F8**. Красная точка —
-  обычная, оранжевая — с условием, серая — выключенная. При правке текста точки сдвигаются вместе со строками.
-- **Текущая строка** подсвечивается прямо в редакторе (стрелка ▶). Внутри макроса из `emu8086.inc`
-  слабее подсвечивается строка вызова.
-- **Run to cursor** — **F4** или правый клик по строке → *Run to line N*. В окне исходника то же самое
-  есть в контекстном меню строки.
-- Окно **breakpoints** (кнопка внизу окна эмулятора или *Emulator → Breakpoints*):
-  - условие для каждой точки (`cx == 0`, `[bx] > 10`, `al == 'A'`), счётчик срабатываний, вкл/выкл;
-  - **stop on condition**, как в Emu8086: выражение проверяется после каждой инструкции, остановка, когда
-    оно *становится истинным* или *меняет значение*.
-- **watch** — наблюдение за выражениями. Изменившиеся за последний шаг значения выделены красным.
-  Добавить переменную можно и из редактора: правый клик → *Add watch*.
-- **call stack** — цепочка вызовов (по адресам возврата `CALL`/`INT` в стеке) и макросы текущей строки.
-  Клик по строке открывает её в редакторе или в окне исходника.
-- **FPU** — сопроцессор 8087: регистры ST(0)…ST(7), биты C3–C0, исключения и управляющее слово.
-- **ALU** — последняя арифметическая или логическая операция: операнды и результат в hex, двоичном и
-  десятичном виде, флаги до и после.
-- При наведении на регистр или переменную в редакторе (программа загружена) показывается их значение.
-- Если код правили после загрузки, окна эмулятора и исходника предупреждают, что программа устарела,
-  и предлагают пересобрать её (F9).
-
-Синтаксис выражений: регистры (`ax`, `al`, `ds`, `ip`), флаги (`zf`, `cf`…), переменные программы
-(`value`, `table[si]`, `offset msg`), память (`[bx]`, `word [si+2]`, `es:[di]`), числа `10`, `0Ah`, `1010b`, `'c'`,
-операторы `+ - * / % << >> & | ^ ~ ! == != < <= > >= && ||` и ассемблерные `and or xor not shl shr mod`.
-
-### Библиотека emu8086.inc
-
-`include 'emu8086.inc'` подключает макросы (`PRINT`, `PUTC`, `GOTOXY`…) и процедуры
-(`SCAN_NUM`, `PRINT_NUM`…). Чтобы понимать, что они делают:
-
-- наведите курсор на имя в редакторе — появится описание; ⌘-клик открывает код;
-- **Help → emu8086.inc library** (или ⌘-клик по строке `include 'emu8086.inc'`) показывает все макросы и
-  процедуры с описанием и исходным кодом;
-- при пошаговой отладке на строке с макросом (`print '...'`) F10 выполняет его целиком, а F8
-  заходит внутрь: окно исходника показывает код `emu8086.inc` и подсвечивает текущую строку
-  (галочка **step into macros**), плашка сверху — в чём вы находитесь и откуда вызвано;
-  **Step out** (⇧F11) возвращает к вызвавшей строке;
-- в дизассемблере у переходов и вызовов подписаны имена меток (`CALL 0150h ; SCAN_NUM`), а строка, которую
-  `print` кладёт в код, показана как данные: `DB 'First number: ', 0`.
-
-### Справочник
-
-Кнопка **❓ help** или меню **Help** открывает справочник:
-- **инструкции** 8086 (и PUSHA/POPA/LEAVE из 80186) — синтаксис, описание, какие флаги меняются, пример;
-- **прерывания** BIOS и DOS (INT 10h, 13h, 15h, 16h, 1Ah, 21h, 33h…) — входные и выходные регистры каждой функции;
-- **директивы** ассемблера и Emu8086 (`#make_com#`, `#start=..#`…);
-- **синтаксис NASM** (вкладка *NASM syntax*, **Help → NASM syntax**): как выбирается синтаксис, чем имена и
-  обращения к памяти отличаются от Emu8086, форматы программ и секции, метки и числа, данные, препроцессор,
-  отладка NASM-программ, чего нет — с примерами, плюс все NASM-директивы;
-- краткую шпаргалку.
-
-Справочник есть на английском и на русском: переключатель **EN / RU** в правом верхнем углу окна. Язык
-запоминается и действует и на подсказки в редакторе. Код примеров одинаковый, переведены описания и комментарии.
-
-В редакторе наведите курсор на инструкцию, директиву или `int 21h`: появится краткое описание с флагами.
-**F1** (текстовый курсор на слове) или **⌘-клик** открывает статью. Для `int 21h` справочник находит номер
-функции в предыдущей строке `mov ah, ..` и показывает именно её.
-
-### Редактор
-
-Горячие клавиши как в Emu8086 (Control — клавиша ⌃): закладки ⌃F2 / F2 / ⇧F2, поиск ⌘F, F3 / ⇧F3,
-замена ⌃H, переход к строке ⌃G (или ⌘L), комментирование блока ⌃Q / ⌃W, регистр ⌃L / ⌃U.
-Меню **Math** — многосистемный калькулятор выражений и конвертор систем счисления, **ASCII Codes** — таблица.
-
-### Что запоминается
-
-Между запусками сохраняются тема, шрифт, задержка шага, открытые окна, их положение и размер (окно экрана
-эмулятора меняет размер мышью, экран вписывается в него).
-Для каждого файла (последние 30, и для встроенных примеров тоже) — точки останова с условиями,
-выражения watch, закладки, stop on condition и строка курсора: открыли файл — отладочная обстановка на месте.
-
-### Тема
-
-По умолчанию светлая; выбор light / dark / system — меню **Options** или окно **options** (кнопка на панели).
-
-### Ещё как в Emu8086
-
-- **new** (⌘N, **File → New…**) — шаблоны COM / EXE / BIN / boot sector.
-- **Emulator → Set command line parameters…** — параметры программы (PSP:80h).
-- **Emulator → Virtual drive** — до четырёх дискет FLOPPY_0..FLOPPY_3 для INT 13h (DL = 0..3): **create new
-  floppy drive** добавляет дисковод с пустой дискетой 1,44 МБ, образы можно загрузить/сохранить (подойдут `FLOPPY_n`
-  из Emu8086), записать 512 байт с 0000:7C00 в загрузочный сектор, а программу из эмулятора или `.bin`-файл — с нужного
-  сектора, загрузиться с дискеты (если на ней загрузчик, собранный в редакторе, отладка идёт по исходнику). Дискеты хранятся в памяти: чтобы сохранить их между запусками, используйте **save floppy image**.
-- Директива `#start=robot.exe#` (и другие устройства) открывает нужную вкладку окна устройств.
-
-**⌘B** (compile) записывает рядом с исходником исполняемый файл (`.com`/`.exe`/`.bin`),
-листинг `.lst` и таблицу символов `.symbol`.
-
-Файловые функции DOS (INT 21h) работают с отдельной папкой — диском C:
-`~/Documents/RustEmu8086/vdrive/C`, как `vdrive\C` в Emu8086: программа не может изменить или удалить
-файлы рядом со своим исходником. Открыть папку — *Emulator → Virtual drive → show drive C: folder*. В окне
-**options** (*drive C:*) диском C: можно сделать папку программы — тогда она видит файлы рядом с собой.
-
-## Синтаксис NASM
-
-Кроме синтаксиса Emu8086 (MASM) RustEmu8086 собирает программы на NASM — так, как их собирает `nasm -f bin`:
-COM-программы, загрузочные секторы и «чистые» двоичные файлы. Результат сверяется с настоящим NASM байт в байт.
-
-### Как выбирается синтаксис
-
-По умолчанию — автоматически. NASM включается, если в файле есть что-то из этого:
-
-- `bits 16` / `[bits 16]`, `[org …]`, `section .text`, `cpu`, `global`;
-- директивы препроцессора `%define`, `%macro`, `%include`, `%assign`, `%rep`, `%if`;
-- `times`, `resb` / `resw` / `resd`, `$$`;
-- размер без `ptr`: `byte [..]`, `word [..]`.
-
-Также NASM выбирают расширение файла `.nasm` и строка `#nasm#`. Во всех остальных случаях — Emu8086; но если
-программа так не собирается, а как NASM собирается, она собирается как NASM.
-Синтаксис можно задать и явно: меню **Options** или окно **options** → *assembler syntax* (auto / Emu8086 / NASM), в командной
-строке — `rustemu asm файл --syntax nasm`. В сообщении о сборке видно, каким синтаксисом собрана программа.
-
-Готовые заготовки: **new** → флажок *use NASM syntax* (COM, BIN и boot sector), примеры `hello_nasm.asm` и
-`boot_nasm.asm` в меню **Examples**.
-
-### Главное отличие от Emu8086
-
-В NASM имя — это адрес, а память читается только в квадратных скобках:
-
-| Код | Emu8086 (MASM) | NASM |
-|---|---|---|
-| `mov ax, value` | читает переменную | загружает адрес `value` |
-| `mov ax, [value]` | читает переменную | читает переменную |
-| `mov byte [bx], 5` | ошибка (нужно `byte ptr`) | так и пишется |
-| `mov [bx], 5` | байт, если число влезает | ошибка: размер не указан |
-| `mov ax, 'ab'` | AH = 'a', AL = 'b' | AL = 'a', AH = 'b' |
-
-Отладчик учитывает это. В watch, условиях и подсказке при наведении у NASM-программы `count` — это адрес,
-а `[count]` — значение (с размером из `dw` / `db`). Окно **vars** показывает переменные как обычно.
-
-### Что поддерживается
-
-- `bits 16`, `use16`, `org`, `cpu` / `global` / `extern` (игнорируются), формы в скобках `[bits 16]`, `[org …]`.
-- Секции `.text`, `.data`, `.bss`. Как в `nasm -f bin`, `.data` идёт после кода с выравниванием на 4 байта, а
-  `.bss` занимает адреса после неё, но в файл не попадает.
-- Формат по `org`: `org 100h` — COM, `org 0x7c00` — загрузочный сектор (512 байт), иначе — BIN.
-- Метки с двоеточием и без (`msg db …`), локальные метки `.loop`. Внутри файла `.loop` получает имя
-  `ПРЕДЫДУЩАЯ_МЕТКА.LOOP`, так оно показывается и в отладчике.
-- `db` / `dw` / `dd` / `dq` / `dt`, строки в `dw` / `dd` дополняются нулями до целого элемента.
-- `times`, `resb` … `rest`, `align`, `alignb`, `equ`, `$`, `$$`.
-- Числа: `0x1F`, `1Fh`, `$1F`, `0b1010`, `1010b`, `0o17`, `17q`, `0d99`.
-- Строки `'…'`, `"…"` и `` `…` `` с escape-последовательностями `\n`, `\t`, `\r`, `\0`, `\xHH`.
-- Операторы `| ^ & << >> + - * / % ~ !`, сравнения `== != < > <= >=` (истина — 1), логические `&& || ^^`,
-  `?:` — с порядком операций NASM.
-- Операнды: `byte` / `word` / `dword` без `ptr`, `[es:di]`, `short` / `near` / `far`, `seg:off`.
-- Препроцессор:
-  - `%define` (и с параметрами: `%define SQ(x) ((x)*(x))`), `%undef`, `%assign`;
-  - `%macro` … `%endmacro` с параметрами `%1`…`%9` и локальными метками `%%метка`;
-  - `%rep` … `%endrep`;
-  - `%if` / `%elif` / `%else` / `%endif`, `%ifdef`, `%ifndef`;
-  - `%include`, `%error`.
-- Структуры: `struc` … `endstruc` (поле `.x` → смещение `имя.x`, размер `имя_size`), `istruc` … `at` … `iend`.
-
-### Чего нет
-
-- Только формат `-f bin`. EXE для DOS собирается в NASM через объектный формат и компоновщик — этого нет;
-  для EXE используйте синтаксис Emu8086.
-- «Жадный» последний параметр макроса (`%macro m 1+`), `%0`, `%rotate`, `%strlen` / `%substr`, `incbin`, числа
-  с плавающей точкой в данных, произвольные имена секций, макросы контекста (`%push`, `%$метка`).
-- Дальние условные переходы. NASM без `cpu 8086` собирает их инструкцией 80386 (`0F 8x`), которой нет у 8086.
-  RustEmu8086, как Emu8086, заменяет такой переход парой «обратный короткий переход + `jmp near`», поэтому
-  байты здесь отличаются от NASM.
-
-## Сопроцессор 8087
-
-Эмулируется математический сопроцессор 8087: стек из восьми 80-битных регистров `ST(0)`…`ST(7)`, все его
-инструкции (`FLD`, `FADD`, `FMUL`, `FDIV`, `FCOM`, `FSQRT`, `FPTAN`, `FSTSW`, `FSAVE`…) и несколько из 80287/80387
-(`FSTSW AX`, `FSIN`, `FCOS`). Дробные числа в данных — `dd 1.5`, `dq -3.0e-2`, `dt 2.5`; регистры — `st(1)` или
-`st1`, размеры — `qword ptr` / `tbyte ptr` (в NASM `qword` / `tword`). Арифметика точная 80-битная (крейт
-`rustc_apfloat`), кодирование и данные сверяются с NASM байт в байт. Окно **aux → FPU** показывает регистры, биты
-C3–C0, исключения и управляющее слово; шаг назад откатывает и сопроцессор. Подробно — в вики,
-[Сопроцессор 8087](https://github.com/OlegDurandin/RustEmu8086/wiki/Сопроцессор-8087).
-
-## Отличия от Emu8086
-
-RustEmu8086 повторяет Emu8086 по языку ассемблера и директивам, по сервисам BIOS и DOS, по виртуальным
-устройствам и по устройству окон. Все 84 примера из поставки Emu8086 собираются и работают одинаково, кроме одного
-примера на синтаксисе FASM. Ниже перечислено, в чём программы всё-таки расходятся.
-
-### Чего нет
-
-- **Синтаксис FASM** (`#fasm#`) не поддерживается, поэтому не собирается пример `fasm_compatibility.asm`.
-- **Ассемблер:**
-  - нет `STRUC` и `IRP` / `IRPC`;
-  - `ASSUME` принимается, но сегментные префиксы по нему не подставляются;
-  - `ENTER`, `BOUND` и `INS` / `OUTS` процессор выполняет, а ассемблер не принимает (`PUSHA`, `POPA`,
-    `PUSH imm`, `IMUL imm` и `LEAVE` из 80186 работают).
-- **Файл `.binf`** не создаётся и не читается. Адрес загрузки и регистры для BIN-файла задаются директивами
-  `#load_segment=#`, `#load_offset=#`, `#cs=#`, `#ip=#` и т.п. прямо в исходнике.
-- **Видеорежимы**: только текстовые 0–3 и 7 и графический 13h (320×200, 256 цветов). Режимов CGA 4/5/6 и
-  VGA 12h нет.
-- **Меню external** (debug.exe, командная строка, запуск во внешней DOS) не сделано: на macOS нет DOS.
-- **Собственные устройства** через файлы `c:\emu8086.io` и `c:\emu8086.hw` подключить нельзя. Устройства
-  встроены в программу: светофор, шаговый двигатель, робот, LED-дисплей, термометр, принтер, простой ввод-вывод
-  и VGA state.
-- **Документации и учебников Emu8086** в комплекте нет. Вместо них — встроенный справочник (F1) по инструкциям,
-  прерываниям и директивам.
-- **Автообновления нет**: *help → check for an update* открывает страницу релизов на GitHub.
-
-### Работает иначе
-
-- **Окна**: по умолчанию — плавающие, как в Emu8086; в **options → windows** можно включить панели-вкладки
-  главного окна, которые не перекрывают друг друга.
-- **Горячие клавиши** частично свои:
-
-  | Действие | Emu8086 | RustEmu8086 |
-  |---|---|---|
-  | собрать и загрузить в эмулятор | кнопка *emulate* | F9 или кнопка *emulate* |
-  | run / stop | F9 (в эмуляторе) | F5 |
-  | step over | ⇧F8 | F10 |
-  | step back | F6 | ⇧F8 или F6 |
-  | reload | F4 | кнопка *reset* или *file → reload* (F4 — Run to cursor) |
-  | step out | — | ⇧F11 |
-  | show current instruction / run until / set CS:IP | F7 / ⌃F8 / ⌃⇧F7 | так же |
-
-  Открытие, сохранение и правка текста — стандартные клавиши macOS с ⌘.
-- **Окна.** Редактор занимает главное окно приложения, а эмулятор, экран, память, устройства и т.д. — плавающие
-  окна внутри него. В Emu8086 редактор и эмулятор — отдельные окна Windows.
-- **Виртуальные дискеты** FLOPPY_0…FLOPPY_3 хранятся в памяти, а не файлами рядом с Emu8086. При запуске есть
-  один пустой FLOPPY_0. Образы загружаются и сохраняются через *virtual drive → load / save floppy image*;
-  образы `FLOPPY_n` из Emu8086 подходят.
-- **«Save the emulator's state»** хранит снимок машины в памяти до закрытия приложения. Файлы, которые программа
-  открыла на диске, в снимок не входят.
-- **Файловые функции DOS работают в «песочнице».** Диск C: — папка `~/Documents/RustEmu8086/vdrive/C` (в Emu8086 —
-  `vdrive\C`), в настройках можно выбрать папку программы. Выйти за её пределы нельзя, в том числе через
-  символьные ссылки.
-- **Шаг назад** не проходит через операции с файлами на диске: на создании, записи, переименовании и т.п.
-  история обрезается, потому что такие изменения откатить нельзя.
-- **`emu8086.inc`** — собственная реализация: те же макросы и процедуры с тем же видимым поведением, но не
-  исходный файл Emu8086.
-- **VGA_STATE не нужен**: бит обратного хода луча в порту 3DAh переключается всегда. Вкладка *VGA state*
-  показывает этот бит, видеорежим и палитру.
-- **Аппаратный таймер.** Счётчик тиков BIOS (0040:006C) идёт всегда, а прерывание IRQ0 (INT 08h → INT 1Ch)
-  включается галочкой *timer IRQ* в окне эмулятора; по умолчанию она выключена.
-
-### Чего нет в Emu8086
-
-- **Отладка на уровне исходника:**
-  - точки останова и текущая строка прямо в редакторе;
-  - условные точки останова, watch, call stack, Run to cursor, Step out;
-  - пошаговый заход внутрь макросов `emu8086.inc`;
-  - значения регистров и переменных при наведении курсора.
-- **Шаг назад** на 2000 инструкций, включая состояние устройств, клавиатуры, DOS и дискет.
-- **Справочник** на английском и русском по каждой инструкции (синтаксис, флаги, пример) и по функциям прерываний — с подсказками в
-  редакторе и переходом по F1.
-- **Запоминание обстановки** для каждого файла: точки останова, watch, закладки, условие остановки.
-- **Синтаксис NASM** — второй язык ассемблера, см. [Синтаксис NASM](#синтаксис-nasm).
-- **Командная строка** `rustemu`: сборка, запуск и дизассемблирование без графического интерфейса.
-- **Проверенная точность.** Процессор сверен с 2,9 млн тестов, снятых с реального 8088 (SingleStepTests), а
-  кодировки инструкций — с ассемблером NASM.
-
-## Командная строка
-
-```sh
-cargo build --release -p rustemu-cli        # бинарь: target/release/rustemu
-
-target/release/rustemu run examples/hello.asm --input x          # собрать и выполнить (x — клавиша в конце)
-target/release/rustemu run examples/calc.asm --input '12\n30\nx' # с вводом с клавиатуры
-target/release/rustemu run prog.asm --args "p1 p2"              # параметры командной строки (PSP:80h)
-target/release/rustemu run examples/colors.asm --input 'x' --screen   # показать итоговый экран
-target/release/rustemu asm examples/exetest.asm -l -s            # собрать .exe + листинг + символы
-target/release/rustemu asm examples/hello.asm                     # → examples/hello.com
-target/release/rustemu asm boot.asm --syntax nasm                 # NASM (обычно определяется сам)
-target/release/rustemu disasm examples/hello.com                  # дизассемблировать
-```
-
-Без `--input` ввод берётся из stdin. Остальные опции: `rustemu` без аргументов.
-
-## Тесты
-
-```sh
-cargo test --workspace
-```
-
-Дополнительно:
-
-- сверка кодировок с NASM выполняется автоматически, если установлен `nasm` (`brew install nasm`); тест
-  `nasm_dialect` при этом собирает NASM-программы обоими ассемблерами и сравнивает результат байт в байт;
-- совместимость с примерами Emu8086: `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture`
-  собирает и запускает все его примеры (папка `examples`);
-- проверка процессора на тестах с реального 8088 (SingleStepTests): скачать `v2/*.json.gz`
-  и `v2/metadata.json` из https://github.com/SingleStepTests/8088 в `testdata/8088/`, затем
-  `cargo test -p rustemu-core --release --test singlestep -- --ignored`.
-
-## Лицензия
-
-MIT — см. файл [LICENSE](LICENSE).
-
-На материалы Emu8086 (эмулятор 8086, выходил на emu8086.com; сайта и фирмы больше нет) лицензия MIT не
-распространяется:
-
-- **примеры** в папке `examples/` (кроме `hello_nasm.asm` и `boot_nasm.asm`) — файлы из поставки Emu8086 без
-  изменений (у `thermometer.asm` только перекодирован текст), принадлежат авторам Emu8086;
-- **библиотека `emu8086.inc`** (`crates/rustemu-asm/inc/`) повторяет библиотеку Emu8086: её макросы и процедуры,
-  их имена, параметры и поведение принадлежат авторам Emu8086; текст файла написан для RustEmu8086.
-
-Подробнее — в конце файла [LICENSE](LICENSE).
+More at the end of [LICENSE](LICENSE).

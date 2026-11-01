@@ -1,43 +1,45 @@
 # RustEmu8086
 
-**RustEmu8086** — ассемблер, эмулятор и отладчик процессора Intel 8086 в духе Emu8086. Пишете программу на
-ассемблере, нажимаете F9 и выполняете её по шагам: видно регистры, флаги, память, стек и экран.
+**English** · [Русский](Главная)
 
-- **Веб-версия** работает в браузере на компьютере и планшете, без установки:
+**Learn x86 assembly by watching your code execute.** RustEmu8086 is an Intel 8086 assembler, emulator and
+debugger in the spirit of Emu8086. Write a program, press F9 and run it step by step: registers, flags, memory,
+the stack and the screen are all in view, and you can step back when you go too far.
+
+- **Web version** — runs in the browser on a computer or a tablet, nothing to install:
   **https://olegdurandin.github.io/RustEmu8086/**
-- **Приложение для macOS** (Apple Silicon и Intel) — на странице
-  [Releases](https://github.com/OlegDurandin/RustEmu8086/releases).
+- **macOS app** (Apple Silicon and Intel) — on the
+  [Releases](https://github.com/OlegDurandin/RustEmu8086/releases) page.
 
-## С чего начать
+## Getting started
 
-1. [Установка](Установка) — веб-версия или приложение для Mac.
-2. [Первая программа](Первая-программа) — от «Hello, World» до пошаговой отладки за 10 минут.
-3. [Отладка](Отладка) — шаги вперёд и назад, точки останова, watch, условия остановки.
+1. [Installation](Installation) — the web version or the Mac app.
+2. [Your first program](First-program) — from "Hello, World" to step-by-step debugging in 10 minutes.
+3. [Debugging](Debugging) — stepping forwards and backwards, breakpoints, watches, stop conditions.
 
-## Справочник
+## Reference
 
-| Тема | О чём |
+| Topic | What it covers |
 |---|---|
-| [Синтаксис Emu8086](Синтаксис-Emu8086) | директивы, форматы COM / EXE / BIN / BOOT, размеры операндов |
-| [Синтаксис NASM](Синтаксис-NASM) | второй язык ассемблера, как в `nasm -f bin` |
-| [Сопроцессор 8087](Сопроцессор-8087) | вещественные числа: `FLD`, `FADD`, `FSQRT`, окно FPU |
-| [Библиотека emu8086.inc](Библиотека-emu8086) | `PRINT`, `SCAN_NUM`, `PRINT_NUM` и другие макросы |
-| [Прерывания BIOS и DOS](Прерывания-BIOS-и-DOS) | какие функции INT 10h, 16h, 21h, 13h… поддерживаются |
-| [Виртуальные устройства](Виртуальные-устройства) | светофор, робот, термометр, LED, шаговый двигатель, принтер |
-| [Редактор](Редактор) | подсветка, подсказки, поиск, закладки |
-| [Горячие клавиши](Горячие-клавиши) | всё на одной странице |
+| [Emu8086 syntax](Emu8086-syntax) | directives, COM / EXE / BIN / BOOT formats, operand sizes |
+| [NASM syntax](NASM-syntax) | the second assembly language, as in `nasm -f bin` |
+| [8087 coprocessor](8087-coprocessor) | floating point: `FLD`, `FADD`, `FSQRT`, the FPU window |
+| [emu8086.inc library](Emu8086-inc-library) | `PRINT`, `SCAN_NUM`, `PRINT_NUM` and other macros |
+| [BIOS and DOS interrupts](BIOS-and-DOS-interrupts) | which INT 10h, 16h, 21h, 13h… functions are supported |
+| [Virtual devices](Virtual-devices) | traffic lights, robot, thermometer, LED display, stepper motor, printer |
+| [Editor](Editor) | highlighting, hints, search, bookmarks |
+| [Keyboard shortcuts](Keyboard-shortcuts) | everything on one page |
 
-## Веб и планшет
+## Web and tablet
 
-- [Веб-версия](Веб-версия) — «Мои программы», диск C: в браузере, ссылки «поделиться».
-- [Интерфейс планшета](Интерфейс-планшета) — iPad и сенсорные экраны, экранная клавиатура.
+- [Web version](Web-version) — "my programs", drive C: in the browser, share links.
+- [Tablet layout](Tablet-layout) — iPad and touch screens, the PC keyboard.
 
-## Ещё
+## More
 
-- [Отличия от Emu8086](Отличия-от-Emu8086) — что работает иначе и чего нет.
-- [Командная строка](Командная-строка) — `rustemu asm / run / disasm` без окон.
-- [Вопросы и проблемы](Вопросы-и-проблемы) — если что-то не получается.
-- [Для разработчиков](Для-разработчиков) — сборка из исходников, устройство проекта, тесты.
+- [Differences from Emu8086](Differences-from-Emu8086) — what works differently and what is missing.
+- [Command line](Command-line) — `rustemu asm / run / disasm` without windows.
+- [Troubleshooting](Troubleshooting) — when something does not work.
+- [For developers](For-developers) — building from source, how the project is organised, tests.
 
-Нашли ошибку или не хватает функции —
-[создайте issue](https://github.com/OlegDurandin/RustEmu8086/issues).
+Found a bug or missing a feature? [Open an issue](https://github.com/OlegDurandin/RustEmu8086/issues).
