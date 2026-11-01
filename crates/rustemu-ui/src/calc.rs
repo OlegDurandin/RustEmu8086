@@ -5,24 +5,13 @@ use egui::{RichText, Ui};
 
 #[derive(Default)]
 pub struct CalcState {
-    pub open: bool,
     pub expr: String,
     /// Result width in bytes: 1, 2 or 4.
     pub width: u8,
     pub history: Vec<(String, i64)>,
 }
 
-pub fn calculator_window(st: &mut CalcState, ctx: &egui::Context) {
-    let mut open = st.open;
-    egui::Window::new("multi base calculator")
-        .open(&mut open)
-        .default_pos(egui::pos2(260.0, 110.0))
-        .default_width(460.0)
-        .show(ctx, |ui| calc_ui(st, ui));
-    st.open = open;
-}
-
-fn calc_ui(st: &mut CalcState, ui: &mut Ui) {
+pub(crate) fn calc_ui(st: &mut CalcState, ui: &mut Ui) {
     if st.width == 0 {
         st.width = 2;
     }

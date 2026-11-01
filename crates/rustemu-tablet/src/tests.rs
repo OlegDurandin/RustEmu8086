@@ -5,6 +5,7 @@ use egui_kittest::kittest::Queryable;
 use rustemu_ui::testing::{app_with_example, example, save};
 
 use crate::{Tab, TabletApp};
+use rustemu_ui::tools::Tool;
 
 fn tablet_harness(app: TabletApp, size: [f32; 2]) -> Harness<'static, TabletApp> {
     Harness::builder()
@@ -30,10 +31,10 @@ fn tablet_app() -> TabletApp {
     for _ in 0..6 {
         app.single_step();
     }
-    let line = app.text.lines().position(|l| l.trim_start().starts_with("loop")).map_or(12, |l| l as u32 + 1);
+    let line = app.doc.text.lines().position(|l| l.trim_start().starts_with("loop")).map_or(12, |l| l as u32 + 1);
     app.toggle_breakpoint_at_line(0, line);
     for w in ["ax", "cx * 2"] {
-        app.watches.push(rustemu_ui::app::Watch { text: w.into(), compiled: None, before: None });
+        app.debugger.watches.push(rustemu_ui::app::Watch { text: w.into(), compiled: None, before: None });
     }
     let ds = app.session.machine.cpu.sregs[rustemu_core::cpu::DS];
     let mut t = TabletApp::new(app);
@@ -131,7 +132,7 @@ fn tool_windows_keep_their_size() {
     // The debug log once reserved too little room for its touch-sized command line and grew
     // every frame.
     let mut t = TabletApp::new(app_with_example(0));
-    t.app.windows.console = true;
+    t.app.windows[Tool::Console] = true;
     let mut h = tablet_harness(t, [1376.0, 1032.0]);
     // The only window shown.
     let size = |h: &Harness<'_, TabletApp>| {
@@ -155,7 +156,7 @@ fn share_button_and_byte_registers() {
     assert_eq!(h.query_all_by_label("SP").count(), 1, "a word box");
     h.get_by_label("share link").click();
     h.run_steps(3);
-    assert!(h.state().app.share.is_some());
+    assert!(h.state().app.dialogs.share.is_some());
     assert!(h.query_by_label("copy").is_some());
     save(&mut h, "30_tablet_share");
 }

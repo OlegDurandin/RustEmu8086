@@ -1,6 +1,7 @@
 //! Files: new from a template, open, save, uploads, examples.
 
 use super::*;
+use crate::tools::Tool;
 
 /// Session key prefix of the built-in examples. The examples were ours before they became
 /// Emu8086's (some with the same names): sessions saved under the former "example:" belong to
@@ -25,26 +26,26 @@ impl App {
 
     fn new_from(&mut self, template: &str) {
         self.store_session();
-        self.path = None;
-        self.doc_name = None;
-        self.opened_from_link = false;
-        self.program = None;
-        self.example_key = None;
+        self.doc.path = None;
+        self.doc.name = None;
+        self.doc.from_link = false;
+        self.doc.program = None;
+        self.doc.example_key = None;
         self.clear_session();
-        self.bookmarks.clear();
-        self.text = template.to_string();
-        self.saved_text = self.text.clone();
-        self.messages.clear();
+        self.editor.bookmarks.clear();
+        self.doc.text = template.to_string();
+        self.doc.saved_text = self.doc.text.clone();
+        self.build.messages.clear();
         self.clear_errors();
         self.status = "New file".into();
     }
 
     pub fn open_dialog(&mut self) {
-        if self.browser {
-            self.windows.programs = true;
+        if self.front.browser {
+            self.windows[Tool::Programs] = true;
             return;
         }
-        let dir = self.path.as_ref().and_then(|p| p.parent());
+        let dir = self.doc.path.as_ref().and_then(|p| p.parent());
         let filters: [crate::platform::Filter; 2] =
             [("Assembly", &["asm", "nasm", "inc", "txt"]), ("All files", &["*"])];
         if let Some(p) = crate::platform::pick_file(&filters, dir) {
@@ -61,17 +62,17 @@ impl App {
         match std::fs::read(p) {
             Ok(bytes) => {
                 self.store_session();
-                self.text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
-                self.saved_text = self.text.clone();
-                self.path = Some(p.to_path_buf());
-                self.doc_name = None;
-                self.opened_from_link = false;
-                self.program = None;
-                self.messages.clear();
+                self.doc.text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
+                self.doc.saved_text = self.doc.text.clone();
+                self.doc.path = Some(p.to_path_buf());
+                self.doc.name = None;
+                self.doc.from_link = false;
+                self.doc.program = None;
+                self.build.messages.clear();
                 self.clear_errors();
                 self.add_recent(p);
                 self.settings.last_file = Some(p.to_path_buf());
-                self.example_key = None;
+                self.doc.example_key = None;
                 self.restore_session();
                 self.status = format!("Opened {}", p.display());
             }
@@ -97,7 +98,7 @@ impl App {
     /// Asks the browser for the requested file and opens the files that arrived.
     pub(super) fn handle_uploads(&mut self, ctx: &egui::Context) {
         use crate::platform::UploadFor;
-        if let Some(purpose) = self.pending_upload.take() {
+        if let Some(purpose) = self.web.pending_upload.take() {
             let filters: &[crate::platform::Filter] = match purpose {
                 UploadFor::Open => &[
                     ("Assembly or executable", &["asm", "nasm", "inc", "txt", "com", "exe", "bin"]),
@@ -133,8 +134,8 @@ impl App {
     /// Saves the file (in the browser: as a program of "my programs"; a new one asks for its name
     /// first and returns `false`).
     pub fn save(&mut self) -> bool {
-        if self.browser {
-            match self.program.clone() {
+        if self.front.browser {
+            match self.doc.program.clone() {
                 Some(name) => {
                     self.save_program(&name);
                     return true;
@@ -142,18 +143,18 @@ impl App {
                 None => return self.save_as(),
             }
         }
-        match self.path.clone() {
+        match self.doc.path.clone() {
             Some(p) => self.save_to(&p),
             None => self.save_as(),
         }
     }
 
     pub fn save_as(&mut self) -> bool {
-        if self.browser {
-            self.save_name = Some(crate::programs::SaveName { text: self.file_name(), then: None });
+        if self.front.browser {
+            self.dialogs.save_name = Some(crate::programs::SaveName { text: self.file_name(), then: None });
             return false;
         }
-        let dir = self.path.as_ref().and_then(|p| p.parent());
+        let dir = self.doc.path.as_ref().and_then(|p| p.parent());
         match crate::platform::save_file(&[("Assembly", &["asm"])], dir, &self.file_name()) {
             Some(p) => self.save_to(&p),
             None => false,
@@ -163,16 +164,16 @@ impl App {
     /// Saves the editor text as a download (the browser).
     pub fn download_source(&mut self) {
         let name = self.file_name();
-        crate::platform::download(&name, self.text.as_bytes());
+        crate::platform::download(&name, self.doc.text.as_bytes());
         self.status = format!("Downloaded {name}");
     }
 
     fn save_to(&mut self, p: &Path) -> bool {
-        match std::fs::write(p, &self.text) {
+        match std::fs::write(p, &self.doc.text) {
             Ok(()) => {
-                self.example_key = None;
-                self.saved_text = self.text.clone();
-                self.path = Some(p.to_path_buf());
+                self.doc.example_key = None;
+                self.doc.saved_text = self.doc.text.clone();
+                self.doc.path = Some(p.to_path_buf());
                 self.add_recent(p);
                 self.settings.last_file = Some(p.to_path_buf());
                 self.status = format!("Saved {}", p.display());
@@ -193,15 +194,15 @@ impl App {
     /// Opens `src` as the built-in example `name` (it has no file; Save asks for one).
     pub fn load_example_text(&mut self, name: &str, src: &str) {
         self.store_session();
-        self.path = None;
-        self.doc_name = None;
-        self.opened_from_link = false;
-        self.program = None;
-        self.example_key = Some(format!("{EXAMPLE_KEY}{name}"));
+        self.doc.path = None;
+        self.doc.name = None;
+        self.doc.from_link = false;
+        self.doc.program = None;
+        self.doc.example_key = Some(format!("{EXAMPLE_KEY}{name}"));
         // Emu8086's files have DOS line ends.
-        self.text = src.replace("\r\n", "\n");
-        self.saved_text = self.text.clone();
-        self.messages.clear();
+        self.doc.text = src.replace("\r\n", "\n");
+        self.doc.saved_text = self.doc.text.clone();
+        self.build.messages.clear();
         self.clear_errors();
         self.restore_session();
         self.status = format!("Example: {name}");

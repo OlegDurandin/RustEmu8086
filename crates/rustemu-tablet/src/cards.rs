@@ -20,7 +20,7 @@ use crate::{Output, Tab};
 
 pub(crate) fn editor_card(app: &mut App, ui: &mut Ui, rect: Rect) {
     let mut b = plain_card(ui, rect, "editor");
-    if app.find.open {
+    if app.editor.find.open {
         b.horizontal(|ui| rustemu_ui::find::find_bar(app, ui));
     }
     rustemu_ui::editor::editor(app, &mut b);
@@ -28,7 +28,7 @@ pub(crate) fn editor_card(app: &mut App, ui: &mut Ui, rect: Rect) {
 
 pub(crate) fn registers_card(app: &mut App, ui: &mut Ui, rect: Rect) {
     let (_, mut b) = card(ui, rect, "REGISTERS");
-    let prev = app.prev_cpu.clone();
+    let prev = app.exec.prev_cpu.clone();
     let c = &mut app.session.machine.cpu;
     let left = [("AX", 0), ("BX", 1), ("CX", 2), ("DX", 3), ("SP", 4), ("BP", 5)];
     let right = [("SI", 6), ("DI", 7), ("CS", 8), ("DS", 9), ("ES", 10), ("SS", 11), ("IP", 12)];
@@ -98,7 +98,7 @@ fn reg_mut(c: &mut rustemu_core::Cpu, i: usize) -> &mut u16 {
 
 pub(crate) fn flags_card(app: &mut App, ui: &mut Ui, rect: Rect) {
     let (_, mut b) = card(ui, rect, "FLAGS");
-    let prev = app.prev_cpu.flags;
+    let prev = app.exec.prev_cpu.flags;
     let rows = [
         ("CF", flags::CF),
         ("ZF", flags::ZF),
@@ -164,7 +164,7 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
         return;
     }
     if let Some(code) = app.session.machine.terminated
-        && !app.code_view_pinned
+        && !app.view.code_view_pinned
     {
         // CS:IP is left in the PSP or the DOS stub: nothing there is the program's code.
         b.label(RichText::new(format!("The program has terminated (exit code {code}).")).color(pal::TEXT).strong());
@@ -193,11 +193,11 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
     }
     b.spacing_mut().item_spacing.y = 0.0;
     let rows = ((b.available_height() / ROW_H).floor() as usize).max(1);
-    let start = rustemu_ui::debug::disasm_start(app, rows);
+    let start = rustemu_ui::inspect::disasm_start(app, rows);
     let m = &app.session.machine;
     let pc = m.cpu.pc();
-    let (cs, mut ip) = match app.code_selected {
-        Some((s, o)) if app.code_view_pinned && linear(s, o) == start => (s, o),
+    let (cs, mut ip) = match app.view.code_selected {
+        Some((s, o)) if app.view.code_view_pinned && linear(s, o) == start => (s, o),
         _ => (m.cpu.cs(), m.cpu.ip.wrapping_sub(pc.wrapping_sub(start) as u16)),
     };
     let mut a = start;
@@ -251,11 +251,11 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
         let (mnem, ops) = ins.text.split_once(' ').unwrap_or((&ins.text, ""));
         let (mnem_color, ops_color) = if ins.data { (pal::WEAK, pal::TEAL) } else { (pal::LINK, pal::TEXT) };
         p.text(pos2(r.left() + x_mnem, y), Align2::LEFT_CENTER, mnem, font.clone(), mnem_color);
-        let ops = match rustemu_ui::debug::jump_target(&ins.text).and_then(|off| app.session.symbol_at(linear(cs, off)))
-        {
-            Some(name) => format!("{ops}  ; {name}"),
-            None => ops.to_string(),
-        };
+        let ops =
+            match rustemu_ui::inspect::jump_target(&ins.text).and_then(|off| app.session.symbol_at(linear(cs, off))) {
+                Some(name) => format!("{ops}  ; {name}"),
+                None => ops.to_string(),
+            };
         p.text(pos2(r.left() + x_ops, y), Align2::LEFT_CENTER, ops, font.clone(), ops_color);
         if resp.clicked() {
             match resp.interact_pointer_pos() {
@@ -275,7 +275,7 @@ pub(crate) fn disasm_card(app: &mut App, ui: &mut Ui, rect: Rect, full: bool) {
         ip = ip.wrapping_add(ins.len as u16);
     }
     if let Some(s) = select {
-        app.code_selected = Some(s);
+        app.view.code_selected = Some(s);
     }
     if let Some(a) = toggle {
         app.toggle_breakpoint_at_addr(a);
@@ -310,10 +310,10 @@ pub(crate) fn output_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect:
                 let mode = rustemu_core::video::Video::mode(m);
                 rustemu_core::video::Video::set_mode(m, mode);
             }
-            Output::Messages => app.messages.clear(),
+            Output::Messages => app.build.messages.clear(),
         }
     }
-    let errors = app.messages.iter().filter(|m| m.error).count();
+    let errors = app.build.messages.iter().filter(|m| m.error).count();
     let msg = if errors > 0 { format!("messages ({errors})") } else { "messages".into() };
     for (o, name) in [(Output::Messages, msg.as_str()), (Output::Screen, "screen")] {
         if head.selectable_label(t.output == o, name).clicked() {
@@ -341,14 +341,14 @@ pub(crate) fn output_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect:
         }
         Output::Messages => {
             egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(&mut b, |ui| {
-                if app.messages.is_empty() {
+                if app.build.messages.is_empty() {
                     ui.label(
                         RichText::new("No messages. Run assembles the program; errors are listed here.")
                             .color(pal::WEAK),
                     );
                 }
                 let mut jump = None;
-                for (i, m) in app.messages.iter().enumerate() {
+                for (i, m) in app.build.messages.iter().enumerate() {
                     let color = if m.error { pal::RED } else { pal::TEXT };
                     let r =
                         ui.add(egui::Label::new(RichText::new(&m.text).monospace().color(color)).sense(Sense::click()));
@@ -379,7 +379,9 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
     if small_icon(&mut head, Icon::Plus, "breakpoint at the selected instruction or the editor line").clicked() {
         match app.selected_addr() {
             Some(a) if !app.session.machine.breakpoints.contains(&a) => app.toggle_breakpoint_at_addr(a),
-            _ if !app.bp_lines.contains_key(&(0, app.cursor_line)) => app.toggle_breakpoint_at_line(0, app.cursor_line),
+            _ if !app.debugger.bp_lines.contains_key(&(0, app.editor.cursor_line)) => {
+                app.toggle_breakpoint_at_line(0, app.editor.cursor_line)
+            }
             _ => {}
         }
     }
@@ -390,22 +392,22 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
     let mut goto = None;
     egui::ScrollArea::vertical().id_salt("t_bps").auto_shrink([false, false]).show(&mut b, |ui| {
         let cs = app.session.machine.cpu.cs();
-        let keys: Vec<(usize, u32)> = app.bp_lines.keys().copied().collect();
+        let keys: Vec<(usize, u32)> = app.debugger.bp_lines.keys().copied().collect();
         if keys.is_empty() && app.session.machine.breakpoints.is_empty() {
             ui.label(
                 RichText::new("Tap the left margin of the editor or the disassembly to add one.").color(pal::WEAK),
             );
         }
         for key in keys {
-            let addr = app.bp_addr.iter().find(|(_, v)| **v == key).map(|(a, _)| *a);
+            let addr = app.debugger.bp_addr.iter().find(|(_, v)| **v == key).map(|(a, _)| *a);
             let (f, l) = key;
-            let text = if f == 0 && (app.source_files.is_empty() || app.is_stale()) {
-                app.text.lines().nth(l as usize - 1).unwrap_or("").trim().to_string()
+            let text = if f == 0 && (app.program.files.is_empty() || app.is_stale()) {
+                app.doc.text.lines().nth(l as usize - 1).unwrap_or("").trim().to_string()
             } else {
                 rustemu_ui::debugger::source_text(app, f, l)
             };
             let desc = format!("{}  {text}", rustemu_ui::debugger::file_line(app, f, l));
-            let bp = app.bp_lines.get_mut(&key).unwrap();
+            let bp = app.debugger.bp_lines.get_mut(&key).unwrap();
             ui.horizontal(|ui| {
                 ui.set_min_height(ROW_H + 6.0);
                 let a = addr.map_or("—".to_string(), |a| offset_text(cs, a));
@@ -428,7 +430,7 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
             });
         }
         let mut addrs: Vec<u32> =
-            app.session.machine.breakpoints.iter().copied().filter(|a| !app.bp_addr.contains_key(a)).collect();
+            app.session.machine.breakpoints.iter().copied().filter(|a| !app.debugger.bp_addr.contains_key(a)).collect();
         addrs.sort_unstable();
         for a in addrs {
             let desc = match app.session.view_at(a, true) {
@@ -461,7 +463,7 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
         }
     });
     if let Some(k) = remove_line {
-        app.bp_lines.remove(&k);
+        app.debugger.bp_lines.remove(&k);
         resync = true;
     }
     if let Some(a) = remove_addr {
@@ -489,42 +491,45 @@ fn offset_text(cs: u16, a: u32) -> String {
 pub(crate) fn watch_card(app: &mut App, ui: &mut Ui, rect: Rect) {
     let (mut head, mut b) = card(ui, rect, "WATCH");
     if small_icon(&mut head, Icon::Plus, "add an expression").clicked() {
-        app.watches.push(rustemu_ui::app::Watch { text: String::new(), compiled: None, before: None });
+        app.debugger.watches.push(rustemu_ui::app::Watch { text: String::new(), compiled: None, before: None });
     }
     let half = b.available_width() * 0.5;
     table_header(&mut b, &[(0.0, "Expression"), (half, "Value")]);
     let loaded = app.loaded() && app.session.program.is_some();
     let mut remove = None;
     egui::ScrollArea::vertical().id_salt("t_watch").auto_shrink([false, false]).show(&mut b, |ui| {
-        if app.watches.is_empty() {
+        if app.debugger.watches.is_empty() {
             ui.label(RichText::new("Tap + and type an expression: ax, [si], table[bx], cx * 2").color(pal::WEAK));
         }
         let half = ui.available_width() * 0.5;
-        for i in 0..app.watches.len() {
+        for i in 0..app.debugger.watches.len() {
             ui.horizontal(|ui| {
                 ui.set_min_height(ROW_H + 6.0);
                 let r = ui.scope(|ui| {
                     field_style(ui, None);
                     ui.add_sized(
                         [half - 12.0, 28.0],
-                        egui::TextEdit::singleline(&mut app.watches[i].text)
+                        egui::TextEdit::singleline(&mut app.debugger.watches[i].text)
                             .hint_text("expression")
                             .font(TextStyle::Monospace),
                     )
                 });
                 if r.inner.changed() {
-                    app.watches[i].compiled = None;
-                    app.watches[i].before = None;
+                    app.debugger.watches[i].compiled = None;
+                    app.debugger.watches[i].before = None;
                 }
-                let value = if !loaded || app.watches[i].text.trim().is_empty() {
+                let value = if !loaded || app.debugger.watches[i].text.trim().is_empty() {
                     ("—".to_string(), None)
                 } else {
                     match app.watch_value(i) {
                         Ok(v) => {
-                            let bits =
-                                app.watches[i].compiled.as_ref().and_then(|c| c.as_ref().ok()).map_or(16, |e| e.bits());
+                            let bits = app.debugger.watches[i]
+                                .compiled
+                                .as_ref()
+                                .and_then(|c| c.as_ref().ok())
+                                .map_or(16, |e| e.bits());
                             let digits = (bits as usize).div_ceil(4).clamp(2, 8);
-                            let changed = app.watches[i].before.is_some_and(|b| b != v);
+                            let changed = app.debugger.watches[i].before.is_some_and(|b| b != v);
                             (
                                 format!("{:0digits$X}", v as u64 & ((1u64 << bits.min(63)) - 1)),
                                 changed.then_some(pal::AMBER),
@@ -543,7 +548,7 @@ pub(crate) fn watch_card(app: &mut App, ui: &mut Ui, rect: Rect) {
         }
     });
     if let Some(i) = remove {
-        app.watches.remove(i);
+        app.debugger.watches.remove(i);
     }
 }
 

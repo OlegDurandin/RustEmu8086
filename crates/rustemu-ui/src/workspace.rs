@@ -1,17 +1,14 @@
-//! Where the tools are shown: tabs of one workspace that do not cover each other ("panels",
-//! egui_tiles), or floating windows like in Emu8086 ("classic windows").
-//!
-//! In both layouts the open flags (`App::windows`, `library.open`, `reference.open`) say which
-//! tools are shown. In the panels layout a tool opened by its flag gets a tab in its group (or
-//! a new group where the default layout has it), and closing the tab clears the flag. Dialogs
-//! (options, about, unsaved changes, ...), the flags and the ASCII table float in both layouts,
-//! as in Emu8086.
+//! The panels layout: the tools with a group are tabs of one workspace that do not cover each
+//! other (egui_tiles). A tool opened by its flag in [`crate::tools::Windows`] gets a tab in its group
+//! (or a new group where the default layout has it), and closing the tab clears the flag. The
+//! classic layout (floating windows, like in Emu8086) is drawn by [`crate::tools::windows`].
 
 use egui::Ui;
 use egui_tiles::{Container, Tile, TileId, Tiles, Tree};
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
+use crate::tools::{Host, Tool, tool_ui};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layout {
@@ -22,34 +19,9 @@ pub enum Layout {
     Classic,
 }
 
-/// A tool that can be a tab of the workspace or a floating window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Tool {
-    Editor,
-    Emulator,
-    Memory,
-    Stack,
-    Vars,
-    Watch,
-    Alu,
-    Fpu,
-    Screen,
-    Devices,
-    Drive,
-    Source,
-    Listing,
-    Symbols,
-    Library,
-    Reference,
-    Breakpoints,
-    CallStack,
-    Console,
-    Log,
-}
-
 /// Groups of tools: each group is one set of tabs in the default layout.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Group {
+pub(crate) enum Group {
     /// Editor and the texts next to it (left column, top).
     Text,
     /// Breakpoints, call stack (left column, bottom).
@@ -100,174 +72,25 @@ impl Group {
 /// Share of the width of each default column.
 const COLUMN_WIDTHS: [f32; 3] = [0.26, 0.42, 0.32];
 
-impl Tool {
-    /// All tools in the order the default layout places them.
-    pub const ALL: [Tool; 20] = [
-        Tool::Editor,
-        Tool::Source,
-        Tool::Listing,
-        Tool::Symbols,
-        Tool::Library,
-        Tool::Reference,
-        Tool::Emulator,
-        Tool::Memory,
-        Tool::Watch,
-        Tool::Alu,
-        Tool::Fpu,
-        Tool::Screen,
-        Tool::Vars,
-        Tool::Stack,
-        Tool::Console,
-        Tool::Log,
-        Tool::Devices,
-        Tool::Drive,
-        Tool::Breakpoints,
-        Tool::CallStack,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Tool::Editor => "editor",
-            Tool::Emulator => "emulator",
-            Tool::Memory => "memory",
-            Tool::Stack => "stack",
-            Tool::Vars => "variables",
-            Tool::Watch => "watch",
-            Tool::Alu => "ALU",
-            Tool::Fpu => "FPU",
-            Tool::Screen => "screen",
-            Tool::Devices => "virtual devices",
-            Tool::Drive => "drive C:",
-            Tool::Source => "source",
-            Tool::Listing => "listing",
-            Tool::Symbols => "symbol table",
-            Tool::Library => "emu8086.inc",
-            Tool::Reference => "reference",
-            Tool::Breakpoints => "breakpoints",
-            Tool::CallStack => "call stack",
-            Tool::Console => "debug log",
-            Tool::Log => "log",
-        }
-    }
-
-    fn group(self) -> Group {
-        match self {
-            Tool::Editor | Tool::Source | Tool::Listing | Tool::Symbols | Tool::Library | Tool::Reference => {
-                Group::Text
-            }
-            Tool::Breakpoints | Tool::CallStack => Group::Debug,
-            Tool::Emulator => Group::Emulator,
-            Tool::Memory | Tool::Watch | Tool::Alu | Tool::Fpu => Group::Inspect,
-            Tool::Screen => Group::Screen,
-            Tool::Vars | Tool::Stack | Tool::Console | Tool::Log | Tool::Devices | Tool::Drive => Group::Aside,
-        }
-    }
-
-    /// The body scrolls by itself (otherwise its tab gets a scroll area).
-    fn scrolls(self) -> bool {
-        matches!(
-            self,
-            Tool::Editor
-                | Tool::Screen
-                | Tool::Source
-                | Tool::Memory
-                | Tool::Stack
-                | Tool::Vars
-                | Tool::Symbols
-                | Tool::Listing
-                | Tool::Log
-                | Tool::Console
-                | Tool::Drive
-                | Tool::Library
-                | Tool::Reference
-        )
-    }
-
-    fn flag(self, app: &mut App) -> Option<&mut bool> {
-        let w = &mut app.windows;
-        Some(match self {
-            Tool::Editor => return None,
-            Tool::Emulator => &mut w.emulator,
-            Tool::Memory => &mut w.memory,
-            Tool::Stack => &mut w.stack,
-            Tool::Vars => &mut w.vars,
-            Tool::Watch => &mut w.watch,
-            Tool::Alu => &mut w.alu,
-            Tool::Fpu => &mut w.fpu,
-            Tool::Screen => &mut w.screen,
-            Tool::Devices => &mut w.devices,
-            Tool::Drive => &mut w.drive,
-            Tool::Source => &mut w.source,
-            Tool::Listing => &mut w.listing,
-            Tool::Symbols => &mut w.symbols,
-            Tool::Library => &mut app.library.open,
-            Tool::Reference => &mut app.reference.open,
-            Tool::Breakpoints => &mut w.breakpoints,
-            Tool::CallStack => &mut w.call_stack,
-            Tool::Console => &mut w.console,
-            Tool::Log => &mut w.log,
-        })
-    }
-
-    /// Whether the tool is shown (the editor always is).
-    pub fn is_open(self, app: &mut App) -> bool {
-        self.flag(app).is_none_or(|f| *f)
-    }
-
-    fn close(self, app: &mut App) {
-        if let Some(f) = self.flag(app) {
-            *f = false;
-        }
-    }
-}
-
-/// The body of a tool. Tools of the interface crate (emulator, source) come from `extra`, which
-/// returns false for the others.
-pub fn tool_ui(app: &mut App, ui: &mut Ui, tool: Tool, extra: &mut dyn FnMut(&mut App, &mut Ui, Tool) -> bool) {
-    if extra(app, ui, tool) {
-        return;
-    }
-    match tool {
-        Tool::Editor => crate::editor::editor(app, ui),
-        Tool::Screen => crate::screen::screen_ui(app, ui),
-        Tool::Memory => crate::debug::memory_ui(app, ui),
-        Tool::Stack => crate::debug::stack_ui(app, ui),
-        Tool::Vars => crate::debug::vars_ui(app, ui),
-        Tool::Symbols => crate::debug::symbols_ui(app, ui),
-        Tool::Listing => crate::debug::listing_ui(app, ui),
-        Tool::Log => crate::debug::log_ui(app, ui),
-        Tool::Watch => crate::debugger::watch_ui(app, ui),
-        Tool::Alu => crate::debugger::alu_ui(app, ui),
-        Tool::Fpu => crate::debugger::fpu_ui(app, ui),
-        Tool::Breakpoints => crate::debugger::breakpoints_ui(app, ui),
-        Tool::CallStack => crate::debugger::call_stack_ui(app, ui),
-        Tool::Devices => crate::devices_ui::devices_ui(app, ui),
-        Tool::Drive => crate::drive_ui::drive_ui(app, ui),
-        Tool::Console => crate::console::console_ui(app, ui),
-        Tool::Library => crate::library_ui::library_ui(app, ui),
-        Tool::Reference => crate::reference_ui::reference_ui(&mut app.reference, ui),
-        Tool::Emulator | Tool::Source => {
-            ui.weak("not available here");
-        }
-    }
-}
-
 /// The workspace of the panels layout: tabs of the open tools.
-pub fn panels_ui(app: &mut App, ui: &mut Ui, extra: &mut dyn FnMut(&mut App, &mut Ui, Tool) -> bool) {
+pub fn panels_ui(app: &mut App, ui: &mut Ui, host: &mut dyn Host) {
+    // A tool asked to be shown (an article of the reference, ...) opens and becomes the visible tab.
+    let raised: Vec<Tool> = Tool::ALL.into_iter().filter(|t| t.raise(app).is_some_and(std::mem::take)).collect();
+    for &t in &raised {
+        app.windows[t] = true;
+    }
     let mut tree = app.panels.take().unwrap_or_else(|| new_tree(app));
     sync(&mut tree, app);
-    for (raise, tool) in [(&mut app.reference.raise, Tool::Reference), (&mut app.library.raise, Tool::Library)] {
-        if std::mem::take(raise)
-            && let Some(tile) = tree.tiles.find_pane(&tool)
-        {
+    for tool in raised {
+        if let Some(tile) = tree.tiles.find_pane(&tool) {
             activate(&mut tree, tile);
         }
     }
-    let mut behavior = Behavior { app, extra, closed: Vec::new() };
+    let mut behavior = Behavior { app, host, closed: Vec::new() };
     tree.ui(&mut behavior, ui);
     let Behavior { app, closed, .. } = behavior;
     for t in closed {
-        t.close(app);
+        app.windows[t] = false;
     }
     app.panels = Some(tree);
 }
@@ -318,12 +141,13 @@ fn sync(tree: &mut Tree<Tool>, app: &mut App) {
         })
         .collect();
     for (id, tool) in panes {
-        if !tool.is_open(app) {
+        // (A tool of a saved tree may have become a floating one.)
+        if !app.windows.is_open(tool) || tool.group().is_none() {
             tree.remove_recursively(id);
         }
     }
-    for tool in Tool::ALL {
-        if tool.is_open(app) && tree.tiles.find_pane(&tool).is_none() {
+    for tool in Tool::ALL.into_iter().filter(|t| t.group().is_some()) {
+        if app.windows.is_open(tool) && tree.tiles.find_pane(&tool).is_none() {
             insert(tree, tool);
         }
     }
@@ -340,7 +164,7 @@ fn activate(tree: &mut Tree<Tool>, tile: TileId) {
 /// Group of the tools under `tile` (the first pane found).
 fn group_of(tiles: &Tiles<Tool>, tile: TileId) -> Option<Group> {
     match tiles.get(tile)? {
-        Tile::Pane(p) => Some(p.group()),
+        Tile::Pane(p) => p.group(),
         Tile::Container(c) => c.children().find_map(|&c| group_of(tiles, c)),
     }
 }
@@ -348,7 +172,7 @@ fn group_of(tiles: &Tiles<Tool>, tile: TileId) -> Option<Group> {
 /// Tabs container that holds a tool of `group`.
 fn tabs_of(tree: &Tree<Tool>, group: Group, except: TileId) -> Option<TileId> {
     tree.tiles.iter().find_map(|(&id, t)| match t {
-        Tile::Pane(p) if id != except && p.group() == group => tree
+        Tile::Pane(p) if id != except && p.group() == Some(group) => tree
             .tiles
             .parent_of(id)
             .filter(|&parent| matches!(tree.tiles.get(parent), Some(Tile::Container(Container::Tabs(_))))),
@@ -360,8 +184,8 @@ fn tabs_of(tree: &Tree<Tool>, group: Group, except: TileId) -> Option<TileId> {
 /// layout has it. A new tab becomes the visible one of its group, except the source (opened on
 /// every emulate), which does not hide the editor.
 fn insert(tree: &mut Tree<Tool>, tool: Tool) {
+    let Some(group) = tool.group() else { return };
     let pane = tree.tiles.insert_pane(tool);
-    let group = tool.group();
     if let Some(tabs) = tabs_of(tree, group, pane) {
         if let Some(Tile::Container(Container::Tabs(t))) = tree.tiles.get_mut(tabs) {
             t.add_child(pane);
@@ -433,7 +257,7 @@ fn insert(tree: &mut Tree<Tool>, tool: Tool) {
 
 struct Behavior<'a> {
     app: &'a mut App,
-    extra: &'a mut dyn FnMut(&mut App, &mut Ui, Tool) -> bool,
+    host: &'a mut dyn Host,
     closed: Vec<Tool>,
 }
 
@@ -449,11 +273,11 @@ impl egui_tiles::Behavior<Tool> for Behavior<'_> {
             ui.set_min_size(ui.available_size());
             ui.push_id(tool, |ui| {
                 if tool.scrolls() {
-                    tool_ui(self.app, ui, tool, self.extra);
+                    tool_ui(self.app, ui, tool, self.host);
                 } else {
                     // The content gets the height of the panel (the emulator fits its list to it) and
                     // scrolls when it is taller.
-                    egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| tool_ui(self.app, ui, tool, self.extra));
+                    egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| tool_ui(self.app, ui, tool, self.host));
                 }
             });
         });
@@ -506,7 +330,7 @@ mod tests {
         let mut tree = new_tree(&mut app);
         assert_eq!(layout(&tree, tree.root.unwrap()), "tabs[editor]");
         // emulate: emulator, screen, source.
-        (app.windows.emulator, app.windows.screen, app.windows.source) = (true, true, true);
+        (app.windows[Tool::Emulator], app.windows[Tool::Screen], app.windows[Tool::Source]) = (true, true, true);
         sync(&mut tree, &mut app);
         assert_eq!(layout(&tree, tree.root.unwrap()), "h[tabs[editor, source], tabs[emulator], tabs[screen]]");
         // The editor stays visible.
@@ -516,8 +340,12 @@ mod tests {
             panic!()
         };
         assert_eq!(tree.tiles.get_pane(&t.active.unwrap()), Some(&Tool::Editor));
-        (app.windows.memory, app.windows.stack, app.windows.devices, app.windows.breakpoints) =
-            (true, true, true, true);
+        (
+            app.windows[Tool::Memory],
+            app.windows[Tool::Stack],
+            app.windows[Tool::Devices],
+            app.windows[Tool::Breakpoints],
+        ) = (true, true, true, true);
         sync(&mut tree, &mut app);
         assert_eq!(
             layout(&tree, tree.root.unwrap()),
@@ -525,18 +353,18 @@ mod tests {
              v[tabs[screen], tabs[stack, virtual devices]]]"
         );
         // Closed tools lose their tabs; an empty group goes away when the tree is simplified.
-        app.windows.emulator = false;
+        app.windows[Tool::Emulator] = false;
         sync(&mut tree, &mut app);
         tree.simplify(&egui_tiles::SimplificationOptions { all_panes_must_have_tabs: true, ..Default::default() });
         assert!(tree.tiles.find_pane(&Tool::Emulator).is_none());
         // The emulator comes back above the memory.
-        app.windows.emulator = true;
+        app.windows[Tool::Emulator] = true;
         sync(&mut tree, &mut app);
         let s = layout(&tree, tree.root.unwrap());
         assert!(s.contains("v[tabs[emulator], tabs[memory]]"), "{s}");
         // A tool opened when nothing of its column is open gets a column of its own.
         let mut app = App::with_settings(crate::app::Settings::default());
-        app.windows.watch = true;
+        app.windows[Tool::Watch] = true;
         let tree = new_tree(&mut app);
         assert_eq!(layout(&tree, tree.root.unwrap()), "h[tabs[editor], tabs[watch]]");
     }

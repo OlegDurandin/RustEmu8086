@@ -91,15 +91,15 @@ impl App {
 
     pub(crate) fn open_shared(&mut self, s: Shared) {
         self.store_session();
-        self.path = None;
-        self.program = None;
-        self.example_key = None;
-        self.doc_name = Some(s.name.clone());
-        self.opened_from_link = true;
-        self.link_notice_pending = true;
-        self.text = s.text;
-        self.saved_text = self.text.clone();
-        self.messages.clear();
+        self.doc.path = None;
+        self.doc.program = None;
+        self.doc.example_key = None;
+        self.doc.name = Some(s.name.clone());
+        self.doc.from_link = true;
+        self.web.link_notice_pending = true;
+        self.doc.text = s.text;
+        self.doc.saved_text = self.doc.text.clone();
+        self.build.messages.clear();
         self.clear_errors();
         self.restore_session();
         self.status = format!("Opened {} from a link", s.name);
@@ -112,26 +112,26 @@ impl App {
     /// The program in the editor came from a link and is not saved: it runs on an empty temporary
     /// drive C:, so that somebody else's program can neither read nor change the user's files.
     pub fn from_link(&self) -> bool {
-        self.opened_from_link && self.path.is_none() && self.program.is_none() && self.example_key.is_none()
+        self.doc.from_link && self.doc.path.is_none() && self.doc.program.is_none() && self.doc.example_key.is_none()
     }
 
     /// Puts an empty temporary drive C: (for a program from a link) or the user's own one back
     /// into the machine. Only the memory drive of the browser is swapped.
     pub(crate) fn use_temporary_drive(&mut self, temporary: bool) {
         let m = &mut self.session.machine;
-        if temporary && self.own_drive.is_none() {
+        if temporary && self.web.own_drive.is_none() {
             let Some(own) = m.dos_memory_drive().cloned() else { return };
-            self.own_drive = Some(own);
+            self.web.own_drive = Some(own);
             m.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
-        } else if !temporary && let Some(own) = self.own_drive.take() {
+        } else if !temporary && let Some(own) = self.web.own_drive.take() {
             m.set_dos_memory_drive(own);
         }
     }
 
     /// Link to the program in the editor.
     pub fn share_link(&self, run: bool) -> String {
-        let base = self.share_base.as_deref().unwrap_or(crate::app::WEB_URL);
-        format!("{base}#{}", fragment(&self.file_name(), &self.text, run))
+        let base = self.front.share_base.as_deref().unwrap_or(crate::app::WEB_URL);
+        format!("{base}#{}", fragment(&self.file_name(), &self.doc.text, run))
     }
 }
 
@@ -146,7 +146,7 @@ pub fn temporary_drive_text(name: &str) -> String {
 
 /// "share link": the link to the program in the editor, to copy.
 pub fn share_dialog(app: &mut App, ctx: &egui::Context) {
-    let Some(mut d) = app.share.take() else { return };
+    let Some(mut d) = app.dialogs.share.take() else { return };
     let mut keep = true;
     egui::Window::new("share link")
         .collapsible(false)
@@ -193,7 +193,7 @@ pub fn share_dialog(app: &mut App, ctx: &egui::Context) {
             });
         });
     if keep {
-        app.share = Some(d);
+        app.dialogs.share = Some(d);
     }
 }
 

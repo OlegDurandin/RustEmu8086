@@ -43,27 +43,13 @@ pub const CGA: [Color32; 16] = [
     Color32::from_rgb(0xFF, 0xFF, 0xFF),
 ];
 
-pub fn screen_window(app: &mut App, ctx: &egui::Context) {
-    if app.panels() {
-        return;
-    }
-    let mut open = app.windows.screen;
-    let title = match app.session.machine.sys.mem.read8(video::BDA_MODE) {
+/// Title of the screen window: the video mode.
+pub(crate) fn title(app: &App) -> String {
+    let m = &app.session.machine.sys.mem;
+    match m.read8(video::BDA_MODE) {
         0x13 => "emulator screen (320x200, 256 colours)".to_string(),
-        _ => {
-            let m = &app.session.machine.sys.mem;
-            format!("emulator screen ({}x{} chars)", Video::cols(m), Video::rows(m))
-        }
-    };
-    egui::Window::new(title)
-        .id(egui::Id::unique("screen_window"))
-        .open(&mut open)
-        .default_pos(pos2(700.0, 64.0))
-        // The screen fills the window: drag its edge to make it larger or smaller.
-        .default_size([660.0, 440.0])
-        .min_size([240.0, 160.0])
-        .show(ctx, |ui| screen_ui(app, ui));
-    app.windows.screen = open;
+        _ => format!("emulator screen ({}x{} chars)", Video::cols(m), Video::rows(m)),
+    }
 }
 
 /// Size of the screen view.

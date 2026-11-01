@@ -245,19 +245,6 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
     }
 }
 
-pub fn console_window(app: &mut App, ctx: &egui::Context) {
-    if app.panels() {
-        return;
-    }
-    let mut open = app.windows.console;
-    egui::Window::new("debug log")
-        .open(&mut open)
-        .default_pos(egui::pos2(680.0, 470.0))
-        .default_size([620.0, 360.0])
-        .show(ctx, |ui| console_ui(app, ui));
-    app.windows.console = open;
-}
-
 /// Writes the machine state to the log whenever execution stops at a new place (like Emu8086's
 /// debug window, which logs every step).
 pub fn log_state(app: &mut App) {

@@ -1,25 +1,28 @@
 //! RustEmu8086 GUI shared by the front ends: the application state ([`app::App`]), the editor, the
-//! emulator screen, tool windows and dialogs ([`windows::shared_windows`]), the reference and OS
-//! services ([`platform`]).
+//! emulator screen, the tools ([`tools`]: one table of every window, [`workspace`]: the panels
+//! layout), dialogs, the reference and OS services ([`platform`]).
 //!
 //! The front ends draw their own main window around it: `rustemu-desktop` - the Emu8086-style
-//! windows, `rustemu-tablet` - the tabbed touch layout (the web version on tablets).
+//! windows, `rustemu-tablet` - the tabbed touch layout (the web version on tablets). Each calls
+//! [`windows`] once a frame, passing its own tools as a [`tools::Host`].
 
 pub mod app;
 pub mod calc;
 pub mod colors;
 pub mod console;
-pub mod debug;
 pub mod debugger;
 pub mod devices_ui;
+pub mod dialogs;
 pub mod drive_ui;
 pub mod editcmd;
 pub mod editor;
 pub mod examples;
+pub mod examples_ui;
 pub mod find;
 pub mod fonts;
 pub mod help;
 pub mod highlight;
+pub mod inspect;
 pub mod library_ui;
 pub mod platform;
 pub mod programs;
@@ -29,8 +32,16 @@ pub mod screen;
 pub mod share;
 #[cfg(feature = "testing")]
 pub mod testing;
-pub mod windows;
+pub mod tools;
+pub mod units;
+pub mod utility;
 pub mod workspace;
+
+/// The floating tool windows and the dialogs of both front ends.
+pub fn windows(app: &mut app::App, ctx: &egui::Context, host: &mut dyn tools::Host) {
+    tools::windows(app, ctx, host);
+    dialogs::dialogs(app, ctx);
+}
 
 /// Window options of the desktop applications.
 #[cfg(not(target_arch = "wasm32"))]
