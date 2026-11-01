@@ -84,6 +84,7 @@ pub(crate) fn fpu_ui(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// The last ALU operation: operands, result and flags in all bases.
 pub fn alu_ui(app: &mut App, ui: &mut Ui) {
     let t = app.session.machine.cpu.alu_trace;
     if t.op == AluOp::None {

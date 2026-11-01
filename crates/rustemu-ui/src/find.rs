@@ -4,15 +4,24 @@ use egui::Ui;
 
 use crate::app::App;
 
+/// State of find / replace and go to line.
 #[derive(Default)]
 pub struct FindState {
+    /// The find bar is shown.
     pub open: bool,
+    /// Focus the find field at the next frame.
     pub focus: bool,
+    /// Text to find.
     pub query: String,
+    /// Replacement text.
     pub replace: String,
+    /// Match case.
     pub case_sensitive: bool,
+    /// Result of the last search (`not found`, `3 replaced`).
     pub message: String,
+    /// The go to line dialog is open.
     pub goto_open: bool,
+    /// The line number typed.
     pub goto_text: String,
 }
 
@@ -72,6 +81,7 @@ fn selection_matches(app: &App) -> bool {
         && !app.editor.find.query.is_empty()
 }
 
+/// Replaces the selected match and finds the next one.
 pub fn replace_one(app: &mut App) {
     if selection_matches(app) {
         let (a, b) = app.editor.selection;
@@ -84,6 +94,7 @@ pub fn replace_one(app: &mut App) {
     find_next(app, false);
 }
 
+/// Replaces every match.
 pub fn replace_all(app: &mut App) {
     let q = fold(&app.editor.find.query, app.editor.find.case_sensitive);
     if q.is_empty() {
@@ -132,6 +143,7 @@ pub fn toggle_comment(app: &mut App) {
     app.editor.pending_select = Some((start, end.max(start)));
 }
 
+/// The find / replace bar.
 pub fn find_bar(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut app.editor.find.query).hint_text("find").desired_width(200.0));
@@ -173,6 +185,7 @@ pub fn find_bar(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// The go to line dialog (when open).
 pub fn goto_dialog(app: &mut App, ctx: &egui::Context) {
     if !app.editor.find.goto_open {
         return;

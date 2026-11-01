@@ -9,6 +9,7 @@ use crate::tools::Tool;
 pub(crate) const EXAMPLE_KEY: &str = "emu8086-example:";
 
 impl App {
+    /// A new file from the `i`-th code template.
     pub fn new_from_template(&mut self, i: usize) {
         self.new_from(crate::examples::TEMPLATES.get(i).map(|t| t.1).unwrap_or(""));
     }
@@ -40,6 +41,7 @@ impl App {
         self.status = "New file".into();
     }
 
+    /// Asks for a file to open (the browser: shows "my programs").
     pub fn open_dialog(&mut self) {
         if self.front.browser {
             self.windows[Tool::Programs] = true;
@@ -58,6 +60,7 @@ impl App {
         }
     }
 
+    /// Opens a source file in the editor.
     pub fn open_path(&mut self, p: &Path) {
         match std::fs::read(p) {
             Ok(bytes) => {
@@ -149,6 +152,7 @@ impl App {
         }
     }
 
+    /// Saves under a new name (the browser: asks for a name in "my programs").
     pub fn save_as(&mut self) -> bool {
         if self.front.browser {
             self.dialogs.save_name = Some(crate::programs::SaveName { text: self.file_name(), then: None });
@@ -161,7 +165,6 @@ impl App {
         }
     }
 
-    /// Saves the editor text as a download (the browser).
     /// Shares the source as a `.asm` file through the system share sheet; a browser that cannot
     /// share files downloads it instead, the desktop offers a link to the web version.
     pub fn share_source(&mut self) {
@@ -176,6 +179,7 @@ impl App {
         }
     }
 
+    /// Saves the editor text as a download (the browser).
     pub fn download_source(&mut self) {
         let name = self.file_name();
         crate::platform::download(&name, self.doc.text.as_bytes());
@@ -200,6 +204,7 @@ impl App {
         }
     }
 
+    /// Opens the built-in example `i` in the editor.
     pub fn load_example(&mut self, i: usize) {
         let (name, src) = EXAMPLES[i];
         self.load_example_text(name, src);

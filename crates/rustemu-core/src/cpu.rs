@@ -2,31 +2,53 @@
 
 use crate::bus::{Bus, linear};
 
-// General-purpose register indices (encoding order).
+// General-purpose register indices into `Cpu::regs`, in the order of their encoding.
+/// Index of AX (accumulator) in [`Cpu::regs`].
 pub const AX: usize = 0;
+/// Index of CX (counter) in [`Cpu::regs`].
 pub const CX: usize = 1;
+/// Index of DX (data) in [`Cpu::regs`].
 pub const DX: usize = 2;
+/// Index of BX (base) in [`Cpu::regs`].
 pub const BX: usize = 3;
+/// Index of SP (stack pointer) in [`Cpu::regs`].
 pub const SP: usize = 4;
+/// Index of BP (base pointer) in [`Cpu::regs`].
 pub const BP: usize = 5;
+/// Index of SI (source index) in [`Cpu::regs`].
 pub const SI: usize = 6;
+/// Index of DI (destination index) in [`Cpu::regs`].
 pub const DI: usize = 7;
 
-// Segment register indices (encoding order).
+// Segment register indices into `Cpu::sregs`, in the order of their encoding.
+/// Index of ES (extra segment) in [`Cpu::sregs`].
 pub const ES: usize = 0;
+/// Index of CS (code segment) in [`Cpu::sregs`].
 pub const CS: usize = 1;
+/// Index of SS (stack segment) in [`Cpu::sregs`].
 pub const SS: usize = 2;
+/// Index of DS (data segment) in [`Cpu::sregs`].
 pub const DS: usize = 3;
 
+/// Bits of the FLAGS register.
 pub mod flags {
+    /// Carry: unsigned overflow, a borrow, the bit shifted out.
     pub const CF: u16 = 1 << 0;
+    /// Parity: the low byte of the result has an even number of 1 bits.
     pub const PF: u16 = 1 << 2;
+    /// Auxiliary carry: carry out of bit 3 (BCD arithmetic).
     pub const AF: u16 = 1 << 4;
+    /// Zero: the result is zero.
     pub const ZF: u16 = 1 << 6;
+    /// Sign: the top bit of the result.
     pub const SF: u16 = 1 << 7;
+    /// Trap: single-step interrupt (INT 1) after every instruction.
     pub const TF: u16 = 1 << 8;
+    /// Interrupt enable: maskable hardware interrupts are accepted.
     pub const IF: u16 = 1 << 9;
+    /// Direction: string instructions decrement SI/DI.
     pub const DF: u16 = 1 << 10;
+    /// Overflow: the signed result does not fit.
     pub const OF: u16 = 1 << 11;
     /// Bits that can actually be changed on an 8086.
     pub const WRITABLE: u16 = 0x0FD5;
@@ -37,8 +59,11 @@ pub mod flags {
 }
 use flags::*;
 
+/// Names of the word registers by index (AX CX DX BX SP BP SI DI).
 pub const REG16_NAMES: [&str; 8] = ["AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"];
+/// Names of the byte registers by their encoding (AL CL DL BL AH CH DH BH).
 pub const REG8_NAMES: [&str; 8] = ["AL", "CL", "DL", "BL", "AH", "CH", "DH", "BH"];
+/// Names of the segment registers by index (ES CS SS DS).
 pub const SREG_NAMES: [&str; 4] = ["ES", "CS", "SS", "DS"];
 
 /// Opcode prefix used by ROM stubs to call host ("HLE") interrupt handlers: `0F FF nn`.
@@ -80,9 +105,12 @@ struct ModRm {
     ea: u16,
 }
 
-/// Kind of the last arithmetic / logic operation (see [`AluTrace`]).
+/// Kind of the last arithmetic / logic operation (see [`AluTrace`]); the variants are the
+/// instructions of the same name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[allow(missing_docs)] // named after their instructions
 pub enum AluOp {
+    /// No operation recorded yet.
     #[default]
     None,
     Add,
@@ -118,6 +146,7 @@ impl AluOp {
     const SHIFT: [AluOp; 8] =
         [AluOp::Rol, AluOp::Ror, AluOp::Rcl, AluOp::Rcr, AluOp::Shl, AluOp::Shr, AluOp::Setmo, AluOp::Sar];
 
+    /// The mnemonic (empty for [`AluOp::None`]).
     pub fn name(self) -> &'static str {
         match self {
             AluOp::None => "",
@@ -153,6 +182,7 @@ impl AluOp {
 /// The last operation done by the ALU, for the debugger's ALU window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct AluTrace {
+    /// The operation.
     pub op: AluOp,
     /// First operand (for a word DIV/IDIV: the dividend DX:AX).
     pub a: u32,
@@ -160,12 +190,17 @@ pub struct AluTrace {
     pub b: u16,
     /// Result (MUL/IMUL: AX or DX:AX; DIV/IDIV: quotient in the low half, remainder in the high half).
     pub result: u32,
+    /// A word operation (otherwise a byte).
     pub wide: bool,
+    /// FLAGS before the operation.
     pub flags_in: u16,
+    /// FLAGS after the instruction.
     pub flags_out: u16,
-    /// `instr_count` of the instruction and its address.
+    /// [`Cpu::instr_count`] when the instruction ran (the count before it).
     pub instr: u64,
+    /// CS of the instruction.
     pub cs: u16,
+    /// IP of the instruction.
     pub ip: u16,
 }
 
@@ -179,13 +214,21 @@ pub enum CpuModel {
     I80186,
 }
 
+/// The 8086 processor: registers, flags and the state between instructions. It executes one
+/// instruction per [`Cpu::step`] on a [`Bus`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cpu {
+    /// Instruction set: strict 8086 or with the 80186 additions.
     pub model: CpuModel,
+    /// General registers by index ([`AX`], [`CX`], ...).
     pub regs: [u16; 8],
+    /// Segment registers by index ([`ES`], [`CS`], [`SS`], [`DS`]).
     pub sregs: [u16; 4],
+    /// Instruction pointer.
     pub ip: u16,
+    /// FLAGS (bits in [`flags`]).
     pub flags: u16,
+    /// HLT executed: waiting for an interrupt.
     pub halted: bool,
     /// Number of instructions executed since reset.
     pub instr_count: u64,
@@ -197,6 +240,7 @@ pub struct Cpu {
     last_ea: u16,
     /// IP of the instruction being executed.
     instr_ip: u16,
+    /// The last operation of the ALU (for the debugger).
     pub alu_trace: AluTrace,
 }
 
@@ -212,6 +256,7 @@ fn parity(b: u8) -> bool {
 }
 
 impl Cpu {
+    /// A CPU in the reset state: registers zero, FLAGS with only the fixed bits, model 8086.
     pub fn new() -> Self {
         let mut c = Cpu {
             model: CpuModel::I8086,
@@ -248,12 +293,14 @@ impl Cpu {
 
     // ---- register helpers -------------------------------------------------
 
+    /// Byte register by its encoding: 0..3 = AL CL DL BL, 4..7 = AH CH DH BH.
     #[inline]
     pub fn reg8(&self, r: u8) -> u8 {
         let r = r as usize;
         if r < 4 { self.regs[r] as u8 } else { (self.regs[r - 4] >> 8) as u8 }
     }
 
+    /// Writes a byte register by its encoding (see [`Cpu::reg8`]), keeping the other half.
     #[inline]
     pub fn set_reg8(&mut self, r: u8, v: u8) {
         let r = r as usize;
@@ -264,11 +311,13 @@ impl Cpu {
         }
     }
 
+    /// Whether flag `f` (a bit of [`flags`]) is set.
     #[inline]
     pub fn flag(&self, f: u16) -> bool {
         self.flags & f != 0
     }
 
+    /// Sets or clears flag `f`.
     #[inline]
     pub fn set_flag(&mut self, f: u16, on: bool) {
         if on {
@@ -284,6 +333,7 @@ impl Cpu {
         self.flags = (v & WRITABLE) | FIXED;
     }
 
+    /// The code segment.
     #[inline]
     pub fn cs(&self) -> u16 {
         self.sregs[CS]
@@ -343,12 +393,14 @@ impl Cpu {
         lo | (hi << 8)
     }
 
+    /// Pushes a word: SP -= 2, then SS:SP = `v`.
     pub fn push<B: Bus>(&mut self, bus: &mut B, v: u16) {
         self.regs[SP] = self.regs[SP].wrapping_sub(2);
         let (ss, sp) = (self.sregs[SS], self.regs[SP]);
         self.wr16(bus, ss, sp, v);
     }
 
+    /// Pops a word from SS:SP, then SP += 2.
     pub fn pop<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let v = self.rd16(bus, self.sregs[SS], self.regs[SP]);
         self.regs[SP] = self.regs[SP].wrapping_add(2);

@@ -15,15 +15,18 @@ pub(crate) const DRAFT_KEY: &str = "draft";
 /// A program saved in the browser.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StoredProgram {
+    /// The source.
     pub text: String,
     /// Time of the last save, seconds since 1970.
     pub modified: f64,
 }
 
+/// Programs saved in the browser, by name.
 pub type Programs = BTreeMap<String, StoredProgram>;
 
 /// The "save in this browser" dialog.
 pub struct SaveName {
+    /// The name being typed.
     pub text: String,
     /// Done after saving (opening another program from the unsaved changes dialog).
     pub then: Option<PendingAction>,
@@ -103,6 +106,7 @@ impl App {
         self.open_program(&name);
     }
 
+    /// Deletes a program of "my programs".
     pub fn delete_program(&mut self, name: &str) {
         self.web.programs.remove(name);
         if self.doc.program.as_deref() == Some(name) {

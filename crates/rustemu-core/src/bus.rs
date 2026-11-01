@@ -13,18 +13,24 @@ pub fn linear(seg: u16, off: u16) -> u32 {
 
 /// Everything the CPU can talk to.
 pub trait Bus {
+    /// Reads the byte at physical address `addr`.
     fn read8(&mut self, addr: u32) -> u8;
+    /// Writes the byte at physical address `addr`.
     fn write8(&mut self, addr: u32, val: u8);
 
+    /// Reads a byte from I/O port `port` (IN).
     fn port_in8(&mut self, port: u16) -> u8;
+    /// Writes a byte to I/O port `port` (OUT).
     fn port_out8(&mut self, port: u16, val: u8);
 
+    /// Reads a word from `port` (low byte) and `port + 1` (high byte).
     fn port_in16(&mut self, port: u16) -> u16 {
         let lo = self.port_in8(port) as u16;
         let hi = self.port_in8(port.wrapping_add(1)) as u16;
         lo | (hi << 8)
     }
 
+    /// Writes a word to `port` (low byte) and `port + 1` (high byte).
     fn port_out16(&mut self, port: u16, val: u16) {
         self.port_out8(port, val as u8);
         self.port_out8(port.wrapping_add(1), (val >> 8) as u8);
@@ -55,15 +61,18 @@ impl Default for Memory {
 }
 
 impl Memory {
+    /// 1 MiB of zeros, without a journal.
     pub fn new() -> Self {
         Self { data: vec![0u8; MEM_SIZE].into_boxed_slice(), journal: None }
     }
 
+    /// The byte at `addr` (wraps at 1 MiB).
     #[inline]
     pub fn read8(&self, addr: u32) -> u8 {
         self.data[(addr & ADDR_MASK) as usize]
     }
 
+    /// Writes a byte at `addr` (wraps at 1 MiB), recording the old value while journaling.
     #[inline]
     pub fn write8(&mut self, addr: u32, val: u8) {
         let a = (addr & ADDR_MASK) as usize;
@@ -73,10 +82,12 @@ impl Memory {
         self.data[a] = val;
     }
 
+    /// The little-endian word at `addr`.
     pub fn read16(&self, addr: u32) -> u16 {
         self.read8(addr) as u16 | ((self.read8(addr.wrapping_add(1)) as u16) << 8)
     }
 
+    /// Writes a little-endian word at `addr`.
     pub fn write16(&mut self, addr: u32, val: u16) {
         self.write8(addr, val as u8);
         self.write8(addr.wrapping_add(1), (val >> 8) as u8);
@@ -89,15 +100,18 @@ impl Memory {
         }
     }
 
+    /// Up to `len` bytes from `addr`, shorter at the end of memory (no wrap).
     pub fn slice(&self, addr: u32, len: usize) -> &[u8] {
         let a = (addr & ADDR_MASK) as usize;
         &self.data[a..(a + len).min(MEM_SIZE)]
     }
 
+    /// The whole 1 MiB.
     pub fn raw(&self) -> &[u8] {
         &self.data
     }
 
+    /// The whole 1 MiB, writable (bypasses the journal).
     pub fn raw_mut(&mut self) -> &mut [u8] {
         &mut self.data
     }
@@ -111,6 +125,7 @@ impl Memory {
         }
     }
 
+    /// Whether overwritten bytes are being recorded.
     pub fn is_journaling(&self) -> bool {
         self.journal.is_some()
     }
@@ -130,6 +145,7 @@ impl Memory {
         }
     }
 
+    /// Fills memory with zeros and empties the journal.
     pub fn clear(&mut self) {
         self.data.fill(0);
         if let Some(j) = &mut self.journal {

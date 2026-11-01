@@ -27,10 +27,13 @@ const HISTORY_DEPTH: usize = 2000;
 
 /// Everything on the bus except the CPU.
 pub struct System {
+    /// The 1 MiB of memory (RAM, video memory, BIOS data area and ROM stubs).
     pub mem: Memory,
+    /// The I/O ports and the virtual devices.
     pub dev: Devices,
     /// Keyboard buffer: (scan code << 8) | ASCII.
     pub keys: VecDeque<u16>,
+    /// Hardware interrupts waiting for the CPU (IRQ0 of the timer: vector 08h).
     pub irq: VecDeque<u8>,
     /// The 8087 coprocessor.
     pub fpu: crate::fpu::Fpu,
@@ -96,23 +99,31 @@ pub enum Event {
     Error(String),
 }
 
+/// Kind of the loaded program, which decides where and how it is loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadKind {
+    /// COM: one segment at PSP:0100h.
     Com,
+    /// EXE (MZ): relocated at the segment after the PSP.
     Exe,
+    /// BIN: raw bytes at `#load_segment#:#load_offset#`.
     Bin,
+    /// Boot sector: 512 bytes at 0000:7C00h.
     Boot,
 }
 
 /// Information about the loaded program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadInfo {
+    /// How it was loaded.
     pub kind: LoadKind,
     /// Physical address of the first byte of the load image.
     pub image_base: u32,
+    /// Length of the load image in bytes.
     pub image_len: u32,
     /// Segment that relocations were based on (EXE) / load segment.
     pub load_segment: u16,
+    /// Segment of the PSP (COM and EXE).
     pub psp: Option<u16>,
 }
 
@@ -238,15 +249,22 @@ pub struct MachineState {
     floppies: Vec<Vec<u8>>,
 }
 
+/// The emulated PC: the CPU, the bus (memory, ports, devices), BIOS/DOS services, breakpoints
+/// and the step-back history.
 pub struct Machine {
+    /// The processor.
     pub cpu: Cpu,
+    /// Memory, ports, devices and queues.
     pub sys: System,
+    /// Physical addresses where [`Machine::run`] stops.
     pub breakpoints: HashSet<u32>,
+    /// The loaded program (`None` before a load).
     pub loaded: Option<LoadInfo>,
     /// Text written by the program to the console (DOS output, BIOS teletype).
     pub output: Vec<u8>,
     /// Messages for the emulator log (unsupported services and such).
     pub log: Vec<String>,
+    /// The program ended with this exit code (INT 20h, INT 21h/4Ch, RET to the PSP).
     pub terminated: Option<u8>,
     /// Record history for step-back.
     pub history_enabled: bool,
@@ -259,6 +277,7 @@ pub struct Machine {
     pub fixed_time: Option<crate::dos::DateTime>,
     /// Mouse state for INT 33h: x, y (in pixels of a 640x200 virtual screen), buttons.
     pub mouse: (u16, u16, u16),
+    /// The mouse cursor is shown (INT 33h/01h and 02h).
     pub mouse_visible: bool,
     /// Floppy disk images FLOPPY_0..FLOPPY_3 for INT 13h (drives A:, B:, ...; DL = 0..3), 1.44 MB
     /// geometry. There is always at least one drive; an empty image reads as unformatted.
@@ -284,6 +303,7 @@ impl Default for Machine {
 }
 
 impl Machine {
+    /// A powered-on PC: IVT and BIOS data area set up, 80186 instructions enabled, no program.
     pub fn new() -> Self {
         let mut cpu = Cpu::new();
         // Emu8086 programs use a few 80186 instructions (PUSHA/POPA, PUSH imm, ...).
@@ -599,6 +619,7 @@ impl Machine {
 
     // ---- keyboard -------------------------------------------------------------
 
+    /// Puts a key into the BIOS keyboard buffer: scan code and ASCII (at most 64 waiting keys).
     pub fn push_key(&mut self, scan: u8, ascii: u8) {
         if self.sys.keys.len() < 64 {
             self.sys.keys.push_back(((scan as u16) << 8) | ascii as u16);
@@ -613,6 +634,7 @@ impl Machine {
         self.push_key(scan, c);
     }
 
+    /// A BIOS/DOS service waits for a key (INT 16h, INT 21h input functions).
     pub fn is_waiting_input(&self) -> bool {
         self.dos.waiting
     }
@@ -897,6 +919,7 @@ impl Machine {
         }
     }
 
+    /// Number of recorded steps that [`Machine::step_back`] can undo.
     pub fn history_len(&self) -> usize {
         self.history.len()
     }
@@ -913,6 +936,7 @@ impl Machine {
         self.history.back().map(|s| (&s.cpu, s.undo.as_slice()))
     }
 
+    /// Forgets the step-back history.
     pub fn clear_history(&mut self) {
         self.history.clear();
     }
@@ -1067,6 +1091,7 @@ impl Machine {
         Video::teletype(&mut self.sys.mem, ch, attr);
     }
 
+    /// The text of the screen in text modes, one line per row.
     pub fn screen_text(&self) -> String {
         Video::screen_text(&self.sys.mem)
     }

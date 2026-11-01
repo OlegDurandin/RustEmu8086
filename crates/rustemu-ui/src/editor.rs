@@ -7,6 +7,7 @@ use crate::app::App;
 use crate::highlight::Palette;
 use crate::tools::Tool;
 
+/// The source editor: line numbers, breakpoint and bookmark margin, highlighting, error marks.
 pub fn editor(app: &mut App, ui: &mut Ui) {
     let font = FontId::monospace(app.settings.font_size);
     let row_h = ui.fonts_mut(|f| f.row_height(&font));

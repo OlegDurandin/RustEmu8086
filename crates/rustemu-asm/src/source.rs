@@ -1,5 +1,5 @@
 //! Source preprocessing: INCLUDE, MACRO/ENDM (with LOCAL), REPT, IF/IFDEF/ELSEIF/ELSE/ENDIF.
-//! NASM `%` directives are translated to these line by line (see [`Preprocessor::nasm_lines`]).
+//! NASM `%` directives are translated to these line by line (see `Preprocessor::nasm_lines`).
 
 use std::collections::HashMap;
 
@@ -10,6 +10,7 @@ use crate::lexer::{tokenize, tokenize_nasm};
 /// One logical line after preprocessing.
 #[derive(Debug, Clone)]
 pub struct Line {
+    /// The text of the line (macros expanded, comments kept).
     pub text: String,
     /// Index into the file table.
     pub file: usize,
@@ -38,6 +39,7 @@ impl Line {
 
 /// Resolves INCLUDE file names to contents.
 pub trait FileLoader {
+    /// Contents of the file `name` included from `from_file`: (the name it is known by, the text).
     fn load(&mut self, name: &str, from_file: &str) -> Option<(String, String)>;
 }
 
@@ -47,8 +49,10 @@ struct Macro {
     body: Vec<Line>,
 }
 
+/// Expands includes, macros, REPT and conditional assembly into [`Line`]s.
 pub struct Preprocessor<'a> {
     loader: &'a mut dyn FileLoader,
+    /// Names of the files read, the main file first.
     pub files: Vec<String>,
     /// Text of each file (to locate errors in their lines).
     pub sources: Vec<String>,
@@ -58,7 +62,9 @@ pub struct Preprocessor<'a> {
     text_equs: HashMap<String, String>,
     defined: std::collections::HashSet<String>,
     local_counter: u32,
+    /// Errors found while preprocessing.
     pub errors: Vec<AsmError>,
+    /// The lines produced.
     pub out: Vec<Line>,
     /// NASM dialect: `%` directives, `&` is an operator, backquoted strings.
     pub nasm: bool,
@@ -152,7 +158,8 @@ fn substitute(text: &str, map: &HashMap<String, String>) -> String {
     substitute_with(text, map, false)
 }
 
-/// [`substitute`]; in NASM `&` is an operator and backquotes delimit strings.
+/// Replaces whole identifiers (outside strings) using `map`. In MASM `&` glues tokens and is
+/// removed; in NASM (`nasm`) `&` is an operator and backquotes delimit strings.
 fn substitute_with(text: &str, map: &HashMap<String, String>, nasm: bool) -> String {
     let mut out = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
@@ -239,6 +246,7 @@ impl Env for ConstEnv<'_> {
 }
 
 impl<'a> Preprocessor<'a> {
+    /// A preprocessor that reads included files through `loader`.
     pub fn new(loader: &'a mut dyn FileLoader) -> Self {
         Preprocessor {
             loader,
@@ -261,6 +269,7 @@ impl<'a> Preprocessor<'a> {
         self.errors.push(AsmError { file: l.file, line: l.line, col: None, len: 0, msg: msg.into() });
     }
 
+    /// Preprocesses the file `name` with `text` and appends its lines to [`Preprocessor::out`].
     pub fn add_file(&mut self, name: &str, text: &str) {
         let idx = self.files.len();
         self.files.push(name.to_string());

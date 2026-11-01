@@ -10,10 +10,13 @@ pub mod ports {
     pub const STEPPER_MOTOR: u16 = 7;
     /// Robot: 9 = command (out), 10 = data (in), 11 = status (in).
     pub const ROBOT_COMMAND: u16 = 9;
+    /// Robot: the data port (sensor readings).
     pub const ROBOT_DATA: u16 = 10;
+    /// Robot: the status port (busy / data ready / error bits).
     pub const ROBOT_STATUS: u16 = 11;
     /// Thermometer (in) and heater on/off (out).
     pub const THERMOMETER: u16 = 125;
+    /// Heater: 1 switches it on, 0 off.
     pub const HEATER: u16 = 127;
     /// Printer: each byte written is printed.
     pub const PRINTER: u16 = 130;
@@ -30,10 +33,13 @@ pub enum DeviceClock {
     Instructions(u64),
 }
 
+/// The virtual devices of Emu8086 behind the I/O ports (see [`ports`]), the VGA DAC and the
+/// keyboard controller port 60h. Each tick advances them by the instructions executed.
 #[derive(Debug, Clone)]
 pub struct Devices {
     /// Last value written to every port (generic "simple I/O" behaviour).
     pub latch: HashMap<u16, u16>,
+    /// Traffic lights: the last word written to port 4, one bit per lamp.
     pub traffic_lights: u16,
     /// Last byte written to the stepper motor port.
     pub stepper_pattern: u8,
@@ -43,8 +49,11 @@ pub struct Devices {
     pub stepper_dot: u8,
     /// Direction of the last move: +1 clockwise, -1 counter-clockwise, 0 none.
     pub stepper_last_move: i8,
+    /// LED display: the last word written to port 199.
     pub led: u16,
+    /// Printer: every byte written to port 130.
     pub printer: Vec<u8>,
+    /// The heater is on (port 127).
     pub heater_on: bool,
     /// Thermometer reading in degrees Celsius (-65..120).
     pub temperature: i32,
@@ -65,6 +74,7 @@ pub struct Devices {
     pub last_scan: u8,
     /// Ports written (port, value) since the last [`Devices::take_events`].
     events: Vec<(u16, u16)>,
+    /// The robot on its 9 x 6 map (ports 9, 10, 11).
     pub robot: crate::robot::Robot,
     latch_journal: Option<Vec<(u16, Option<u16>)>>,
     palette_journal: Option<Vec<(usize, [u8; 3])>>,
@@ -131,6 +141,7 @@ impl Default for Devices {
 }
 
 impl Devices {
+    /// Devices in their power-on state: everything off, the robot in the default room.
     pub fn new() -> Self {
         Devices {
             latch: HashMap::new(),
@@ -302,10 +313,12 @@ impl Devices {
         }
     }
 
+    /// Takes the port writes since the last call: (port, value).
     pub fn take_events(&mut self) -> Vec<(u16, u16)> {
         std::mem::take(&mut self.events)
     }
 
+    /// IN of a byte: the device behind `port`, or the last value written to it.
     pub fn input8(&mut self, port: u16) -> u8 {
         match port {
             0x60 => self.last_scan,
@@ -329,6 +342,7 @@ impl Devices {
         }
     }
 
+    /// IN of a word: the traffic lights and the LED display are 16-bit; other ports read as two bytes.
     pub fn input16(&mut self, port: u16) -> u16 {
         match port {
             ports::TRAFFIC_LIGHTS => self.traffic_lights,
@@ -353,6 +367,7 @@ impl Devices {
         }
     }
 
+    /// OUT of a byte to the device behind `port` (also remembered in [`Devices::latch`]).
     pub fn output8(&mut self, port: u16, v: u8) {
         self.set_latch(port, v as u16);
         self.events.push((port, v as u16));
@@ -382,6 +397,7 @@ impl Devices {
         }
     }
 
+    /// OUT of a word: the traffic lights and the LED display take it whole, other ports as two bytes.
     pub fn output16(&mut self, port: u16, v: u16) {
         match port {
             ports::TRAFFIC_LIGHTS => {

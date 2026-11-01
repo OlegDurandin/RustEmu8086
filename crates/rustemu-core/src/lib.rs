@@ -1,5 +1,7 @@
 //! RustEmu8086 emulator core: 8086 CPU, memory, BIOS/DOS services and virtual devices.
 
+#![warn(missing_docs)]
+
 mod bios;
 pub mod bus;
 pub mod cpu;
