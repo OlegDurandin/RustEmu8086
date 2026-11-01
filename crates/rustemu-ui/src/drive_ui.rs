@@ -5,26 +5,10 @@ use egui::{RichText, Ui};
 
 use crate::app::App;
 use crate::platform::UploadFor;
+use crate::tools::Tool;
 
 /// Bytes of a file shown in the preview.
 const PREVIEW_LIMIT: usize = 16 * 1024;
-
-pub fn drive_window(app: &mut App, ctx: &egui::Context) {
-    if app.session.machine.dos_memory_drive().is_none() {
-        app.windows.drive = false;
-        return;
-    }
-    if app.panels() {
-        return;
-    }
-    let mut open = app.windows.drive;
-    egui::Window::new("drive C:")
-        .open(&mut open)
-        .default_size([480.0, 380.0])
-        .default_pos(egui::pos2(520.0, 140.0))
-        .show(ctx, |ui| drive_ui(app, ui));
-    app.windows.drive = open;
-}
 
 /// `DATA/IN.TXT` as DOS writes it.
 fn dos_name(key: &str) -> String {
@@ -32,7 +16,7 @@ fn dos_name(key: &str) -> String {
 }
 
 pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
-    if app.own_drive.is_some() {
+    if app.web.own_drive.is_some() {
         ui.colored_label(crate::colors::warn(ui), crate::share::temporary_drive_text(&app.file_name()));
     } else {
         ui.label("Files DOS programs see as drive C: (INT 21h). They are kept in this browser.");
@@ -40,25 +24,25 @@ pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
     let mut clear = false;
     ui.horizontal(|ui| {
         if ui.button("upload files…").on_hover_text("Files for a program to open, e.g. its input data").clicked() {
-            app.pending_upload = Some(UploadFor::DriveFiles);
+            app.web.pending_upload = Some(UploadFor::DriveFiles);
         }
         let empty = app.session.machine.dos_memory_drive().is_none_or(|d| d.is_empty());
-        if app.drive_confirm_clear {
+        if app.web.drive_confirm_clear {
             ui.label(RichText::new("Delete every file?").color(crate::colors::error(ui)));
             if ui.button("delete").clicked() {
                 clear = true;
-                app.drive_confirm_clear = false;
+                app.web.drive_confirm_clear = false;
             }
             if ui.button("cancel").clicked() {
-                app.drive_confirm_clear = false;
+                app.web.drive_confirm_clear = false;
             }
         } else if ui.add_enabled(!empty, egui::Button::new("delete all…")).clicked() {
-            app.drive_confirm_clear = true;
+            app.web.drive_confirm_clear = true;
         }
     });
     if clear && let Some(d) = app.session.machine.dos_memory_drive_mut() {
         *d = rustemu_core::memdrive::MemDrive::new();
-        app.drive_preview = None;
+        app.web.drive_preview = None;
     }
     ui.separator();
 
@@ -77,19 +61,19 @@ pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
     ui.weak(format!("{} KB of {} KB used", drive.used().div_ceil(1024), rustemu_core::memdrive::CAPACITY / 1024));
     let mut remove = None;
     let mut download = None;
-    let preview_h = if app.drive_preview.is_some() { ui.available_height() * 0.5 } else { ui.available_height() };
+    let preview_h = if app.web.drive_preview.is_some() { ui.available_height() * 0.5 } else { ui.available_height() };
     egui::ScrollArea::vertical().id_salt("drive_files").max_height(preview_h).auto_shrink([false, true]).show(
         ui,
         |ui| {
             egui::Grid::new("drive_files_grid").num_columns(4).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
                 for (key, size) in &files {
-                    let shown = app.drive_preview.as_deref() == Some(key.as_str());
+                    let shown = app.web.drive_preview.as_deref() == Some(key.as_str());
                     if ui
                         .selectable_label(shown, RichText::new(dos_name(key)).monospace())
                         .on_hover_text("show the contents")
                         .clicked()
                     {
-                        app.drive_preview = if shown { None } else { Some(key.clone()) };
+                        app.web.drive_preview = if shown { None } else { Some(key.clone()) };
                     }
                     ui.label(format!("{size} bytes"));
                     if ui.small_button("download").clicked() {
@@ -112,7 +96,7 @@ pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
             });
         },
     );
-    if let Some(key) = &app.drive_preview
+    if let Some(key) = &app.web.drive_preview
         && let Some(data) = drive.read(key)
     {
         ui.separator();
@@ -141,8 +125,169 @@ pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
         && let Some(d) = app.session.machine.dos_memory_drive_mut()
     {
         d.remove(&key);
-        if app.drive_preview.as_deref() == Some(key.as_str()) {
-            app.drive_preview = None;
+        if app.web.drive_preview.as_deref() == Some(key.as_str()) {
+            app.web.drive_preview = None;
         }
+    }
+}
+
+/// Opens the folder DOS programs see as drive C: (of the loaded program, otherwise the default).
+pub(crate) fn open_drive_folder(app: &App) {
+    std::fs::create_dir_all(app.host_drive()).ok();
+    crate::platform::open_folder(app.host_drive());
+}
+
+/// Virtual drive menu (main Emulator menu and the emulator window), as in Emu8086. There is one
+/// drive, FLOPPY_0, kept in memory; images are loaded and saved explicitly.
+pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
+    use rustemu_core::machine::{FLOPPY_SIZE, MAX_FLOPPIES};
+    ui.set_min_width(330.0);
+    if app.session.machine.dos_memory_drive().is_some() {
+        if ui.button("drive C: files…").on_hover_text("Files DOS programs read and write (INT 21h)").clicked() {
+            app.windows[Tool::Drive] = true;
+            ui.close();
+        }
+        ui.separator();
+    } else if !app.front.browser {
+        let dir = app.host_drive().display().to_string();
+        if ui.button("show drive C: folder").on_hover_text(dir).clicked() {
+            open_drive_folder(app);
+            ui.close();
+        }
+        ui.separator();
+    }
+    let drives = app.session.machine.floppies.len();
+    ui.menu_button("boot from virtual floppy", |ui| {
+        for d in 0..drives {
+            if ui.button(format!("FLOPPY_{d}")).clicked() {
+                app.boot_from_floppy(d);
+            }
+        }
+    });
+    ui.menu_button("write 512 bytes at 0000:7c00 to boot sector", |ui| {
+        for d in 0..drives {
+            if ui.button(format!("FLOPPY_{d}")).clicked() {
+                match app.session.write_boot_sector(d) {
+                    Ok(()) => app.status = format!("Boot sector of FLOPPY_{d} written"),
+                    Err(e) => app.notice("Virtual drive", &e),
+                }
+            }
+        }
+    });
+    if ui.button("write '.bin' file to floppy…").clicked() {
+        let loaded = app.session.loaded_bytes().is_some() || app.front.browser;
+        app.dialogs.bin_to_floppy =
+            Some(crate::app::BinToFloppy { loaded, path: String::new(), drive: 0, cyl: 0, head: 0, sector: 2 });
+    }
+    ui.separator();
+    if ui
+        .add_enabled(drives < MAX_FLOPPIES, egui::Button::new("create new floppy drive"))
+        .on_hover_text("Adds FLOPPY_1..FLOPPY_3 with an empty 1.44 MB disk (INT 13h DL = 1..3, INT 11h counts them)")
+        .on_disabled_hover_text("Emu8086 supports up to four floppy drives")
+        .clicked()
+        && let Some(d) = app.session.machine.add_floppy()
+    {
+        app.status = format!("FLOPPY_{d} created: an empty 1.44 MB disk, INT 13h drive DL = {d}");
+    }
+    ui.separator();
+    ui.menu_button("load floppy image", |ui| {
+        for d in 0..drives {
+            if ui.button(format!("into FLOPPY_{d}…")).clicked()
+                && let Some(p) = crate::platform::pick_file(&[], None)
+            {
+                match std::fs::read(&p) {
+                    Ok(mut b) => {
+                        b.resize(b.len().max(FLOPPY_SIZE), 0);
+                        app.session.machine.floppies[d] = b;
+                        app.status = format!("FLOPPY_{d} loaded from {}", p.display());
+                    }
+                    Err(e) => app.notice("Virtual drive", &e.to_string()),
+                }
+            }
+        }
+    });
+    ui.menu_button("save floppy image", |ui| {
+        for d in 0..drives {
+            if ui.button(format!("FLOPPY_{d}…")).clicked()
+                && let Some(p) = crate::platform::save_file(&[], None, &format!("FLOPPY_{d}"))
+                && let Err(e) = std::fs::write(&p, &app.session.machine.floppies[d])
+            {
+                app.notice("Virtual drive", &e.to_string());
+            }
+        }
+    });
+}
+
+/// "write '.bin' file to floppy": file, then cylinder / head / sector to start at.
+pub(crate) fn bin_to_floppy_dialog(app: &mut App, ctx: &egui::Context) {
+    let Some(mut d) = app.dialogs.bin_to_floppy.take() else { return };
+    let mut keep = true;
+    let mut write = false;
+    egui::Window::new("write '.bin' file to floppy")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            // The program in the emulator (also in the browser, which has no files), or a file.
+            let loaded = app.session.loaded_bytes().map(<[u8]>::len);
+            let what = match loaded {
+                Some(n) => format!("the program loaded in the emulator ({n} bytes)"),
+                None => "the program loaded in the emulator (nothing is loaded)".into(),
+            };
+            ui.radio_value(&mut d.loaded, true, what);
+            if !app.front.browser {
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut d.loaded, false, "a file:");
+                    ui.add_enabled(
+                        !d.loaded,
+                        egui::TextEdit::singleline(&mut d.path).hint_text("file.bin").desired_width(260.0),
+                    );
+                    if ui.add_enabled(!d.loaded, egui::Button::new("browse…")).clicked()
+                        && let Some(p) = crate::platform::pick_file(&[("binary", &["bin", "com", "img"])], None)
+                    {
+                        d.path = p.display().to_string();
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                let drives = app.session.machine.floppies.len();
+                egui::ComboBox::from_label("drive").selected_text(format!("FLOPPY_{}", d.drive)).show_ui(ui, |ui| {
+                    for i in 0..drives {
+                        ui.selectable_value(&mut d.drive, i, format!("FLOPPY_{i}"));
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut d.cyl).range(0..=79).prefix("cylinder "));
+                ui.add(egui::DragValue::new(&mut d.head).range(0..=1).prefix("head "));
+                ui.add(egui::DragValue::new(&mut d.sector).range(1..=18).prefix("sector "));
+            });
+            ui.weak("1.44 MB disk: 80 cylinders, 2 heads, 18 sectors of 512 bytes. Sector 1 of cylinder 0, head 0 is the boot sector.");
+            ui.horizontal(|ui| {
+                let ready = if d.loaded { loaded.is_some() } else { !d.path.trim().is_empty() };
+                write = ui.add_enabled(ready, egui::Button::new("write")).clicked();
+                if ui.button("cancel").clicked() {
+                    keep = false;
+                }
+            });
+        });
+    if write {
+        let data = match app.session.loaded_bytes() {
+            Some(b) if d.loaded => Ok(b.to_vec()),
+            _ => std::fs::read(d.path.trim()),
+        };
+        match data {
+            Ok(data) => match app.session.write_floppy(d.drive, d.cyl, d.head, d.sector, &data) {
+                Ok(n) => {
+                    app.status = format!("{} bytes ({n} sectors) written to FLOPPY_{}", data.len(), d.drive);
+                    keep = false;
+                }
+                Err(e) => app.notice("Virtual drive", &e),
+            },
+            Err(e) => app.notice("Virtual drive", &format!("{}: {e}", d.path.trim())),
+        }
+    }
+    if keep {
+        app.dialogs.bin_to_floppy = Some(d);
     }
 }

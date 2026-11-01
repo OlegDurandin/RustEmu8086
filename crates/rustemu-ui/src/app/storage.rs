@@ -58,24 +58,24 @@ impl App {
         self.store_settings();
         let settings = ron::ser::to_string(&self.settings).unwrap_or_default();
         self.put(storage, eframe::APP_KEY, settings);
-        if let Some(drive) = self.own_drive.as_ref().or(self.session.machine.dos_memory_drive()) {
+        if let Some(drive) = self.web.own_drive.as_ref().or(self.session.machine.dos_memory_drive()) {
             let drive = base64::engine::general_purpose::STANDARD.encode(drive.to_bytes());
             self.put(storage, DRIVE_KEY, drive);
         }
-        if self.browser {
+        if self.front.browser {
             self.persist_browser(storage);
         }
-        if self.unsaved_keys.is_empty() {
-            self.storage_warned = false;
-        } else if !std::mem::replace(&mut self.storage_warned, true) {
-            let what: Vec<&str> = self.unsaved_keys.iter().map(|k| storage_key_name(k)).collect();
+        if self.store.unsaved_keys.is_empty() {
+            self.store.warned = false;
+        } else if !std::mem::replace(&mut self.store.warned, true) {
+            let what: Vec<&str> = self.store.unsaved_keys.iter().map(|k| storage_key_name(k)).collect();
             self.notice("Browser storage is full", &storage_full_text(&what));
         }
     }
 
     /// Some data could not be written by the last [`App::persist`].
     pub fn storage_failed(&self) -> bool {
-        !self.unsaved_keys.is_empty()
+        !self.store.unsaved_keys.is_empty()
     }
 
     /// Writes `value` under `key` unless it is what was written last time. The value is read back:
@@ -83,24 +83,24 @@ impl App {
     /// write is tried again next time.
     pub(crate) fn put(&mut self, storage: &mut dyn eframe::Storage, key: &'static str, value: String) {
         let hash = text_hash(&value);
-        if self.persisted.get(key) == Some(&hash) {
+        if self.store.persisted.get(key) == Some(&hash) {
             return;
         }
         storage.set_string(key, value);
         if storage.get_string(key).is_some_and(|v| text_hash(&v) == hash) {
-            self.persisted.insert(key, hash);
-            self.unsaved_keys.remove(key);
+            self.store.persisted.insert(key, hash);
+            self.store.unsaved_keys.remove(key);
         } else {
-            self.persisted.remove(key);
-            self.unsaved_keys.insert(key);
+            self.store.persisted.remove(key);
+            self.store.unsaved_keys.insert(key);
         }
     }
 
     /// Asks to save unsaved changes when the window is being closed.
     pub fn confirm_close(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty() && self.confirm_discard.is_none() {
+        if ctx.input(|i| i.viewport().close_requested()) && self.dirty() && self.dialogs.confirm_discard.is_none() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm_discard = Some(PendingAction::Quit);
+            self.dialogs.confirm_discard = Some(PendingAction::Quit);
         }
     }
 }

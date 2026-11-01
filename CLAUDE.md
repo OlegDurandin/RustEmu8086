@@ -13,10 +13,10 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
 | `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT), строки дизассемблера (`code.rs`: `Session::code_row` — данные программы как `DB`/`DW`/`DD` по `LineInfo::is_code`/`data_size`, нули вне кода — `DB n DUP (0)`; инструкция на CS:IP — всегда код). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
-| `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, окна отладки/инструментов и диалоги (`windows::shared_windows`), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
+| `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, инструменты (`tools.rs` — одна таблица всех окон, `Host` — свои инструменты интерфейса) и диалоги (`rustemu_ui::windows` раз в кадр), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
 | `crates/rustemu-desktop` | Интерфейс Emu8086: библиотека (`DesktopApp`, главное окно с меню/тулбаром — `ui.rs`, окно эмулятора и исходника — `emulator.rs`; UI-тесты `ui_tests.rs`) + бинарь `RustEmu8086` (macOS). |
 | `crates/rustemu-tablet` | Интерфейс планшета (см. 6.7) — для веб-версии на iPad и сенсорных экранах: `TabletApp` + `TabletState`; бинарь `rustemu-tablet` — окно на Mac для разработки. Нативных сборок iPadOS/Android нет. |
-| `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`); `layout.rs` — `WebApp` с `DesktopApp` или `TabletApp`, переключение на лету (`App::switch_layout`, выбор в localStorage); раскладка по умолчанию — iPad (`MacIntel` + касания), `pointer: coarse` или узкое окно; `?ui=`, `?example=…&run`, ссылки с программой `#name=…&code=…` (`rustemu_ui::share`). |
+| `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`); `layout.rs` — `WebApp` с `DesktopApp` или `TabletApp`, переключение на лету (`FrontEnd::switch_layout`, выбор в localStorage); раскладка по умолчанию — iPad (`MacIntel` + касания), `pointer: coarse` или узкое окно; `?ui=`, `?example=…&run`, ссылки с программой `#name=…&code=…` (`rustemu_ui::share`). |
 
 ### Ключевые решения
 - **Прерывания — «настоящие».** IVT в 0000:0000 указывает на заглушки `F000:1000+4*n`, заглушка —
@@ -132,7 +132,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 2.7 Сообщения об ошибках: строка и место в ней (`AsmError::col`/`len`, символы). `errpos.rs`: по сообщению и
       исходной строке (`Preprocessor::sources`) — имя в кавычках, первый/последний/все операнды, иначе оператор;
       в развёртке макроса — вызов целиком; синтаксические — токен из лексера, если строка не изменена препроцессором.
-      GUI: `(строка:колонка)` в сообщениях, волнистое подчёркивание (`App::error_spans`), клик выделяет
+      GUI: `(строка:колонка)` в сообщениях, волнистое подчёркивание (`Build::error_spans`), клик выделяет
       (`App::jump_to_message`)
 - [x] 2.9 Диалект NASM (`-f bin`): автоопределение (`detect_dialect`; не собралось — `assemble_dialect` пробует другой
       диалект, ошибки — определённого) / `#nasm#` / `.nasm` / настройка; COM / BOOT / BIN по ORG;
@@ -163,11 +163,26 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 4.2 Интеграционные тесты на примерах
 
 ### Этап 5. GUI (eframe/egui 0.37)
-`rustemu-ui`: `app.rs` (состояние `App`, `Settings`; команды — в `app/`: `files`, `session`, `build` — compile/emulate,
-`exec` — шаги и цикл выполнения, `emulator_cmds`, `shortcuts`, `storage` — persist), `windows.rs`
-(общие диалоги и инструменты), `workspace.rs` (панели / классические окна), `editor.rs` + `highlight.rs` (`Highlighter` — подсветка по строкам с кешем между кадрами), `screen.rs`, `debug.rs` (+ начало дизассемблера
-`disasm_start`), `devices_ui.rs`, `examples.rs` (встроенные `examples/*.asm`, меню `MENU` — пункты Examples Emu8086), `help.rs`, `reference.rs` +
-`reference_ui.rs`, `debugger.rs`, `fonts.rs`. `rustemu-desktop`: `ui.rs` (меню, тулбар, сообщения, статус),
+`rustemu-ui`: `app.rs` — `App` из групп состояния: `doc` (`Document`: путь, текст, сохранённый текст), `editor`
+(`EditorState`: курсор, выделение, поиск, закладки), `build` (сообщения, ошибки), `program` (исходники загруженной программы,
+`generation`), `exec` (цикл выполнения, CPU/FPU до шага), `debugger` (точки останова, watch, stop on condition), `view`
+(прокрутка памяти/дизассемблера/исходника), `dialogs`, `web` (браузер: программы, диск в памяти), `front` (что задаёт интерфейс:
+браузер, планшет, тема), `store` (запись в хранилище); плюс `settings`, `session`, `run`, `status`, `windows` и состояния
+инструментов (`screen`, `console`, `library`, `reference`, `calculator`). Настройки не дублируются в `App` — читаются из
+`settings`. Команды — в `app/`: `files`, `session`, `build` — compile/emulate, `exec` — шаги и цикл выполнения,
+`emulator_cmds`, `shortcuts`, `storage` — persist. **`tools.rs`** — реестр инструментов: `Tool` (все окна, кроме диалогов),
+`Tool::spec` (ключ в настройках, заголовок вкладки, группа панелей или плавающее, своя прокрутка, открывается с программой),
+`Tool::window` (заголовок, место, размер), `tool_ui` (тело), `windows` — один цикл рисует плавающие окна; `Windows` —
+флаги по `Tool` (индекс `windows[Tool::Memory]`), сохраняются под именами полей прежней структуры. Новый инструмент —
+вариант `Tool` + строки в этих `match`. `Host` — инструменты интерфейса (десктоп: `emulator::Desktop` — эмулятор и
+исходник; планшет не показывает окнами экран/эмулятор/исходник). `workspace.rs` — только раскладка панелей.
+Тела инструментов: `inspect.rs` (память, стек, флаги, переменные, символы, листинг, журнал, `disasm_start`),
+`debugger.rs` (точки останова, stop on condition, watch, call stack, value viewer), `units.rs` (ALU, FPU), `devices_ui.rs`,
+`drive_ui.rs` (диск C:, меню virtual drive, запись на дискету), `console.rs`, `library_ui.rs`, `reference_ui.rs`, `programs.rs`,
+`utility.rs` (ASCII, конвертер, About), `calc.rs`; `dialogs.rs` (New, options, командная строка, несохранённое, уведомления),
+`examples_ui.rs` (меню Examples, more examples), `editor.rs` + `highlight.rs` (`Highlighter` — подсветка по строкам с кешем
+между кадрами), `screen.rs`, `examples.rs` (встроенные `examples/*.asm`, меню `MENU` — пункты Examples Emu8086), `help.rs`,
+`reference.rs`, `fonts.rs`. `rustemu-desktop`: `ui.rs` (меню, тулбар, сообщения, статус),
 `emulator.rs` (окно эмулятора и исходника), `ui_tests.rs` (kittest, PNG-снимки в `target/ui-snapshots/`).
 `rustemu-tablet` — см. 6.7.
 - [x] 5.1 Редактор: подсветка, номера строк, отметки ошибок, переход к строке по клику на ошибку,
@@ -182,7 +197,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 5.5 Устройства (вкладки, выбор по `#start=..#`): светофор, шаговый двигатель, LED, термометр, принтер,
       робот (карта редактируется кликом)
 - [x] 5.6 Примеры (все из Emu8086: меню Examples с подписями оригинала + NASM, *more examples...* — окно со списком
-      `EXAMPLES` и описаниями `examples::description`, `windows::examples_menu`; `examples::index` — без учёта регистра,
+      `EXAMPLES` и описаниями `examples::description`, `examples_ui::examples_menu`; `examples::index` — без учёта регистра,
       старые имена → `FORMER`; ключ сессии примера — `EXAMPLE_KEY` = `emu8086-example:`, старые `example:` не применяются) и справочник на английском и русском (`reference::Lang`, `Settings::reference_lang`, переключатель EN / RU;
       русские тексты — `reference/ru_{instructions,directives,interrupts}.rs` по имени / номеру статьи, `ru.rs` — поиск
       с запасным английским, `help::HELP_RU`; тест: перевод есть у каждой статьи, код русских примеров = английскому) (`reference.rs` — поиск и темы, данные — `reference/{instructions,directives,interrupts}.rs`, `reference_ui.rs` — окно): все инструкции
@@ -200,7 +215,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 5.12 Отладка на уровне исходника: `Session::view_at` (ленивый вход в макрос: на первой инструкции
       развёртки показывается строка вызова; `LineInfo.chain` — вся цепочка вложенности), Step Over/Out
       (`Session::step_goal`/`run_step_goal`, глубина по CALL/INT↔RET/IRET), кнопка Step out (⇧F11)
-- [x] 5.13 Интерфейс как в Emu8086: меню File/Edit/Bookmarks/Assembler/Emulator/Math/ASCII Codes/Options/Help (Options — `windows::options_menu`:
+- [x] 5.13 Интерфейс как в Emu8086: меню File/Edit/Bookmarks/Assembler/Emulator/Math/ASCII Codes/Options/Help (Options — `dialogs::options_menu`:
       окна, синтаксис, тема, all options…; и в меню ⋮ планшета),
       панель New/Open/Examples/Save/Compile/Emulate/Calculator/Convertor/Options/Help/About, окно
       «choose code template» при New, закладки (`editcmd.rs`), калькулятор (`calc.rs`, `rustemu_asm::evaluate`),
@@ -217,13 +232,13 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       debug (журнал состояния в стиле DEBUG.EXE после каждой остановки) / stack (от SS:FFFE, SP выделен) /
       flags (0/1, кнопка analyse → «lexical flag analyser»); подсказки кнопок — тексты оригинала
 - [x] 5.18 Два режима окон (`workspace.rs`, `Settings::layout`, options → windows): **классические окна Emu8086** (по умолчанию — минимум отличий от оригинала) и **панели** (`egui_tiles` —
-      `egui_dock` для egui 0.37 нет). Флаги `App::windows` (+ `library.open`, `reference.open`)
-      — единственный источник «что открыто»: в панелях `workspace::sync` добавляет вкладку в группу инструмента (`Group`:
+      `egui_dock` для egui 0.37 нет). Флаги `App::windows` (`tools::Windows`)
+      — единственный источник «что открыто» (`RefState`/`LibraryState` только просят показать — `raise`): в панелях `workspace::sync` добавляет вкладку в группу инструмента (`Group`:
       Text/Debug слева, Emulator/Inspect (memory, watch, ALU, FPU) посередине, Screen/Aside справа — под экраном vars, stack,
       debug log, log, устройства, диск; нет группы — новая колонка или половина колонки
-      по раскладке по умолчанию), крестик снимает флаг. Окна-инструменты: `xxx_window` не рисует окно при `App::panels()`,
-      тело — `xxx_ui(app, ui)`, вызывается из `workspace::tool_ui` (эмулятор и исходник — из `rustemu-desktop`, `emulator::tool_ui`).
-      Диалоги, flags (+ flag analyser) и таблица ASCII всплывают в обоих режимах; планшет — всегда окна.
+      по раскладке по умолчанию), крестик снимает флаг. Окна рисует `tools::windows` (в панелях — только инструменты без группы),
+      тело — `tools::tool_ui` (эмулятор и исходник — `Host` из `rustemu-desktop`).
+      Диалоги, flags (+ flag analyser), stop on condition, value viewer, ASCII, конвертер, калькулятор всплывают в обоих режимах; планшет — всегда окна.
       Дизассемблер листается колесом и полосой справа от списка (`App::scroll_disasm`/`show_disasm_at`, в пределах CS;
       назад — декодирование с 256 байт раньше), до следующего шага или ⌖ CS:IP / F7. Раскладка — `App::panels`, в настройках строкой RON
       (`Settings::panels`, нечитаемая отбрасывается); `workspace::reset_layout` (Emulator → Reset window layout)
@@ -246,7 +261,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 6.7 Интерфейс планшета — крейт `rustemu-tablet`, работает в веб-версии (iPad, сенсорные экраны, узкое
       окно) и окном на Mac для разработки. **Нативные iPadOS/Android убраны** (решение 2026-10-28: без Apple
       Developer ID; код — в локальной ветке `archive/native-tablet`, на GitHub не отправлять). Модули: `lib.rs`
-      (`TabletApp`, `TabletState`, `tablet_ui`), `theme.rs` (тёмная тема через `App::fixed_theme`), `widgets.rs`
+      (`TabletApp`, `TabletState`, `tablet_ui`), `theme.rs` (тёмная тема через `FrontEnd::fixed_theme`), `widgets.rs`
       (иконки, кнопки, карточки), `bars.rs` (верхняя панель Run/Pause/Step/Reset, вкладки, меню ⋮, статус),
       `tabs.rs` (раскладка Editor / Debugger / Memory: альбомная — три колонки на всю высоту, `three_columns`;
       портретная — две колонки и нижний ряд; узкое окно — стопкой, `left_width`), `cards.rs`, `memory.rs`
@@ -257,10 +272,10 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [~] 6.8 Веб-версия (`rustemu-web`, trunk → GitHub Pages, задания `web`/`deploy-web` в CI): WebGPU с откатом на
       WebGL 2 (`rustemu_ui::wgpu_options`); время — `web-time` (std `Instant` в браузере паникует), часовой пояс —
       `js_sys::Date`; файлы — `platform::request_upload`/`take_uploads` (rfd `AsyncFileDialog`) и `download`;
-      `App::doc_name` — имя файла без пути, `Session::load_named` — загрузка из байтов. Диск C: в браузере —
+      `Document::name` — имя файла без пути, `Session::load_named` — загрузка из байтов. Диск C: в браузере —
       `rustemu_core::memdrive::MemDrive` (`Machine::set_dos_memory_drive`; в `dos.rs` диск — `DosDrive::Host`/`Memory`,
       открытый файл — `OpenFile`), хранится в eframe storage (`App::persist`/`restore_drive`, base64), окно
-      `drive_ui.rs` (загрузка, просмотр, скачивание). «Мои программы» — `programs.rs` (`App::browser` вместо
+      `drive_ui.rs` (загрузка, просмотр, скачивание). «Мои программы» — `programs.rs` (`FrontEnd::browser` вместо
       `is_web()`, чтобы тестировать нативно; Save → `save_program`/диалог имени `SaveName`, Open → окно, загрузка
       исходника → `import_program`; черновик редактора `Draft` восстанавливается при следующем визите). `App::persist`
       не пишет неизменённые значения (`App::put`; записанное читается обратно — при переполнении квоты
@@ -273,7 +288,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       веб открывает ссылку при запуске и на `hashchange` (`App::open_link` → `PendingAction::Shared`, спрашивает про
       несохранённое) и убирает её из адреса (`history.replaceState`). Программа из ссылки, пока не сохранена
       (`App::from_link`, флаг в `Draft`), работает с пустым временным диском C: (`App::use_temporary_drive`; свой —
-      в `App::own_drive`, его и сохраняет `persist`), уведомление при первом запуске и в окне drive C:. Диск в памяти —
+      в `Web::own_drive`, его и сохраняет `persist`), уведомление при первом запуске и в окне drive C:. Диск в памяти —
       не больше `memdrive::CAPACITY` (2 МБ; `MemDrive::write_at` — неполная запись, как DOS на полном диске) и 1024 записей. Размер загрузки: профиль cargo `web` (`opt-level="z"`, fat LTO,
       `codegen-units=1`; `rustemu-core` — `opt-level=3`: с "z" ядро на ~40% медленнее, с LTO и 3 — быстрее прежнего),
       `data-cargo-profile="web"` в `index.html`; эмодзи-шрифты egui в вебе — подмножества (`rustemu-ui/fonts/*-subset.ttf`,

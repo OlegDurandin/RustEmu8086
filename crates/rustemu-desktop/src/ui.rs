@@ -3,6 +3,7 @@
 use egui::{RichText, Ui};
 
 use rustemu_ui::app::{App, PendingAction, RunMode};
+use rustemu_ui::tools::Tool;
 
 pub fn main_ui(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
@@ -12,21 +13,18 @@ pub fn main_ui(app: &mut App, ui: &mut Ui) {
     egui::Panel::top("toolbar").show(ui, |ui| toolbar(app, ui));
     egui::Panel::bottom("status").show(ui, |ui| status_bar(app, ui));
     egui::Panel::bottom("messages").resizable(true).default_size(110.0).show(ui, |ui| messages(app, ui));
-    if app.find.open {
+    if app.editor.find.open {
         egui::Panel::top("findbar").show(ui, |ui| rustemu_ui::find::find_bar(app, ui));
     }
     if app.panels() {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(ui.visuals().faint_bg_color))
-            .show(ui, |ui| rustemu_ui::workspace::panels_ui(app, ui, &mut crate::emulator::tool_ui));
+            .show(ui, |ui| rustemu_ui::workspace::panels_ui(app, ui, &mut crate::emulator::Desktop));
     } else {
         egui::CentralPanel::default().show(ui, |ui| rustemu_ui::editor::editor(app, ui));
     }
 
-    crate::emulator::emulator_window(app, &ctx);
-    rustemu_ui::screen::screen_window(app, &ctx);
-    crate::emulator::source_window(app, &ctx);
-    rustemu_ui::windows::shared_windows(app, &ctx);
+    rustemu_ui::windows(app, &ctx, &mut crate::emulator::Desktop);
 }
 
 fn menu_bar(app: &mut App, ui: &mut Ui) {
@@ -41,7 +39,7 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             }
             ui.menu_button("Examples", |ui| examples_menu(app, ui));
             ui.menu_button("Recent files", |ui| {
-                if app.browser {
+                if app.front.browser {
                     // The browser: the programs saved in it.
                     let names = app.recent_programs();
                     if names.is_empty() {
@@ -70,13 +68,13 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             if ui.button("Save as…             ⇧⌘S").clicked() {
                 app.save_as();
             }
-            if app.browser
+            if app.front.browser
                 && ui.button("Download").on_hover_text("Save the program as a file on the computer").clicked()
             {
                 app.download_source();
             }
             if ui.button("Share link…").on_hover_text("A link that opens this program in the web version").clicked() {
-                app.share = Some(rustemu_ui::share::ShareDialog { run: false });
+                app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
             }
             if ui.button("Save compiled file   ⌘B").clicked() {
                 app.compile();
@@ -89,10 +87,10 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
         ui.menu_button("Edit", |ui| {
             use rustemu_ui::editcmd as ed;
             if ui.button("Undo                 ⌘Z").clicked() {
-                app.pending_undo = Some(true);
+                app.editor.pending_undo = Some(true);
             }
             if ui.button("Redo                 ⇧⌘Z").clicked() {
-                app.pending_undo = Some(false);
+                app.editor.pending_undo = Some(false);
             }
             ui.separator();
             if ui.button("Cut                  ⌘X").clicked() {
@@ -109,8 +107,8 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             }
             ui.separator();
             if ui.button("Find…                ⌘F").clicked() {
-                app.find.open = true;
-                app.find.focus = true;
+                app.editor.find.open = true;
+                app.editor.find.focus = true;
             }
             if ui.button("Find next            F3").clicked() {
                 rustemu_ui::find::find_next(app, false);
@@ -119,11 +117,11 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
                 rustemu_ui::find::find_next(app, true);
             }
             if ui.button("Replace…             ⌃H").clicked() {
-                app.find.open = true;
-                app.find.focus = true;
+                app.editor.find.open = true;
+                app.editor.find.focus = true;
             }
             if ui.button("Go to line…          ⌃G").clicked() {
-                app.find.goto_open = true;
+                app.editor.find.goto_open = true;
             }
             ui.separator();
             if ui.button("Indent").clicked() {
@@ -157,14 +155,14 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
                 ed::prev_bookmark(app);
             }
             if ui.button("Clear all bookmarks").clicked() {
-                app.bookmarks.clear();
+                app.editor.bookmarks.clear();
             }
-            if !app.bookmarks.is_empty() {
+            if !app.editor.bookmarks.is_empty() {
                 ui.separator();
-                for l in app.bookmarks.clone() {
-                    let text = app.text.lines().nth(l as usize - 1).unwrap_or("").trim().to_string();
+                for l in app.editor.bookmarks.clone() {
+                    let text = app.doc.text.lines().nth(l as usize - 1).unwrap_or("").trim().to_string();
                     if ui.button(format!("{l}: {}", text.chars().take(40).collect::<String>())).clicked() {
-                        app.goto_line = Some(l);
+                        app.editor.goto_line = Some(l);
                     }
                 }
             }
@@ -178,25 +176,25 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
             }
             ui.separator();
             if ui.button("Listing").clicked() {
-                app.windows.listing = true;
+                app.windows[Tool::Listing] = true;
             }
             if ui.button("Symbol table").clicked() {
-                app.windows.symbols = true;
+                app.windows[Tool::Symbols] = true;
             }
         });
         ui.menu_button("Emulator", |ui| emulator_menu(app, ui));
         ui.menu_button("Math", |ui| {
             if ui.button("Multi base calculator").clicked() {
-                app.calculator.open = true;
+                app.windows[Tool::Calculator] = true;
             }
             if ui.button("Base convertor").clicked() {
-                app.windows.converter = true;
+                app.windows[Tool::Converter] = true;
             }
         });
         if ui.button("ASCII Codes").clicked() {
-            app.windows.ascii = !app.windows.ascii;
+            app.windows[Tool::Ascii] = !app.windows[Tool::Ascii];
         }
-        ui.menu_button("Options", |ui| rustemu_ui::windows::options_menu(app, ui));
+        ui.menu_button("Options", |ui| rustemu_ui::dialogs::options_menu(app, ui));
         ui.menu_button("Help", |ui| {
             use rustemu_ui::reference_ui::Tab;
             for (tab, label) in [
@@ -211,24 +209,24 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
                 }
             }
             if ui.button("emu8086.inc library").clicked() {
-                app.library.open = true;
+                app.windows[Tool::Library] = true;
             }
             ui.separator();
             if ui.button("About RustEmu8086").clicked() {
-                app.windows.about = true;
+                app.windows[Tool::About] = true;
             }
         });
     });
 }
 
 fn examples_menu(app: &mut App, ui: &mut Ui) {
-    rustemu_ui::windows::examples_menu(app, ui, false);
+    rustemu_ui::examples_ui::examples_menu(app, ui, false);
 }
 
 fn emulator_menu(app: &mut App, ui: &mut Ui) {
     let loaded = app.loaded();
     if ui.button("Show emulator").clicked() {
-        app.windows.emulator = true;
+        app.windows[Tool::Emulator] = true;
     }
     if ui.button("Reset window layout").clicked() {
         rustemu_ui::workspace::reset_layout(app, ui.ctx());
@@ -255,10 +253,10 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
         app.toggle_breakpoint_at_cursor();
     }
     if ui.button("Breakpoints…").clicked() {
-        app.windows.breakpoints = true;
+        app.windows[Tool::Breakpoints] = true;
     }
     if ui.button("Stop on condition…").clicked() {
-        app.windows.stop_condition = true;
+        app.windows[Tool::StopCondition] = true;
     }
     if ui.add_enabled(loaded, egui::Button::new("Reload")).clicked() {
         app.reload();
@@ -268,35 +266,35 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
         app.open_dialog();
     }
     if ui.button("Set command line parameters…").clicked() {
-        app.cmdline_dialog = Some(app.session.command_line.clone());
+        app.dialogs.cmdline = Some(app.session.command_line.clone());
     }
-    ui.menu_button("Virtual drive", |ui| rustemu_ui::windows::virtual_drive_menu(app, ui));
+    ui.menu_button("Virtual drive", |ui| rustemu_ui::drive_ui::virtual_drive_menu(app, ui));
     ui.menu_button("Virtual devices", |ui| {
         crate::emulator::virtual_devices_menu(app, ui);
     });
     ui.menu_button("Windows", |ui| {
         let w = &mut app.windows;
-        ui.checkbox(&mut w.emulator, "Emulator");
-        ui.checkbox(&mut w.screen, "Screen");
-        ui.checkbox(&mut w.source, "Source");
-        ui.checkbox(&mut w.memory, "Memory");
-        ui.checkbox(&mut w.stack, "Stack");
-        ui.checkbox(&mut w.flags, "Flags");
-        ui.checkbox(&mut w.vars, "Variables");
-        ui.checkbox(&mut w.symbols, "Symbol table");
-        ui.checkbox(&mut w.listing, "Listing");
-        ui.checkbox(&mut w.log, "Log");
-        ui.checkbox(&mut w.devices, "Virtual devices");
-        ui.checkbox(&mut w.console, "Debug console");
-        ui.checkbox(&mut w.breakpoints, "Breakpoints");
-        ui.checkbox(&mut w.watch, "Watch");
-        ui.checkbox(&mut w.call_stack, "Call stack");
-        ui.checkbox(&mut w.alu, "ALU");
-        ui.checkbox(&mut w.fpu, "FPU");
+        ui.checkbox(&mut w[Tool::Emulator], "Emulator");
+        ui.checkbox(&mut w[Tool::Screen], "Screen");
+        ui.checkbox(&mut w[Tool::Source], "Source");
+        ui.checkbox(&mut w[Tool::Memory], "Memory");
+        ui.checkbox(&mut w[Tool::Stack], "Stack");
+        ui.checkbox(&mut w[Tool::Flags], "Flags");
+        ui.checkbox(&mut w[Tool::Vars], "Variables");
+        ui.checkbox(&mut w[Tool::Symbols], "Symbol table");
+        ui.checkbox(&mut w[Tool::Listing], "Listing");
+        ui.checkbox(&mut w[Tool::Log], "Log");
+        ui.checkbox(&mut w[Tool::Devices], "Virtual devices");
+        ui.checkbox(&mut w[Tool::Console], "Debug console");
+        ui.checkbox(&mut w[Tool::Breakpoints], "Breakpoints");
+        ui.checkbox(&mut w[Tool::Watch], "Watch");
+        ui.checkbox(&mut w[Tool::CallStack], "Call stack");
+        ui.checkbox(&mut w[Tool::Alu], "ALU");
+        ui.checkbox(&mut w[Tool::Fpu], "FPU");
     });
     if ui.button("Clear all breakpoints").clicked() {
-        app.bp_lines.clear();
-        app.bp_addr.clear();
+        app.debugger.bp_lines.clear();
+        app.debugger.bp_addr.clear();
         app.session.machine.breakpoints.clear();
     }
 }
@@ -314,7 +312,7 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
             app.save();
         }
         if ui.button("🔗 share").on_hover_text("A link that opens this program in the web version").clicked() {
-            app.share = Some(rustemu_ui::share::ShareDialog { run: false });
+            app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
         }
         ui.separator();
         if ui.button("⚙ compile").on_hover_text("Assemble and write the executable (⌘B)").clicked() {
@@ -329,19 +327,19 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         }
         ui.separator();
         if ui.button("🔣 calculator").on_hover_text("Multi base calculator").clicked() {
-            app.calculator.open = !app.calculator.open;
+            app.windows[Tool::Calculator] = !app.windows[Tool::Calculator];
         }
         if ui.button("🔢 convertor").on_hover_text("Base convertor").clicked() {
-            app.windows.converter = !app.windows.converter;
+            app.windows[Tool::Converter] = !app.windows[Tool::Converter];
         }
         if ui.button("🔧 options").clicked() {
-            app.options_open = !app.options_open;
+            app.dialogs.options = !app.dialogs.options;
         }
         if ui.button("❓ help").on_hover_text("Instructions, interrupts, directives (F1)").clicked() {
-            app.reference.open = !app.reference.open;
+            app.windows[Tool::Reference] = !app.windows[Tool::Reference];
         }
         if ui.button("ℹ about").clicked() {
-            app.windows.about = !app.windows.about;
+            app.windows[Tool::About] = !app.windows[Tool::About];
         }
     });
 }
@@ -351,7 +349,7 @@ fn status_bar(app: &mut App, ui: &mut Ui) {
         let dirty = if app.dirty() { " •" } else { "" };
         ui.label(RichText::new(format!("{}{dirty}", app.file_name())).strong());
         ui.separator();
-        ui.label(format!("line {}", app.cursor_line));
+        ui.label(format!("line {}", app.editor.cursor_line));
         ui.separator();
         let color = if app.status.starts_with("Error") || app.status.contains("failed") {
             rustemu_ui::colors::error(ui)
@@ -366,11 +364,11 @@ fn status_bar(app: &mut App, ui: &mut Ui) {
 
 fn messages(app: &mut App, ui: &mut Ui) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
-        if app.messages.is_empty() {
+        if app.build.messages.is_empty() {
             ui.weak("Press “emulate” (F9) to assemble and run the program, or “compile” (⌘B) to build an executable.");
         }
         let mut jump = None;
-        for (i, m) in app.messages.iter().enumerate() {
+        for (i, m) in app.build.messages.iter().enumerate() {
             let color = if m.error { rustemu_ui::colors::error(ui) } else { ui.visuals().text_color() };
             let r =
                 ui.add(egui::Label::new(RichText::new(&m.text).monospace().color(color)).sense(egui::Sense::click()));

@@ -21,6 +21,11 @@ pub struct Entry {
     pub end_line: u32,
 }
 
+/// The innermost macro or procedure of `entries` that contains `line`.
+pub fn enclosing(entries: &[Entry], line: u32) -> Option<&Entry> {
+    entries.iter().filter(|e| e.line <= line && line <= e.end_line).min_by_key(|e| e.end_line - e.line)
+}
+
 fn words(line: &str) -> Vec<String> {
     let code = line.split(';').next().unwrap_or("");
     code.split_whitespace().map(|w| w.to_ascii_uppercase()).collect()

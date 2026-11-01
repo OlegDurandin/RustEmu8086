@@ -1,12 +1,13 @@
-//! Debug windows: memory, stack, flags, variables, symbols, listing, log.
+//! Tools to inspect the machine: memory, stack, flags, variables, symbols, listing, log.
 
-use egui::{Color32, FontId, RichText, Ui, pos2};
+use egui::{Color32, FontId, RichText, Ui};
 use rustemu_asm::SymbolKind;
 use rustemu_core::cpu::{self, flags};
 use rustemu_core::font::cp437_to_char;
 use rustemu_core::linear;
 
 use crate::app::App;
+use crate::tools::Tool;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NumFormat {
@@ -16,40 +17,6 @@ pub enum NumFormat {
     Signed,
     Bin,
     Char,
-}
-
-fn window(title: &str, open: &mut bool, pos: [f32; 2], ctx: &egui::Context, f: impl FnOnce(&mut Ui)) {
-    egui::Window::new(title).open(open).default_pos(pos2(pos[0], pos[1])).show(ctx, f);
-}
-
-pub fn debug_windows(app: &mut App, ctx: &egui::Context) {
-    // The flags float in both layouts, as in Emu8086: a small window to glance at while stepping.
-    let mut fl = app.windows.flags;
-    egui::Window::new("flags")
-        .open(&mut fl)
-        .default_pos(pos2(880.0, 110.0))
-        .resizable(false)
-        .default_width(140.0)
-        .show(ctx, |ui| flags_ui(app, ui));
-    app.windows.flags = fl;
-    // After the flags: their "analyse" button opens it.
-    let mut an = app.windows.flag_analyser;
-    window("lexical flag analyser", &mut an, [1000.0, 110.0], ctx, |ui| flag_analyser_ui(app, ui));
-    app.windows.flag_analyser = an;
-    if app.panels() {
-        return;
-    }
-    let w = &mut app.windows;
-    let (mut mem, mut stack, mut vars, mut sym, mut lst, mut log) =
-        (w.memory, w.stack, w.vars, w.symbols, w.listing, w.log);
-    window("memory", &mut mem, [80.0, 420.0], ctx, |ui| memory_ui(app, ui));
-    window("stack", &mut stack, [680.0, 110.0], ctx, |ui| stack_ui(app, ui));
-    window("variables", &mut vars, [300.0, 300.0], ctx, |ui| vars_ui(app, ui));
-    window("symbol table", &mut sym, [320.0, 160.0], ctx, |ui| symbols_ui(app, ui));
-    window("listing", &mut lst, [200.0, 140.0], ctx, |ui| listing_ui(app, ui));
-    window("log", &mut log, [120.0, 500.0], ctx, |ui| log_ui(app, ui));
-    let w = &mut app.windows;
-    (w.memory, w.stack, w.vars, w.symbols, w.listing, w.log) = (mem, stack, vars, sym, lst, log);
 }
 
 /// Parses `seg:off` (hex) or a linear hex address; segment may be a register name.
@@ -79,12 +46,13 @@ pub fn parse_addr(app: &App, s: &str) -> Option<u32> {
 pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label("address:");
-        let r = ui
-            .add(egui::TextEdit::singleline(&mut app.mem_addr_text).desired_width(110.0).hint_text("DS:0000 or 07100"));
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut app.view.mem_addr_text).desired_width(110.0).hint_text("DS:0000 or 07100"),
+        );
         if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || ui.button("go").clicked() {
-            let text = app.mem_addr_text.clone();
+            let text = app.view.mem_addr_text.clone();
             match parse_addr(app, &text) {
-                Some(a) => app.mem_view_addr = a & !0xF,
+                Some(a) => app.view.mem_view_addr = a & !0xF,
                 None => app.status = format!("bad address '{text}'"),
             }
         }
@@ -96,27 +64,27 @@ pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
                     cpu::CS => c.ip,
                     _ => 0,
                 };
-                app.mem_view_addr = linear(c.sregs[seg], off) & !0xF;
+                app.view.mem_view_addr = linear(c.sregs[seg], off) & !0xF;
             }
         }
         if ui.small_button("B800").clicked() {
-            app.mem_view_addr = 0xB8000;
+            app.view.mem_view_addr = 0xB8000;
         }
     });
     let font = FontId::monospace(12.5);
     let row_h = ui.fonts_mut(|f| f.row_height(&font)) + 1.0;
-    let base = app.mem_view_addr & !0xF;
+    let base = app.view.mem_view_addr & !0xF;
     let pc = app.session.machine.cpu.pc();
     let sp = linear(app.session.machine.cpu.sregs[cpu::SS], app.session.machine.cpu.regs[cpu::SP]);
-    if base != app.mem_last_base {
-        app.mem_last_base = base;
-        app.mem_scroll_pending = true;
+    if base != app.view.mem_last_base {
+        app.view.mem_last_base = base;
+        app.view.mem_scroll_pending = true;
     }
     let mut sa = egui::ScrollArea::vertical().max_height(320.0);
-    if app.mem_scroll_pending {
+    if app.view.mem_scroll_pending {
         let step = row_h + ui.spacing().item_spacing.y;
         sa = sa.vertical_scroll_offset((base >> 4) as f32 * step);
-        app.mem_scroll_pending = false;
+        app.view.mem_scroll_pending = false;
     }
     sa.show_rows(ui, row_h, 0x10000, |ui, range| {
         for row in range {
@@ -199,8 +167,8 @@ pub const FLAG_ROWS: [(u16, &str, &str); 8] = [
     (flags::DF, "DF", "Direction Flag (0-forward, 1-backward)"),
 ];
 
-fn flags_ui(app: &mut App, ui: &mut Ui) {
-    let prev = app.prev_cpu.flags;
+pub(crate) fn flags_ui(app: &mut App, ui: &mut Ui) {
+    let prev = app.exec.prev_cpu.flags;
     let c = &mut app.session.machine.cpu;
     let font = FontId::monospace(14.0);
     egui::Grid::new("flags").num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
@@ -220,7 +188,7 @@ fn flags_ui(app: &mut App, ui: &mut Ui) {
     });
     ui.add_space(4.0);
     if ui.add(egui::Button::new("analyse").min_size(egui::vec2(120.0, 0.0))).clicked() {
-        app.windows.flag_analyser = true;
+        app.windows[Tool::FlagAnalyser] = true;
     }
 }
 
@@ -250,9 +218,15 @@ pub fn flag_analysis(f: u16) -> String {
     s
 }
 
-fn flag_analyser_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn flag_analyser_ui(app: &mut App, ui: &mut Ui) {
     let text = flag_analysis(app.session.machine.cpu.flags);
     ui.label(RichText::new(text.trim_end()).monospace().size(13.0));
+}
+
+/// `v` in binary, in groups of four digits.
+pub(crate) fn bin(v: u32, bits: u32) -> String {
+    let s = format!("{v:0w$b}", w = bits as usize);
+    s.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" ")
 }
 
 fn format_value(v: u32, size: u8, f: NumFormat) -> String {
@@ -288,7 +262,7 @@ pub(crate) fn vars_ui(app: &mut App, ui: &mut Ui) {
             (NumFormat::Bin, "bin"),
             (NumFormat::Char, "ascii"),
         ] {
-            ui.selectable_value(&mut app.vars_format, f, n);
+            ui.selectable_value(&mut app.settings.vars_format, f, n);
         }
     });
     let load_seg = app.session.machine.loaded.as_ref().map(|l| l.load_segment).unwrap_or(0);
@@ -311,7 +285,7 @@ pub(crate) fn vars_ui(app: &mut App, ui: &mut Ui) {
                     for i in 0..size as u32 {
                         v |= (mem.read8(addr + k * size as u32 + i) as u32) << (i * 8);
                     }
-                    vals.push(format_value(v, size, app.vars_format));
+                    vals.push(format_value(v, size, app.settings.vars_format));
                 }
                 ui.label(RichText::new(&s.name).font(font.clone()).strong());
                 ui.label(RichText::new(["", "b", "w", "", "d"][size as usize]).weak());
@@ -330,7 +304,7 @@ pub(crate) fn vars_ui(app: &mut App, ui: &mut Ui) {
                     ui.label(RichText::new("equ").weak());
                     let v = s.value as u32;
                     let size = if s.value > 0xFFFF || s.value < -0x8000 { 4 } else { 2 };
-                    ui.label(RichText::new(format_value(v, size, app.vars_format)).font(font.clone()));
+                    ui.label(RichText::new(format_value(v, size, app.settings.vars_format)).font(font.clone()));
                     ui.end_row();
                 }
             });
@@ -353,10 +327,10 @@ pub(crate) fn listing_ui(app: &mut App, ui: &mut Ui) {
         ui.weak("no program");
         return;
     };
-    if app.listing_cache.as_ref().map(|(n, _)| *n) != Some(prog.listing.len()) {
-        app.listing_cache = Some((prog.listing.len(), prog.listing_text()));
+    if app.view.listing_cache.as_ref().map(|(n, _)| *n) != Some(prog.listing.len()) {
+        app.view.listing_cache = Some((prog.listing.len(), prog.listing_text()));
     }
-    let text = &app.listing_cache.as_ref().unwrap().1;
+    let text = &app.view.listing_cache.as_ref().unwrap().1;
     egui::ScrollArea::both().max_height(420.0).show(ui, |ui| {
         ui.label(RichText::new(text).monospace().size(12.0));
     });
@@ -397,19 +371,19 @@ pub fn jump_target(text: &str) -> Option<u16> {
 
 /// Finds the address to start the disassembly at so that the list stays stable while stepping.
 pub fn disasm_start(app: &mut App, rows: usize) -> u32 {
-    if app.code_view_pinned {
-        return app.code_view_start;
+    if app.view.code_view_pinned {
+        return app.view.code_view_start;
     }
     let m = &app.session.machine;
     let pc = m.cpu.pc();
-    let mut a = app.code_view_start;
+    let mut a = app.view.code_view_start;
     let mut ip = m.cpu.ip.wrapping_sub(pc.wrapping_sub(a) as u16);
     // Rows of the list, label rows included; CS:IP stays at least 3 rows above the bottom.
     let mut shown = 0;
     while shown + 3 < rows {
         shown += 1 + app.session.symbol_at(a).is_some() as usize;
         if a == pc {
-            return app.code_view_start;
+            return app.view.code_view_start;
         }
         let len = app.session.code_row(a, ip, app.settings.disasm_data).len;
         a += len;
@@ -418,7 +392,7 @@ pub fn disasm_start(app: &mut App, rows: usize) -> u32 {
             break;
         }
     }
-    app.code_view_start = pc;
+    app.view.code_view_start = pc;
     pc
 }
 

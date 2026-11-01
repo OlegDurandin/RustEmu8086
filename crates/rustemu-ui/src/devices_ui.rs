@@ -59,28 +59,14 @@ impl Device {
     }
 }
 
-pub fn devices_window(app: &mut App, ctx: &egui::Context) {
-    if app.panels() {
-        return;
-    }
-    let mut open = app.windows.devices;
-    egui::Window::new("virtual devices")
-        .id(egui::Id::unique("devices_window"))
-        .open(&mut open)
-        .default_pos(pos2(760.0, 120.0))
-        .resizable(false)
-        .show(ctx, |ui| devices_ui(app, ui));
-    app.windows.devices = open;
-}
-
 pub(crate) fn devices_ui(app: &mut App, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         for (d, name) in Device::ALL {
-            ui.selectable_value(&mut app.device_tab, d, name);
+            ui.selectable_value(&mut app.view.device_tab, d, name);
         }
     });
     ui.separator();
-    match app.device_tab {
+    match app.view.device_tab {
         Device::TrafficLights => {
             ui.label(RichText::new("Traffic lights — port 4 (word)").strong());
             traffic_lights(app, ui);

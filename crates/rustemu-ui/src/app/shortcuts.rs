@@ -1,13 +1,14 @@
 //! Keyboard shortcuts of the editor and the emulator.
 
 use super::*;
+use crate::tools::Tool;
 
 impl App {
     /// F1: opens the reference at the instruction / directive / interrupt under the text cursor.
     pub fn help_at_cursor(&mut self) {
-        match crate::reference::topic_at_cursor(&self.text, self.selection.0) {
+        match crate::reference::topic_at_cursor(&self.doc.text, self.editor.selection.0) {
             Some(t) => self.reference.show(t),
-            None => self.reference.open = true,
+            None => self.windows[Tool::Reference] = true,
         }
     }
 
@@ -53,8 +54,8 @@ impl App {
         }
         let ctrl = Modifiers::CTRL;
         if fire(sc(cmd, Key::F)) || fire(sc(cmd, Key::H)) || fire(sc(ctrl, Key::H)) {
-            self.find.open = true;
-            self.find.focus = true;
+            self.editor.find.open = true;
+            self.editor.find.focus = true;
         }
         if fire(sc(cmd | Modifiers::SHIFT, Key::G)) || fire(sc(Modifiers::SHIFT, Key::F3)) {
             crate::find::find_next(self, true);
@@ -62,7 +63,7 @@ impl App {
             crate::find::find_next(self, false);
         }
         if fire(sc(cmd, Key::L)) || fire(sc(ctrl, Key::G)) {
-            self.find.goto_open = true;
+            self.editor.find.goto_open = true;
         }
         // F1: reference article for the word at the text cursor.
         if fire(sc(Modifiers::NONE, Key::F1)) {
@@ -70,7 +71,7 @@ impl App {
         }
         // Emu8086 emulator keys that do not clash with ours.
         if fire(sc(Modifiers::NONE, Key::F11)) {
-            self.windows.console = !self.windows.console;
+            self.windows[Tool::Console] = !self.windows[Tool::Console];
         }
         if fire(sc(Modifiers::NONE, Key::F6)) && self.loaded() {
             self.step_back();
