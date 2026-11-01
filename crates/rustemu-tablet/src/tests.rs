@@ -416,3 +416,28 @@ fn source_comes_back_from_a_macro_to_the_next_line() {
     }
     assert_eq!(seen.len(), 2, "into the library and back");
 }
+
+#[test]
+fn virtual_drive_is_in_the_menu() {
+    // The browser: drive C: in memory, its files one tap away; the floppies in "Virtual drive".
+    let mut t = TabletApp::new(app_with_example(0));
+    t.app.front.browser = true;
+    t.app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    let mut h = tablet_harness(t, [1376.0, 1032.0]);
+    h.run_steps(2);
+    h.get_by_label("file, examples, tools").click();
+    h.run_steps(2);
+    h.get_by_label("Drive C: files").click();
+    h.run_steps(3);
+    assert!(h.state().app.windows[Tool::Drive]);
+    h.get_by_label("file, examples, tools").click();
+    h.run_steps(2);
+    h.get_by_label("Virtual drive").hover();
+    h.run_steps(3);
+    for item in
+        ["drive C: files…", "boot from virtual floppy", "write '.bin' file to floppy…", "create new floppy drive"]
+    {
+        assert!(h.query_by_label(item).is_some(), "{item}");
+    }
+    save(&mut h, "33_tablet_virtual_drive");
+}

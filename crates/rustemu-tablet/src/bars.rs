@@ -261,12 +261,15 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         ui.close();
     }
     ui.separator();
+    // Drive C: (its files in the browser, its folder on the desktop) and the floppies, as in the
+    // desktop layout.
+    ui.menu_button("Virtual drive", |ui| rustemu_ui::drive_ui::virtual_drive_menu(app, ui));
     let memory_drive = app.session.machine.dos_memory_drive().is_some();
     let w = &mut app.windows;
-    ui.checkbox(&mut w[Tool::Devices], "Virtual devices");
     if memory_drive {
         ui.checkbox(&mut w[Tool::Drive], "Drive C: files");
     }
+    ui.checkbox(&mut w[Tool::Devices], "Virtual devices");
     ui.checkbox(&mut w[Tool::Vars], "Variables");
     ui.checkbox(&mut w[Tool::Symbols], "Symbol table");
     ui.checkbox(&mut w[Tool::Listing], "Listing");
