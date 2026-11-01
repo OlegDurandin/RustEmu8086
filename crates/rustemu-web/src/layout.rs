@@ -6,8 +6,9 @@ use rustemu_tablet::TabletApp;
 use rustemu_ui::app::App;
 
 enum Layout {
-    Desktop(DesktopApp),
-    Tablet(TabletApp),
+    // Boxed: both hold the whole application state; the enum itself stays small.
+    Desktop(Box<DesktopApp>),
+    Tablet(Box<TabletApp>),
 }
 
 pub struct WebApp {
@@ -41,7 +42,7 @@ fn wrap(mut app: App, tablet: bool, ctx: &egui::Context) -> Layout {
     if tablet {
         let t = TabletApp::new(app);
         t.app.apply_theme(ctx);
-        Layout::Tablet(t)
+        Layout::Tablet(Box::new(t))
     } else {
         // Undo the tablet theme: touch-sized spacing and its dark colours.
         app.front.fixed_theme = None;
@@ -49,7 +50,7 @@ fn wrap(mut app: App, tablet: bool, ctx: &egui::Context) -> Layout {
         app.front.tablet_layout = false;
         ctx.set_style_of(egui::Theme::Dark, egui::Style::default());
         app.apply_theme(ctx);
-        Layout::Desktop(DesktopApp(app))
+        Layout::Desktop(Box::new(DesktopApp(app)))
     }
 }
 

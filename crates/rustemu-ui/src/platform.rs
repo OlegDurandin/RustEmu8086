@@ -145,6 +145,51 @@ pub fn download(name: &str, bytes: &[u8]) {
     let _ = (name, bytes);
 }
 
+/// Offers the file to the system share sheet (the browser's Web Share API: iPadOS, Android, Safari
+/// and Chrome on some desktops). False when the browser cannot share files, and always outside the
+/// browser. The user may still cancel the sheet; that is not reported.
+pub fn share_file(name: &str, bytes: &[u8]) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::{JsCast, JsValue};
+        let Some(navigator) = web_sys::window().map(|w| w.navigator()) else { return false };
+        // navigator.share / canShare are "unstable" in web-sys: called by name, when they exist.
+        let method = |name: &str| {
+            js_sys::Reflect::get(&navigator, &JsValue::from_str(name))
+                .ok()
+                .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        };
+        let (Some(share), Some(can_share)) = (method("share"), method("canShare")) else { return false };
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+        let options = web_sys::FilePropertyBag::new();
+        options.set_type("text/plain");
+        let Ok(file) = web_sys::File::new_with_u8_array_sequence_and_options(&parts, name, &options) else {
+            return false;
+        };
+        let data = js_sys::Object::new();
+        let set = |k: &str, v: &JsValue| js_sys::Reflect::set(&data, &JsValue::from_str(k), v).is_ok();
+        if !set("files", &js_sys::Array::of1(&file)) || !set("title", &JsValue::from_str(name)) {
+            return false;
+        }
+        if !can_share.call1(&navigator, &data).is_ok_and(|v| v.is_truthy()) {
+            return false;
+        }
+        let Ok(promise) = share.call1(&navigator, &data).and_then(|p| p.dyn_into::<js_sys::Promise>()) else {
+            return false;
+        };
+        // Cancelling the sheet rejects the promise: nothing to do then.
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+        });
+        true
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (name, bytes);
+        false
+    }
+}
+
 /// Text on the clipboard, read on demand (Edit -> Paste, the emulator screen's paste button).
 /// ⌘V / Ctrl+V do not need this: egui delivers the clipboard with the paste event.
 pub fn read_clipboard() -> Option<String> {

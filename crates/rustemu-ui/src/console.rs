@@ -265,7 +265,7 @@ pub fn log_state(app: &mut App) {
     con.lines.extend(text);
 }
 
-pub(crate) fn console_ui(app: &mut App, ui: &mut Ui) {
+pub fn console_ui(app: &mut App, ui: &mut Ui) {
     if app.console.lines.is_empty() {
         app.console.lines.push("RustEmu8086 debug console - type ? for help".into());
     }

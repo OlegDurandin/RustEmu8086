@@ -57,16 +57,15 @@ pub(crate) fn top_bar(app: &mut App, ui: &mut Ui) {
         let (r, _) = ui.allocate_exact_size(vec2(2.0, 32.0), Sense::hover());
         ui.painter().rect_filled(r, 0.0, pal::BORDER);
         ui.add_space(8.0);
-        let (r, _) = ui.allocate_exact_size(vec2(26.0, 32.0), Sense::hover());
-        paint_icon(ui.painter(), Icon::File, r.center(), 26.0, pal::WEAK);
-        let dirty = if app.dirty() { " •" } else { "" };
-        ui.label(RichText::new(format!("{}{dirty}", app.file_name())).size(19.0).color(pal::TEXT));
+        project_button(app, ui);
         ui.add_space(16.0);
         if ui.available_width() > 640.0 {
             badge(ui, "8086 REAL MODE");
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let running = app.run != RunMode::Paused;
+            // A step while the program waits for a key would wait again: type the key first.
+            let waiting = app.waiting_for_key();
             let compact = ui.available_width() < 560.0;
             let l = |s: &'static str| if compact { "" } else { s };
             if icon_button(ui, Icon::Reset, l("Reset"), None, true)
@@ -75,7 +74,8 @@ pub(crate) fn top_bar(app: &mut App, ui: &mut Ui) {
             {
                 reset(app);
             }
-            if icon_button(ui, Icon::Step, l("Step"), None, !running).on_hover_text("One instruction (F8)").clicked() {
+            let step_tip = if waiting { "The program waits for a key: type it first" } else { "One instruction (F8)" };
+            if icon_button(ui, Icon::Step, l("Step"), None, !running && !waiting).on_hover_text(step_tip).clicked() {
                 step(app);
             }
             if icon_button(ui, Icon::Pause, l("Pause"), None, running).on_hover_text("Stop (F5 / Esc)").clicked() {
@@ -89,6 +89,103 @@ pub(crate) fn top_bar(app: &mut App, ui: &mut Ui) {
             }
         });
     });
+}
+
+/// The file name in the top bar: it opens the project menu.
+fn project_button(app: &mut App, ui: &mut Ui) {
+    let dirty = if app.dirty() { " •" } else { "" };
+    let name = format!("{}{dirty}", app.file_name());
+    let font = FontId::proportional(19.0);
+    let text_w = ui.fonts_mut(|f| f.layout_no_wrap(name.clone(), font.clone(), pal::TEXT).size().x);
+    let (rect, resp) = ui.allocate_exact_size(vec2(12.0 + 26.0 + 8.0 + text_w + 34.0, 44.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "project menu"));
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let p = ui.painter();
+    let stroke = if open || resp.hovered() { pal::LINK } else { pal::BORDER };
+    p.rect(rect, 6.0, pal::FIELD, egui::Stroke::new(1.5, stroke), egui::StrokeKind::Inside);
+    paint_icon(p, Icon::File, egui::pos2(rect.left() + 25.0, rect.center().y), 24.0, pal::WEAK);
+    p.text(egui::pos2(rect.left() + 46.0, rect.center().y), Align2::LEFT_CENTER, name, font, pal::TEXT);
+    // A chevron: the name is a menu.
+    let c = egui::pos2(rect.right() - 17.0, rect.center().y + 2.0);
+    p.add(egui::Shape::line(
+        vec![c + vec2(-5.0, -3.0), c + vec2(0.0, 2.0), c + vec2(5.0, -3.0)],
+        egui::Stroke::new(2.0, pal::WEAK),
+    ));
+    egui::Popup::menu(&resp).show(|ui| project_menu(app, ui));
+}
+
+/// A row of the project menu: an icon, the action and what it does.
+fn menu_row(ui: &mut Ui, icon: Icon, title: &str, hint: &str) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(440.0, 52.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
+    let p = ui.painter();
+    if resp.hovered() || resp.is_pointer_button_down_on() {
+        p.rect_filled(rect, 6.0, pal::BORDER);
+    }
+    paint_icon(p, icon, egui::pos2(rect.left() + 22.0, rect.center().y), 22.0, pal::TEXT);
+    p.text(
+        egui::pos2(rect.left() + 46.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        title,
+        FontId::proportional(17.0),
+        pal::TEXT,
+    );
+    p.text(
+        egui::pos2(rect.right() - 12.0, rect.center().y),
+        Align2::RIGHT_CENTER,
+        hint,
+        FontId::proportional(14.0),
+        pal::WEAK,
+    );
+    resp.clicked()
+}
+
+/// The project menu: a new file, a file from the device, an example, and keeping, exporting or
+/// sharing the source.
+fn project_menu(app: &mut App, ui: &mut Ui) {
+    let browser = app.front.browser;
+    ui.add_space(4.0);
+    ui.label(RichText::new(format!("  PROJECT · {}", app.file_name())).monospace().color(pal::WEAK));
+    ui.add_space(4.0);
+    let mut done = false;
+    if menu_row(ui, Icon::Plus, "New ASM file", "Blank or a template") {
+        app.guarded(PendingAction::New);
+        done = true;
+    }
+    let open_hint = "ASM · COM · EXE · BIN";
+    if menu_row(ui, Icon::Folder, "Open from Files…", open_hint) {
+        app.guarded(if browser { PendingAction::Upload } else { PendingAction::Open(None) });
+        done = true;
+    }
+    if menu_row(ui, Icon::Book, "Example library", "Explore & load code") {
+        app.dialogs.more_examples = Some(false);
+        done = true;
+    }
+    ui.separator();
+    if menu_row(ui, Icon::Floppy, "Save draft", if browser { "In this browser" } else { "To its file" }) {
+        app.save();
+        done = true;
+    }
+    if browser && menu_row(ui, Icon::File, "My drafts", "Saved in this browser") {
+        app.windows[Tool::Programs] = true;
+        done = true;
+    }
+    if menu_row(ui, Icon::Download, "Export .asm", if browser { "Download source" } else { "Save a copy as…" }) {
+        if browser {
+            app.download_source();
+        } else {
+            app.save_as();
+        }
+        done = true;
+    }
+    let share_hint = if browser { "Share sheet" } else { "Link to the web version" };
+    if menu_row(ui, Icon::Share, "Share source", share_hint) {
+        app.share_source();
+        done = true;
+    }
+    if done {
+        ui.close();
+    }
 }
 
 pub(crate) fn tabs_row(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
@@ -119,7 +216,7 @@ pub(crate) fn tabs_row(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let r = small_icon(ui, Icon::Menu, "file, examples, tools");
-            egui::Popup::menu(&r).show(|ui| main_menu(app, ui));
+            egui::Popup::menu(&r).show(|ui| main_menu(app, t, ui));
             if small_icon(ui, Icon::Keyboard, "on-screen keyboard").clicked() {
                 t.keypad.open = !t.keypad.open;
             }
@@ -133,29 +230,10 @@ pub(crate) fn tabs_row(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     });
 }
 
-fn main_menu(app: &mut App, ui: &mut Ui) {
+fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     ui.set_min_width(240.0);
-    if ui.button("New…").clicked() {
-        app.guarded(PendingAction::New);
-        ui.close();
-    }
-    if ui.button("Open…").clicked() {
-        app.guarded(PendingAction::Open(None));
-        ui.close();
-    }
+    // Files are in the project menu (the file name in the top bar).
     ui.menu_button("Examples", |ui| rustemu_ui::examples_ui::examples_menu(app, ui, false));
-    if ui.button("Save").clicked() {
-        app.save();
-        ui.close();
-    }
-    if ui.button("Save as…").clicked() {
-        app.save_as();
-        ui.close();
-    }
-    if app.front.browser && ui.button("Download").clicked() {
-        app.download_source();
-        ui.close();
-    }
     if ui.button("Share link…").clicked() {
         app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
         ui.close();
@@ -195,7 +273,12 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
     ui.checkbox(&mut w[Tool::Alu], "ALU");
     ui.checkbox(&mut w[Tool::Fpu], "FPU");
     ui.checkbox(&mut w[Tool::StopCondition], "Stop on condition");
-    ui.checkbox(&mut w[Tool::Console], "Debug console");
+    // A tool of the Debugger tab, not a window over everything.
+    if ui.button("Debug log").clicked() {
+        t.tab = Tab::Debugger;
+        t.debug.tool = Some(crate::debugger::DebugTool::Console);
+        ui.close();
+    }
     ui.separator();
     if ui.button("Reference").clicked() {
         app.windows[Tool::Reference] = true;
@@ -227,8 +310,10 @@ pub(crate) fn status_bar(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
             ("Not loaded", pal::WEAK)
         } else if m.terminated.is_some() {
             ("Terminated", pal::WEAK)
+        } else if m.is_waiting_input() {
+            ("Waiting for input", pal::AMBER)
         } else if app.run != RunMode::Paused {
-            if m.is_waiting_input() { ("Waiting for input", pal::AMBER) } else { ("Running", pal::TEAL) }
+            ("Running", pal::TEAL)
         } else {
             ("Paused", pal::TEXT)
         };

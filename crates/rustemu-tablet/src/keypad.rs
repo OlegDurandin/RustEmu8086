@@ -11,7 +11,7 @@ use rustemu_core::keyboard::keys;
 use rustemu_ui::app::{App, RunMode};
 
 use crate::theme::pal;
-use crate::widgets::{GAP as SHEET_GAP, split_x, split_y};
+use crate::widgets::split_x;
 
 #[derive(Default)]
 pub struct KeypadState {
@@ -89,12 +89,6 @@ fn rows(fn_keys: bool) -> Vec<Row> {
         (Key::Hide, 1.0),
     ]);
     vec![r1, r2, r3, r4, r5]
-}
-
-/// Height of the keyboard for a given width.
-pub fn height(width: f32) -> f32 {
-    let key_h = (width / UNITS * 0.85).clamp(34.0, 52.0);
-    5.0 * (key_h + GAP) + GAP
 }
 
 const GAP: f32 = 6.0;
@@ -290,32 +284,62 @@ fn press(app: &mut App, s: &mut KeypadState, key: Key) {
     }
     s.shift = false;
     s.ctrl = false;
+    // Paused in a step that waits for a key (Step into INT 16h): the key completes that step.
+    if app.run == RunMode::Paused && app.session.machine.is_waiting_input() {
+        app.single_step();
+    }
 }
 
-/// The on-screen keyboard with a large emulator screen beside it (the output of the typed keys).
-pub(crate) fn keyboard_sheet(app: &mut App, k: &mut KeypadState, ui: &mut Ui) {
+/// Height of a key for a window `window_h` high: the keyboard takes about 28% of it, and a key is
+/// never smaller than Apple's minimum touch target (44 points).
+fn key_height(window_h: f32) -> f32 {
+    ((window_h * 0.28 - 44.0 - 4.0 * GAP) / 5.0).clamp(44.0, 56.0)
+}
+
+/// The PC keyboard docked at the bottom: a title row (what the keys do, Fn, Hide) and the keys.
+/// Keys go to the emulated machine, never to the editor. `with_screen` adds a small preview of
+/// the screen beside the keys, for tabs that do not show the output.
+pub(crate) fn keyboard_sheet(app: &mut App, k: &mut KeypadState, ui: &mut Ui, window_h: f32, with_screen: bool) {
+    let waiting = app.session.machine.is_waiting_input();
+    ui.horizontal(|ui| {
+        ui.set_min_height(36.0);
+        ui.label(RichText::new("PC Keyboard").size(17.0).strong().color(pal::TEXT));
+        let (state, color) = if waiting {
+            ("Waiting for a key", pal::AMBER)
+        } else if app.run != RunMode::Paused {
+            ("Keys go to the emulated PC", pal::TEAL)
+        } else {
+            ("Keys go to the emulated PC (buffered until the program reads them)", pal::WEAK)
+        };
+        ui.label(RichText::new(state).color(color));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .add(egui::Button::new("Hide").min_size(vec2(64.0, 36.0)))
+                .on_hover_text("the program keeps waiting")
+                .clicked()
+            {
+                k.open = false;
+            }
+            let fn_text = if k.fn_keys { "123" } else { "Fn keys" };
+            if ui.add(egui::Button::new(fn_text).selected(k.fn_keys).min_size(vec2(64.0, 36.0))).clicked() {
+                k.fn_keys = !k.fn_keys;
+            }
+        });
+    });
     let width = ui.available_width();
-    // The keys are at least 44 points wide (Apple's minimum touch target). In portrait the screen
-    // goes above the keys.
-    let wide = width >= 1100.0;
-    let keys_w = if wide { (15.0 * 46.0f32).max(width * 0.48).min(width - 400.0) } else { width };
-    let keys_h = height(keys_w);
-    let screen_h = if wide { keys_h } else { 190.0 };
-    let height = if wide { keys_h } else { screen_h + SHEET_GAP + keys_h };
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    let (screen, keys) = if wide { split_x(rect, width - keys_w - SHEET_GAP) } else { split_y(rect, screen_h) };
-    let mut s =
-        ui.new_child(UiBuilder::new().id_salt("keys_screen").max_rect(screen).layout(Layout::top_down(Align::Center)));
-    let hint = if app.session.machine.is_waiting_input() {
-        RichText::new("the program is waiting for input").color(pal::AMBER)
-    } else if app.run != RunMode::Paused {
-        RichText::new("running").color(pal::TEAL)
+    let keys_h = 5.0 * key_height(window_h) + 4.0 * GAP;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, keys_h), Sense::hover());
+    let keys = if with_screen {
+        let screen_w = (keys_h * 1.6).min(width * 0.35);
+        let (screen, keys) = split_x(rect, screen_w);
+        let mut s = ui.new_child(
+            UiBuilder::new().id_salt("keys_screen").max_rect(screen).layout(Layout::top_down(Align::Center)),
+        );
+        rustemu_ui::screen::screen_view(app, &mut s, rustemu_ui::screen::Fit::Cursor(screen.size(), 18.0));
+        keys
     } else {
-        RichText::new("keys are buffered until the program reads them").color(pal::WEAK)
+        rect
     };
-    let avail = screen.size() - vec2(0.0, 26.0);
-    rustemu_ui::screen::screen_view(app, &mut s, rustemu_ui::screen::Fit::Cursor(avail, 18.0));
-    s.label(hint);
     let colors =
         Colors { key: pal::BUTTON, special: pal::HEADER, accent: pal::BLUE, border: pal::BORDER, text: pal::TEXT };
     let mut area = ui.new_child(UiBuilder::new().id_salt("keys").max_rect(keys));

@@ -2,6 +2,7 @@
 
 pub mod code;
 pub mod expr;
+pub mod step;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -400,15 +401,23 @@ impl Session {
     /// CS:IP as a physical address, or the address of the calling `INT n` (2 bytes before
     /// the return address) when execution is inside a ROM service stub.
     pub fn effective_pc(&self) -> u32 {
+        match self.bios_caller() {
+            Some((cs, ip)) => linear(cs, ip),
+            None => self.machine.cpu.pc(),
+        }
+    }
+
+    /// While CS:IP is in the BIOS/DOS code: CS:IP of the `INT nn` that called it (the return
+    /// address on the stack, less the two bytes of the instruction).
+    pub fn bios_caller(&self) -> Option<(u16, u16)> {
         let m = &self.machine;
-        let pc = m.cpu.pc();
         if m.cpu.cs() != ROM_SEG {
-            return pc;
+            return None;
         }
         let (ss, sp) = (m.cpu.sregs[cpu::SS], m.cpu.regs[cpu::SP]);
         let ip = m.sys.mem.read16(linear(ss, sp));
         let cs = m.sys.mem.read16(linear(ss, sp.wrapping_add(2)));
-        linear(cs, ip.wrapping_sub(2))
+        Some((cs, ip.wrapping_sub(2)))
     }
 
     /// Physical address of the first instruction generated for a source line.
