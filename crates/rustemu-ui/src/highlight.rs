@@ -18,6 +18,7 @@ enum Kind {
     Emu,
 }
 
+/// Colours of the syntax highlighting.
 #[derive(Clone, PartialEq)]
 pub struct Palette {
     plain: Color32,
@@ -32,6 +33,7 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// The colours for a dark or a light theme.
     pub fn for_theme(dark: bool) -> Self {
         if dark {
             Palette {
@@ -169,6 +171,7 @@ pub struct Highlighter {
 }
 
 impl Highlighter {
+    /// The highlighted layout of `text` (reused while nothing changed).
     pub fn job(&mut self, text: &str, font: &FontId, pal: &Palette) -> LayoutJob {
         if let Some((job, f, p)) = &self.last
             && job.text == text

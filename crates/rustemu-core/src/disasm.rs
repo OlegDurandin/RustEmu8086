@@ -2,6 +2,7 @@
 
 use crate::cpu::{REG8_NAMES, REG16_NAMES, SREG_NAMES};
 
+/// One decoded instruction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Instruction {
     /// Length in bytes, including prefixes.
@@ -10,12 +11,13 @@ pub struct Instruction {
     pub text: String,
 }
 
-/// Formats a number in Emu8086 style: `0Ah`, `1234h`, decimal for small values is not used.
+/// Formats a byte in Emu8086 style: `0Ah`, `7Fh` (a leading 0 before a letter).
 pub fn hex8(v: u8) -> String {
     let s = format!("{v:02X}h");
     if s.starts_with(|c: char| c.is_ascii_alphabetic()) { format!("0{s}") } else { s }
 }
 
+/// Formats a word in Emu8086 style: `1234h`, `0FFFFh` (a leading 0 before a letter).
 pub fn hex16(v: u16) -> String {
     let s = format!("{v:04X}h");
     if s.starts_with(|c: char| c.is_ascii_alphabetic()) { format!("0{s}") } else { s }
@@ -175,6 +177,8 @@ fn simm8(b: u8) -> String {
     if v < 0 { format!("-{}", hex8(v.unsigned_abs())) } else { hex8(b) }
 }
 
+/// Decodes the instruction at the start of `bytes`; `ip` is its offset (for the targets of
+/// relative jumps and calls). Unknown opcodes come out as `DB nnh`.
 pub fn disassemble(bytes: &[u8], ip: u16) -> Instruction {
     let mut r = Reader { bytes, pos: 0 };
     let mut seg: Option<&str> = None;

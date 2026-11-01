@@ -58,11 +58,25 @@ enum Node {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolRef {
     /// A variable: segment and offset where it lives, element size in bytes.
-    Variable { seg: u16, off: u16, size: u8 },
+    Variable {
+        /// Segment.
+        seg: u16,
+        /// Offset.
+        off: u16,
+        /// Element size in bytes.
+        size: u8,
+    },
     /// A label or constant: its value.
     Value(i64),
     /// A NASM data label: its value is the address; `[name]` reads `size` bytes there.
-    Address { seg: u16, off: u16, size: u8 },
+    Address {
+        /// Segment.
+        seg: u16,
+        /// Offset.
+        off: u16,
+        /// Element size in bytes.
+        size: u8,
+    },
 }
 
 impl Expr {
@@ -80,6 +94,7 @@ impl Expr {
         Ok(Expr { node })
     }
 
+    /// The value of the expression in the current state of `m`.
     pub fn eval(&self, m: &Machine) -> i64 {
         eval(&self.node, m)
     }

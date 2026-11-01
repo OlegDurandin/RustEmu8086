@@ -6,22 +6,32 @@ use egui::{Align, FontId, RichText, Ui};
 use crate::highlight::{Palette, highlight};
 use crate::reference::{self as r, DIRECTIVES, Group, INSTRUCTIONS, INTERRUPTS, Lang, NASM_GUIDE, Topic};
 
+/// Tabs of the reference window.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum Tab {
+    /// Instructions by group.
     #[default]
     Instructions,
+    /// BIOS and DOS interrupts.
     Interrupts,
+    /// Directives and operators.
     Directives,
+    /// The NASM syntax guide.
     Nasm,
+    /// The quick reference (help text).
     Quick,
 }
 
+/// State of the reference window: the tab, the search and the article shown.
 #[derive(Default)]
 pub struct RefState {
     /// Bring the reference to the front (the panels layout shows it as a tab).
     pub raise: bool,
+    /// The tab.
     pub tab: Tab,
+    /// The search text.
     pub search: String,
+    /// The article shown.
     pub topic: Option<Topic>,
     /// Language of the articles and of the editor tooltips (kept in the settings).
     pub lang: Lang,
@@ -44,6 +54,7 @@ impl RefState {
         self.scroll = true;
     }
 
+    /// Shows the tab `tab`.
     pub fn show_tab(&mut self, tab: Tab) {
         self.raise = true;
         self.tab = tab;
@@ -333,6 +344,7 @@ fn instruction_article(ui: &mut Ui, i: usize, l: Lang) {
     code_block(ui, e.example_in(l), l);
 }
 
+/// The flags table of an instruction (O D I T S Z A P C with their effect).
 pub fn flags_table(ui: &mut Ui, flags: &str, l: Lang) {
     let changed = ui.visuals().hyperlink_color;
     let undefined = crate::colors::warn(ui);

@@ -9,19 +9,32 @@
 //! The room is 9 x 6 cells. Moving and turning take time (`MOVE_MS`); examining and switching
 //! lamps complete immediately. A command sent while the robot is busy is rejected (error bit).
 
+/// A cell of the robot's room.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cell {
+    /// Free floor.
     Empty,
+    /// A wall: the robot cannot move there.
     Wall,
-    Lamp { on: bool },
+    /// A lamp the robot can switch on and off.
+    Lamp {
+        /// The lamp is lit.
+        on: bool,
+    },
 }
 
+/// The robot and its room (see the module documentation).
 #[derive(Debug, Clone)]
 pub struct Robot {
+    /// Width of the room in cells (9).
     pub width: usize,
+    /// Height of the room in cells (6).
     pub height: usize,
+    /// The cells, row by row (`y * width + x`).
     pub cells: Vec<Cell>,
+    /// Column of the robot.
     pub x: usize,
+    /// Row of the robot.
     pub y: usize,
     /// 0 = north (up), 1 = east, 2 = south, 3 = west.
     pub dir: u8,
@@ -63,8 +76,11 @@ impl RobotSnapshot {
 /// Duration of a move or a turn, in milliseconds.
 pub const MOVE_MS: f64 = 250.0;
 
+/// Status bit: data from "examine" is ready on port 10.
 pub const STATUS_DATA: u8 = 1;
+/// Status bit: the robot is moving or turning.
 pub const STATUS_BUSY: u8 = 2;
+/// Status bit: the last command failed (a wall, no lamp, sent while busy).
 pub const STATUS_ERROR: u8 = 4;
 
 impl Default for Robot {
@@ -74,6 +90,7 @@ impl Default for Robot {
 }
 
 impl Robot {
+    /// The robot in Emu8086's default room, at (3, 3) facing north.
     pub fn new() -> Self {
         let mut r = Robot {
             width: 9,
@@ -107,6 +124,7 @@ impl Robot {
         self.reset_state();
     }
 
+    /// Empties the room (no walls, no lamps).
     pub fn clear_map(&mut self) {
         self.cells = vec![Cell::Empty; self.width * self.height];
         self.reset_state();
@@ -120,10 +138,12 @@ impl Robot {
         self.busy_ms = 0.0;
     }
 
+    /// The cell at (x, y).
     pub fn get(&self, x: usize, y: usize) -> Cell {
         self.cells[y * self.width + x]
     }
 
+    /// Changes the cell at (x, y) (ignored outside the room).
     pub fn set(&mut self, x: usize, y: usize, c: Cell) {
         if x < self.width && y < self.height {
             let i = y * self.width + x;
@@ -217,19 +237,23 @@ impl Robot {
             .then_some((nx as usize, ny as usize))
     }
 
+    /// The status byte of port 11.
     pub fn status(&self) -> u8 {
         self.status
     }
 
+    /// A move or a turn is in progress.
     pub fn busy(&self) -> bool {
         self.status & STATUS_BUSY != 0
     }
 
+    /// Reads port 10: the result of the last "examine", clearing the data-ready bit.
     pub fn read_data(&mut self) -> u8 {
         self.status &= !STATUS_DATA;
         self.data
     }
 
+    /// A command written to port 9 (see the module documentation).
     pub fn command(&mut self, cmd: u8) {
         if cmd == 0 {
             return;

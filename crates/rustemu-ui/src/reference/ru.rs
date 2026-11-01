@@ -10,8 +10,10 @@ use super::{Directive, Function, Group, Instr, Interrupt, NASM_GUIDE};
 /// Language of the reference window and of the editor tooltips.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 pub enum Lang {
+    /// English.
     #[default]
     En,
+    /// Russian.
     Ru,
 }
 
@@ -73,12 +75,15 @@ impl Instr {
     pub(super) fn ru(&self) -> Option<&'static Text> {
         text(super::ru_instructions::INSTRUCTIONS, self.name)
     }
+    /// The summary in `lang` (English when there is no translation).
     pub fn summary_in(&self, lang: Lang) -> &'static str {
         choose(lang, self.summary, self.ru().map(|t| t.summary))
     }
+    /// The article in `lang`.
     pub fn description_in(&self, lang: Lang) -> &'static str {
         choose(lang, self.description, self.ru().map(|t| t.description))
     }
+    /// The example in `lang` (comments translated).
     pub fn example_in(&self, lang: Lang) -> &'static str {
         choose(lang, self.example, self.ru().map(|t| t.example))
     }
@@ -88,12 +93,15 @@ impl Directive {
     pub(super) fn ru(&self) -> Option<&'static Text> {
         text(super::ru_directives::DIRECTIVES, self.name)
     }
+    /// The summary in `lang` (English when there is no translation).
     pub fn summary_in(&self, lang: Lang) -> &'static str {
         choose(lang, self.summary, self.ru().map(|t| t.summary))
     }
+    /// The article in `lang`.
     pub fn description_in(&self, lang: Lang) -> &'static str {
         choose(lang, self.description, self.ru().map(|t| t.description))
     }
+    /// The example in `lang` (comments translated).
     pub fn example_in(&self, lang: Lang) -> &'static str {
         choose(lang, self.example, self.ru().map(|t| t.example))
     }
@@ -105,12 +113,17 @@ impl Directive {
 
 /// A section of the NASM guide in `lang`.
 pub struct GuideSection {
+    /// Title.
     pub title: &'static str,
+    /// Paragraphs.
     pub text: &'static str,
+    /// Table rows (the first is the header).
     pub table: &'static [&'static [&'static str]],
+    /// Example code.
     pub example: &'static str,
 }
 
+/// Section `i` of the NASM guide in `lang`.
 pub fn nasm_section(i: usize, lang: Lang) -> GuideSection {
     let en = &NASM_GUIDE[i];
     let ru = (lang == Lang::Ru).then(|| super::ru_directives::NASM_GUIDE.get(i)).flatten();
@@ -129,9 +142,11 @@ impl Interrupt {
     pub(super) fn ru(&self) -> Option<&'static Int> {
         super::ru_interrupts::INTERRUPTS.iter().find(|i| i.number == self.number)
     }
+    /// The title in `lang`.
     pub fn title_in(&self, lang: Lang) -> &'static str {
         choose(lang, self.title, self.ru().map(|t| t.title))
     }
+    /// The article in `lang`.
     pub fn description_in(&self, lang: Lang) -> &'static str {
         choose(lang, self.description, self.ru().map(|t| t.description))
     }
@@ -139,13 +154,18 @@ impl Interrupt {
 
 /// A function of interrupt `number` in `lang`.
 pub struct FunctionText {
+    /// Title.
     pub title: &'static str,
+    /// Registers on entry.
     pub input: &'static str,
+    /// Registers on return.
     pub output: &'static str,
+    /// Example code.
     pub example: &'static str,
 }
 
 impl Function {
+    /// The texts of this function of `INT number` in `lang`.
     pub fn text_in(&self, number: u8, lang: Lang) -> FunctionText {
         let ru = super::ru_interrupts::FUNCTIONS.iter().find(|f| f.number == number && f.code == self.code);
         FunctionText {
@@ -158,6 +178,7 @@ impl Function {
 }
 
 impl Group {
+    /// Title of the group in `lang`.
     pub fn title_in(self, lang: Lang) -> &'static str {
         if lang == Lang::En {
             return self.title();

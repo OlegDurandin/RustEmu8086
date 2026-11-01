@@ -157,7 +157,7 @@ pub fn glyph8x8(ch: u8) -> [u8; 8] {
 }
 
 /// 8x16 glyphs of all 256 CP437 characters (MSB = leftmost pixel), for the text modes. From
-/// Unscii 16 by Viznut (public domain, http://viznut.fi/unscii/); 0F, 7F, A9 and F9, which it
+/// Unscii 16 by Viznut (public domain, <http://viznut.fi/unscii/>); 0F, 7F, A9 and F9, which it
 /// lacks, are drawn in the same style.
 const FONT_8X16: [[u8; 16]; 256] = [
     [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], // 00

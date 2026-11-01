@@ -2,10 +2,15 @@
 
 /// Assembler directives and operators.
 pub struct Directive {
+    /// Main name (upper case).
     pub name: &'static str,
+    /// Other names of the same entry.
     pub aliases: &'static [&'static str],
+    /// One line for lists and tooltips.
     pub summary: &'static str,
+    /// The article.
     pub description: &'static str,
+    /// Example code.
     pub example: &'static str,
 }
 
@@ -15,6 +20,7 @@ macro_rules! dir {
     };
 }
 
+/// All directives and operators of the reference.
 pub const DIRECTIVES: &[Directive] = &[
     dir!(
         "ORG",
@@ -217,14 +223,17 @@ pub const DIRECTIVES: &[Directive] = &[
 
 /// A section of the NASM syntax guide (the reference's "NASM syntax" tab).
 pub struct NasmSection {
+    /// Title.
     pub title: &'static str,
     /// Paragraphs separated by blank lines; a line starting with "- " is a list item.
     pub text: &'static str,
     /// A table: the first row is the header (may be empty).
     pub table: &'static [&'static [&'static str]],
+    /// Example code.
     pub example: &'static str,
 }
 
+/// The sections of the NASM syntax guide.
 pub const NASM_GUIDE: &[NasmSection] = &[
     NasmSection {
         title: "Overview",

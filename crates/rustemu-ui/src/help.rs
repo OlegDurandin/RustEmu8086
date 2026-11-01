@@ -1,5 +1,6 @@
 //! Built-in quick reference.
 
+/// The quick reference (keys, syntax, directives), in English.
 pub const HELP: &str = r#"KEYBOARD
   F9 / ⌘E    assemble and load into the emulator
   ⌘B         compile to an executable file (.com/.exe/.bin) + .lst + .symbol

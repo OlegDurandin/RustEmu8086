@@ -15,6 +15,7 @@ impl App {
         self.loaded() && !self.build.failed
     }
 
+    /// Executes one instruction (assembling the editor text first when it changed).
     pub fn single_step(&mut self) {
         if !self.ensure_current_build() {
             return;
@@ -25,6 +26,7 @@ impl App {
         self.handle_event(ev);
     }
 
+    /// Undoes the last instruction (up to the depth of the step-back history).
     pub fn step_back(&mut self) {
         self.run = RunMode::Paused;
         self.begin_exec();
@@ -72,6 +74,7 @@ impl App {
         self.status = "Stepping out...".into();
     }
 
+    /// Runs freely until a breakpoint, an error, the end of the program or Stop.
     pub fn start_run(&mut self) {
         if !self.ensure_current_build() {
             return;
@@ -211,6 +214,7 @@ impl App {
         self.session.machine.breakpoints.contains(&pc) && self.breakpoint_hit(pc)
     }
 
+    /// Stops a run.
     pub fn stop(&mut self) {
         if self.run != RunMode::Paused {
             self.run = RunMode::Paused;
@@ -219,6 +223,7 @@ impl App {
         }
     }
 
+    /// Updates the run state and the status line after the emulator reports `ev`.
     pub fn handle_event(&mut self, ev: Event) {
         self.exec.last_event = Some(ev.clone());
         let m = &self.session.machine;

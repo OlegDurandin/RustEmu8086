@@ -81,6 +81,10 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 ## Соглашения
 - Rust edition 2024, `cargo fmt`, `cargo clippy --workspace` без предупреждений.
 - Комментарии в коде — на английском, документация проекта — на русском.
+- Doc-комментарии обязательны: в библиотечных крейтах `#![warn(missing_docs)]` (с `clippy -D warnings` — ошибка),
+  у каждого модуля `//!`. Описывать смысл и единицы (строка 1-based, физический адрес, байты), а не повторять имя;
+  для очевидных групп (варианты-мнемоники) — описание на типе и `#[allow(missing_docs)]` с причиной. Проверка
+  ссылок: `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items` (есть в CI).
 - Любое изменение CPU — прогонять SingleStepTests; изменение кодировок — `nasm_compare`.
 
 ## Команды
@@ -262,7 +266,7 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       окно) и окном на Mac для разработки. **Нативные iPadOS/Android убраны** (решение 2026-10-28: без Apple
       Developer ID; код — в локальной ветке `archive/native-tablet`, на GitHub не отправлять). Модули: `lib.rs`
       (`TabletApp`, `TabletState`, `tablet_ui`), `theme.rs` (тёмная тема через `FrontEnd::fixed_theme`), `widgets.rs`
-      (иконки, кнопки, карточки), `bars.rs` (верхняя панель: имя файла — меню проекта New / Open from Files / Example library / Save draft / My drafts / Export .asm / Share source — `App::share_source`, `platform::share_file`: Web Share API через `Reflect`, иначе скачивание; Run/Pause/Step/Reset, вкладки, меню ⋮, статус),
+      (иконки, кнопки, карточки), `bars.rs` (верхняя панель: имя файла — меню проекта New / Open from Files / Example library / Save draft / My drafts / Export .asm / Share source — `App::share_source`, `platform::share_file`: Web Share API через `Reflect`, иначе скачивание; Run/Pause/Step/Reset, вкладки, меню ⋮ — в нём и *Virtual drive* = `drive_ui::virtual_drive_menu`, статус),
       `tabs.rs` (раскладка по UX-спецификации V2.2: у вкладки главная область + контекст; альбомная — две колонки,
       портретная/узкая — главная сверху; Editor — исходник ~60% + Output + превью CPU, без дизассемблера; Debugger —
       Last step + Code + инструменты слева, CPU + Output справа, Output становится инструментом, когда не помещается),

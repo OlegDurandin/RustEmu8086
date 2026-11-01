@@ -3,11 +3,14 @@
 
 use egui::{RichText, Ui};
 
+/// State of the multi-base calculator.
 #[derive(Default)]
 pub struct CalcState {
+    /// The expression being typed.
     pub expr: String,
     /// Result width in bytes: 1, 2 or 4.
     pub width: u8,
+    /// Expressions evaluated before, with their values (latest last).
     pub history: Vec<(String, i64)>,
 }
 

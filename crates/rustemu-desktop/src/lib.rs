@@ -2,6 +2,8 @@
 //! The Emu8086-style windows (`ui.rs`, `emulator.rs`) around the shared GUI of `rustemu_ui`; used
 //! by the macOS executable (`main.rs`) and by the web version on large screens.
 
+#![warn(missing_docs)]
+
 mod emulator;
 mod ui;
 #[cfg(test)]
