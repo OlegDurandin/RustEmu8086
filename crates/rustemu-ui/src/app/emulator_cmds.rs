@@ -2,11 +2,12 @@
 //! selected instruction, emulator state, reset.
 
 use super::*;
+use crate::tools::Tool;
 
 impl App {
     /// Linear address of the instruction selected in the disassembly.
     pub fn selected_addr(&self) -> Option<u32> {
-        self.code_selected.map(|(s, o)| rustemu_core::linear(s, o))
+        self.view.code_selected.map(|(s, o)| rustemu_core::linear(s, o))
     }
 
     /// Debug -> run until: runs to the selected instruction (or a breakpoint).
@@ -26,26 +27,26 @@ impl App {
 
     /// Debug -> set CS:IP to selected position.
     pub fn set_cs_ip_to_selected(&mut self) {
-        let Some((seg, off)) = self.code_selected else { return };
+        let Some((seg, off)) = self.view.code_selected else { return };
         self.stop();
         let c = &mut self.session.machine.cpu;
         c.sregs[rustemu_core::cpu::CS] = seg;
         c.ip = off;
         c.halted = false;
-        self.code_view_pinned = false;
+        self.view.code_view_pinned = false;
         self.status = format!("CS:IP = {seg:04X}:{off:04X}");
     }
 
     /// Debug -> show current instruction: the disassembly follows CS:IP again.
     pub fn show_current_instruction(&mut self) {
-        self.code_view_pinned = false;
-        self.code_view_start = self.session.machine.cpu.pc();
+        self.view.code_view_pinned = false;
+        self.view.code_view_start = self.session.machine.cpu.pc();
     }
 
     /// Offset of the first row of the disassembly in the code segment (None: it shows another segment).
     pub fn disasm_offset(&self) -> Option<u16> {
         let base = rustemu_core::linear(self.session.machine.cpu.cs(), 0);
-        self.code_view_start.checked_sub(base).filter(|&o| o <= 0xFFFF).map(|o| o as u16)
+        self.view.code_view_start.checked_sub(base).filter(|&o| o <= 0xFFFF).map(|o| o as u16)
     }
 
     /// Shows the disassembly from `off` in the code segment, from the row the byte belongs to.
@@ -62,8 +63,8 @@ impl App {
                 .len
                 .max(1);
         }
-        self.code_view_start = rustemu_core::linear(cs, row as u16);
-        self.code_view_pinned = true;
+        self.view.code_view_start = rustemu_core::linear(cs, row as u16);
+        self.view.code_view_pinned = true;
     }
 
     /// Scrolls the disassembly by `rows` rows (negative: up) within the code segment. The list
@@ -83,30 +84,31 @@ impl App {
                 off = self.disasm_offset().unwrap_or(0);
             }
         }
-        self.code_view_start = rustemu_core::linear(cs, off);
-        self.code_view_pinned = true;
+        self.view.code_view_start = rustemu_core::linear(cs, off);
+        self.view.code_view_pinned = true;
     }
 
     /// Debug -> show current break point: shows the next breakpoint after the shown one.
     pub fn show_next_breakpoint(&mut self) {
         let mut bps: Vec<u32> = self.session.machine.breakpoints.iter().copied().collect();
         bps.sort_unstable();
-        let from = if self.code_view_pinned { self.code_view_start + 1 } else { 0 };
+        let from = if self.view.code_view_pinned { self.view.code_view_start + 1 } else { 0 };
         let Some(&a) = bps.iter().find(|&&a| a >= from).or(bps.first()) else { return };
-        self.code_view_start = a;
-        self.code_view_pinned = true;
+        self.view.code_view_start = a;
+        self.view.code_view_pinned = true;
         let cs = self.session.machine.cpu.cs();
         let off = a.wrapping_sub(rustemu_core::linear(cs, 0));
-        self.code_selected = Some(if off <= 0xFFFF { (cs, off as u16) } else { ((a >> 4) as u16, (a & 15) as u16) });
+        self.view.code_selected =
+            Some(if off <= 0xFFFF { (cs, off as u16) } else { ((a >> 4) as u16, (a & 15) as u16) });
     }
 
     /// File -> save the emulator's state (kept until the application is closed).
     pub fn save_emulator_state(&mut self) {
-        self.saved_state = Some(SavedState {
+        self.program.saved_state = Some(SavedState {
             session: self.session.save_state(),
-            source_files: self.source_files.clone(),
-            source_index: self.source_index.clone(),
-            loaded_text: self.loaded_text.clone(),
+            source_files: self.program.files.clone(),
+            source_index: self.program.index.clone(),
+            loaded_text: self.program.text.clone(),
         });
         let c = &self.session.machine.cpu;
         self.status = format!("Emulator state saved at {:04X}:{:04X}", c.cs(), c.ip);
@@ -114,22 +116,22 @@ impl App {
 
     /// File -> load from previous state.
     pub fn load_emulator_state(&mut self) {
-        let Some(s) = self.saved_state.clone() else { return };
+        let Some(s) = self.program.saved_state.clone() else { return };
         self.stop();
         self.session.restore_state(s.session);
-        self.source_files = s.source_files;
-        self.source_index = s.source_index;
-        self.loaded_text = s.loaded_text;
-        self.build_failed = false;
-        self.load_gen += 1;
-        for w in &mut self.watches {
+        self.program.files = s.source_files;
+        self.program.index = s.source_index;
+        self.program.text = s.loaded_text;
+        self.build.failed = false;
+        self.program.generation += 1;
+        for w in &mut self.debugger.watches {
             w.compiled = None;
         }
-        self.stop_condition.compiled = None;
+        self.debugger.stop_condition.compiled = None;
         self.sync_breakpoints();
-        self.prev_cpu = self.session.machine.cpu.clone();
-        self.prev_fpu = self.session.machine.sys.fpu.clone();
-        self.code_view_pinned = false;
+        self.exec.prev_cpu = self.session.machine.cpu.clone();
+        self.exec.prev_fpu = self.session.machine.sys.fpu.clone();
+        self.view.code_view_pinned = false;
         let c = &self.session.machine.cpu;
         self.status = format!("Emulator state restored - CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
     }
@@ -138,14 +140,14 @@ impl App {
     pub fn reset_emulator_and_ram(&mut self) {
         self.run = RunMode::Paused;
         self.session.unload();
-        self.source_files.clear();
-        self.source_index.clear();
-        self.loaded_text = None;
-        self.bp_addr.clear();
-        self.prev_cpu = self.session.machine.cpu.clone();
-        self.prev_fpu = self.session.machine.sys.fpu.clone();
-        self.code_selected = None;
-        self.code_view_pinned = false;
+        self.program.files.clear();
+        self.program.index.clear();
+        self.program.text = None;
+        self.debugger.bp_addr.clear();
+        self.exec.prev_cpu = self.session.machine.cpu.clone();
+        self.exec.prev_fpu = self.session.machine.sys.fpu.clone();
+        self.view.code_selected = None;
+        self.view.code_view_pinned = false;
         self.status = "Emulator and RAM reset".into();
     }
 
@@ -174,11 +176,11 @@ impl App {
     /// File -> close the emulator.
     pub fn close_emulator(&mut self) {
         self.stop();
-        self.windows.emulator = false;
+        self.windows[Tool::Emulator] = false;
     }
 
     pub fn toggle_breakpoint_at_cursor(&mut self) {
-        self.toggle_breakpoint_at_line(0, self.cursor_line);
+        self.toggle_breakpoint_at_line(0, self.editor.cursor_line);
     }
 
     /// Maps line breakpoints to addresses of the loaded program (address breakpoints set in the
@@ -188,15 +190,15 @@ impl App {
             return;
         }
         let bps = &mut self.session.machine.breakpoints;
-        bps.retain(|a| !self.bp_addr.contains_key(a));
-        self.bp_addr.clear();
-        for (&(f, l), bp) in &mut self.bp_lines {
+        bps.retain(|a| !self.debugger.bp_addr.contains_key(a));
+        self.debugger.bp_addr.clear();
+        for (&(f, l), bp) in &mut self.debugger.bp_lines {
             bp.compiled = None;
             if !bp.enabled {
                 continue;
             }
             for a in self.session.addrs_of_line(f, l) {
-                self.bp_addr.insert(a, (f, l));
+                self.debugger.bp_addr.insert(a, (f, l));
                 self.session.machine.breakpoints.insert(a);
             }
         }

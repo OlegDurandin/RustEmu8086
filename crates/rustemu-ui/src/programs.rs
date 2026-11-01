@@ -60,26 +60,26 @@ pub fn program_name(name: &str) -> Option<String> {
 impl App {
     /// Saves the editor text as program `name` of "my programs" (replacing one of that name).
     pub fn save_program(&mut self, name: &str) {
-        self.programs.insert(name.to_string(), StoredProgram { text: self.text.clone(), modified: now() });
-        self.program = Some(name.to_string());
-        self.doc_name = Some(name.to_string());
-        self.example_key = None;
-        self.saved_text = self.text.clone();
+        self.web.programs.insert(name.to_string(), StoredProgram { text: self.doc.text.clone(), modified: now() });
+        self.doc.program = Some(name.to_string());
+        self.doc.name = Some(name.to_string());
+        self.doc.example_key = None;
+        self.doc.saved_text = self.doc.text.clone();
         self.status = format!("Saved {name} in this browser");
     }
 
     /// Opens program `name` of "my programs" in the editor.
     pub fn open_program(&mut self, name: &str) {
-        let Some(text) = self.programs.get(name).map(|p| p.text.clone()) else { return };
+        let Some(text) = self.web.programs.get(name).map(|p| p.text.clone()) else { return };
         self.store_session();
-        self.path = None;
-        self.example_key = None;
-        self.program = Some(name.to_string());
-        self.doc_name = Some(name.to_string());
-        self.opened_from_link = false;
-        self.text = text;
-        self.saved_text = self.text.clone();
-        self.messages.clear();
+        self.doc.path = None;
+        self.doc.example_key = None;
+        self.doc.program = Some(name.to_string());
+        self.doc.name = Some(name.to_string());
+        self.doc.from_link = false;
+        self.doc.text = text;
+        self.doc.saved_text = self.doc.text.clone();
+        self.build.messages.clear();
         self.clear_errors();
         self.restore_session();
         self.status = format!("Opened {name}");
@@ -91,7 +91,7 @@ impl App {
         let base = program_name(name).unwrap_or_else(|| "upload.asm".into());
         let mut name = base.clone();
         for n in 2.. {
-            if self.programs.get(&name).is_none_or(|p| p.text == text) {
+            if self.web.programs.get(&name).is_none_or(|p| p.text == text) {
                 break;
             }
             name = match base.rsplit_once('.') {
@@ -99,35 +99,35 @@ impl App {
                 None => format!("{base} ({n})"),
             };
         }
-        self.programs.insert(name.clone(), StoredProgram { text, modified: now() });
+        self.web.programs.insert(name.clone(), StoredProgram { text, modified: now() });
         self.open_program(&name);
     }
 
     pub fn delete_program(&mut self, name: &str) {
-        self.programs.remove(name);
-        if self.program.as_deref() == Some(name) {
-            self.program = None;
+        self.web.programs.remove(name);
+        if self.doc.program.as_deref() == Some(name) {
+            self.doc.program = None;
         }
         self.status = format!("Deleted {name}");
     }
 
     /// Names of the programs, last saved first.
     pub fn recent_programs(&self) -> Vec<String> {
-        let mut list: Vec<(&String, f64)> = self.programs.iter().map(|(n, p)| (n, p.modified)).collect();
+        let mut list: Vec<(&String, f64)> = self.web.programs.iter().map(|(n, p)| (n, p.modified)).collect();
         list.sort_by(|a, b| b.1.total_cmp(&a.1));
         list.into_iter().map(|(n, _)| n.clone()).collect()
     }
 
     pub(crate) fn persist_browser(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Ok(programs) = ron::ser::to_string(&self.programs) {
+        if let Ok(programs) = ron::ser::to_string(&self.web.programs) {
             self.put(storage, PROGRAMS_KEY, programs);
         }
         let draft = Draft {
-            name: self.doc_name.clone(),
-            program: self.program.clone(),
-            example: self.example_key.clone(),
-            text: self.text.clone(),
-            saved: (self.saved_text != self.text).then(|| self.saved_text.clone()),
+            name: self.doc.name.clone(),
+            program: self.doc.program.clone(),
+            example: self.doc.example_key.clone(),
+            text: self.doc.text.clone(),
+            saved: (self.doc.saved_text != self.doc.text).then(|| self.doc.saved_text.clone()),
             from_link: self.from_link(),
         };
         if let Ok(draft) = ron::ser::to_string(&draft) {
@@ -137,22 +137,22 @@ impl App {
 
     /// Restores "my programs" and the editor of the last visit (the browser).
     pub fn restore_browser(&mut self, storage: &dyn eframe::Storage) {
-        if !self.browser {
+        if !self.front.browser {
             return;
         }
         if let Some(programs) = eframe::get_value(storage, PROGRAMS_KEY) {
-            self.programs = programs;
+            self.web.programs = programs;
         }
         let Some(d) = eframe::get_value::<Draft>(storage, DRAFT_KEY) else { return };
-        self.path = None;
-        self.program = d.program.filter(|p| self.programs.contains_key(p));
-        self.doc_name = d.name;
-        self.opened_from_link = d.from_link;
-        self.link_notice_pending = d.from_link;
-        self.example_key = d.example;
-        self.saved_text = d.saved.unwrap_or_else(|| d.text.clone());
-        self.text = d.text;
-        self.messages.clear();
+        self.doc.path = None;
+        self.doc.program = d.program.filter(|p| self.web.programs.contains_key(p));
+        self.doc.name = d.name;
+        self.doc.from_link = d.from_link;
+        self.web.link_notice_pending = d.from_link;
+        self.doc.example_key = d.example;
+        self.doc.saved_text = d.saved.unwrap_or_else(|| d.text.clone());
+        self.doc.text = d.text;
+        self.build.messages.clear();
         self.clear_errors();
         self.restore_session();
         self.status = if self.dirty() {
@@ -164,20 +164,6 @@ impl App {
 }
 
 /// Window "my programs" (the browser).
-pub fn programs_window(app: &mut App, ctx: &egui::Context) {
-    if !app.browser {
-        app.windows.programs = false;
-        return;
-    }
-    let mut open = app.windows.programs;
-    egui::Window::new("my programs")
-        .open(&mut open)
-        .default_size([460.0, 360.0])
-        .default_pos(egui::pos2(480.0, 120.0))
-        .show(ctx, |ui| programs_ui(app, ui));
-    app.windows.programs &= open;
-}
-
 fn ago(secs: f64) -> String {
     let s = secs.max(0.0) as u64;
     match s {
@@ -188,7 +174,7 @@ fn ago(secs: f64) -> String {
     }
 }
 
-fn programs_ui(app: &mut App, ui: &mut Ui) {
+pub(crate) fn programs_ui(app: &mut App, ui: &mut Ui) {
     ui.label("Programs saved in this browser. Save (⌘S) puts the program in the editor here.");
     ui.horizontal(|ui| {
         if ui
@@ -205,7 +191,7 @@ fn programs_ui(app: &mut App, ui: &mut Ui) {
         }
     });
     ui.separator();
-    if app.programs.is_empty() {
+    if app.web.programs.is_empty() {
         ui.weak("No programs yet: save the program in the editor or upload one.");
         return;
     }
@@ -219,8 +205,8 @@ fn programs_ui(app: &mut App, ui: &mut Ui) {
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
         egui::Grid::new("programs_grid").num_columns(4).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
             for name in app.recent_programs() {
-                let p = &app.programs[&name];
-                let current = app.program.as_deref() == Some(name.as_str());
+                let p = &app.web.programs[&name];
+                let current = app.doc.program.as_deref() == Some(name.as_str());
                 if ui.selectable_label(current, RichText::new(&name).monospace()).on_hover_text("open").clicked()
                     && !current
                 {
@@ -230,18 +216,18 @@ fn programs_ui(app: &mut App, ui: &mut Ui) {
                 if ui.small_button("download").clicked() {
                     act = Some(Act::Download(name.clone()));
                 }
-                if app.program_delete.as_deref() == Some(name.as_str()) {
+                if app.dialogs.program_delete.as_deref() == Some(name.as_str()) {
                     ui.horizontal(|ui| {
                         ui.colored_label(crate::colors::error(ui), "delete?");
                         if ui.small_button("yes").clicked() {
                             act = Some(Act::Delete(name.clone()));
                         }
                         if ui.small_button("no").clicked() {
-                            app.program_delete = None;
+                            app.dialogs.program_delete = None;
                         }
                     });
                 } else if ui.small_button("delete…").clicked() {
-                    app.program_delete = Some(name.clone());
+                    app.dialogs.program_delete = Some(name.clone());
                 }
                 ui.end_row();
             }
@@ -249,9 +235,9 @@ fn programs_ui(app: &mut App, ui: &mut Ui) {
     });
     match act {
         Some(Act::Open(name)) => app.guarded(PendingAction::Program(name)),
-        Some(Act::Download(name)) => crate::platform::download(&name, app.programs[&name].text.as_bytes()),
+        Some(Act::Download(name)) => crate::platform::download(&name, app.web.programs[&name].text.as_bytes()),
         Some(Act::Delete(name)) => {
-            app.program_delete = None;
+            app.dialogs.program_delete = None;
             app.delete_program(&name);
         }
         None => {}
@@ -260,7 +246,7 @@ fn programs_ui(app: &mut App, ui: &mut Ui) {
 
 /// "save in this browser": asks for the name of a new program.
 pub fn save_name_dialog(app: &mut App, ctx: &egui::Context) {
-    let Some(mut d) = app.save_name.take() else { return };
+    let Some(mut d) = app.dialogs.save_name.take() else { return };
     let mut keep = true;
     egui::Window::new("save in this browser")
         .collapsible(false)
@@ -274,7 +260,7 @@ pub fn save_name_dialog(app: &mut App, ctx: &egui::Context) {
                 None => {
                     ui.colored_label(crate::colors::error(ui), "enter a file name");
                 }
-                Some(n) if app.programs.contains_key(n) && app.program.as_ref() != Some(n) => {
+                Some(n) if app.web.programs.contains_key(n) && app.doc.program.as_ref() != Some(n) => {
                     ui.colored_label(crate::colors::warn(ui), format!("replaces the saved {n}"));
                 }
                 Some(_) => {
@@ -298,6 +284,6 @@ pub fn save_name_dialog(app: &mut App, ctx: &egui::Context) {
             });
         });
     if keep {
-        app.save_name = Some(d);
+        app.dialogs.save_name = Some(d);
     }
 }

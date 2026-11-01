@@ -176,7 +176,7 @@ mod web {
                     options,
                     Box::new(move |cc| {
                         let mut app = App::new(cc);
-                        app.share_base = Some(share_base);
+                        app.front.share_base = Some(share_base);
                         if let Some(shared) = link {
                             // A share link (asks first about unsaved changes of the last visit).
                             app.open_link(shared);
@@ -199,7 +199,7 @@ mod web {
                         }
                         if !storage_ok {
                             // Writes fail from now on; this notice says it already.
-                            app.storage_warned = true;
+                            app.store.warned = true;
                             app.notice(
                                 "Browser storage",
                                 "This browser does not let the page keep data (private browsing?): programs, \

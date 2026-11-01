@@ -8,6 +8,7 @@ use crate::Tab;
 use crate::TabletState;
 use crate::theme::pal;
 use crate::widgets::{Icon, badge, icon_button, paint_icon, small_icon};
+use rustemu_ui::tools::Tool;
 
 // ---- execution commands ------------------------------------------------------------------------
 
@@ -123,7 +124,7 @@ pub(crate) fn tabs_row(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
                 t.keypad.open = !t.keypad.open;
             }
             if small_icon(ui, Icon::Share, "share link").clicked() {
-                app.share = Some(rustemu_ui::share::ShareDialog { run: false });
+                app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
             }
             if app.is_stale() {
                 ui.colored_label(pal::AMBER, "edited since the last build — Run / Step / Reset assemble again");
@@ -142,7 +143,7 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
         app.guarded(PendingAction::Open(None));
         ui.close();
     }
-    ui.menu_button("Examples", |ui| rustemu_ui::windows::examples_menu(app, ui, false));
+    ui.menu_button("Examples", |ui| rustemu_ui::examples_ui::examples_menu(app, ui, false));
     if ui.button("Save").clicked() {
         app.save();
         ui.close();
@@ -151,12 +152,12 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
         app.save_as();
         ui.close();
     }
-    if app.browser && ui.button("Download").clicked() {
+    if app.front.browser && ui.button("Download").clicked() {
         app.download_source();
         ui.close();
     }
     if ui.button("Share link…").clicked() {
-        app.share = Some(rustemu_ui::share::ShareDialog { run: false });
+        app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
         ui.close();
     }
     ui.separator();
@@ -184,36 +185,36 @@ fn main_menu(app: &mut App, ui: &mut Ui) {
     ui.separator();
     let memory_drive = app.session.machine.dos_memory_drive().is_some();
     let w = &mut app.windows;
-    ui.checkbox(&mut w.devices, "Virtual devices");
+    ui.checkbox(&mut w[Tool::Devices], "Virtual devices");
     if memory_drive {
-        ui.checkbox(&mut w.drive, "Drive C: files");
+        ui.checkbox(&mut w[Tool::Drive], "Drive C: files");
     }
-    ui.checkbox(&mut w.vars, "Variables");
-    ui.checkbox(&mut w.symbols, "Symbol table");
-    ui.checkbox(&mut w.listing, "Listing");
-    ui.checkbox(&mut w.alu, "ALU");
-    ui.checkbox(&mut w.fpu, "FPU");
-    ui.checkbox(&mut w.stop_condition, "Stop on condition");
-    ui.checkbox(&mut w.console, "Debug console");
+    ui.checkbox(&mut w[Tool::Vars], "Variables");
+    ui.checkbox(&mut w[Tool::Symbols], "Symbol table");
+    ui.checkbox(&mut w[Tool::Listing], "Listing");
+    ui.checkbox(&mut w[Tool::Alu], "ALU");
+    ui.checkbox(&mut w[Tool::Fpu], "FPU");
+    ui.checkbox(&mut w[Tool::StopCondition], "Stop on condition");
+    ui.checkbox(&mut w[Tool::Console], "Debug console");
     ui.separator();
     if ui.button("Reference").clicked() {
-        app.reference.open = true;
+        app.windows[Tool::Reference] = true;
         ui.close();
     }
     if ui.button("Calculator").clicked() {
-        app.calculator.open = true;
+        app.windows[Tool::Calculator] = true;
         ui.close();
     }
     let w = &mut app.windows;
-    ui.checkbox(&mut w.converter, "Base converter");
-    ui.checkbox(&mut w.ascii, "ASCII codes");
-    if app.can_switch_layout && ui.button("Desktop layout").clicked() {
-        app.switch_layout = true;
+    ui.checkbox(&mut w[Tool::Converter], "Base converter");
+    ui.checkbox(&mut w[Tool::Ascii], "ASCII codes");
+    if app.front.can_switch_layout && ui.button("Desktop layout").clicked() {
+        app.front.switch_layout = true;
         ui.close();
     }
-    ui.menu_button("Options", |ui| rustemu_ui::windows::options_menu(app, ui));
+    ui.menu_button("Options", |ui| rustemu_ui::dialogs::options_menu(app, ui));
     if ui.button("About").clicked() {
-        app.windows.about = true;
+        app.windows[Tool::About] = true;
         ui.close();
     }
 }

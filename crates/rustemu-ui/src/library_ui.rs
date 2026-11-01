@@ -8,7 +8,6 @@ use crate::highlight::{Palette, highlight};
 
 #[derive(Default)]
 pub struct LibraryState {
-    pub open: bool,
     /// Bring the library to the front (the panels layout shows it as a tab).
     pub raise: bool,
     pub selected: Option<String>,
@@ -29,7 +28,6 @@ impl LibraryState {
         let u = name.to_ascii_uppercase();
         let line = self.index().iter().find(|e| e.name == u).map(|e| e.line);
         if let Some(l) = line {
-            self.open = true;
             self.raise = true;
             self.selected = Some(u);
             self.scroll_to = Some(l);
@@ -49,19 +47,6 @@ pub fn title(e: &Entry) -> String {
         EntryKind::Macro => format!("macro {} {}", e.name, e.params),
         EntryKind::Proc => format!("procedure {}  (CALL {})", e.name, e.name),
     }
-}
-
-pub fn library_window(app: &mut App, ctx: &egui::Context) {
-    if app.panels() {
-        return;
-    }
-    let mut open = app.library.open;
-    egui::Window::new("emu8086.inc library")
-        .open(&mut open)
-        .default_pos(egui::pos2(160.0, 100.0))
-        .default_size([860.0, 560.0])
-        .show(ctx, |ui| library_ui(app, ui));
-    app.library.open = open;
 }
 
 pub(crate) fn library_ui(app: &mut App, ui: &mut Ui) {

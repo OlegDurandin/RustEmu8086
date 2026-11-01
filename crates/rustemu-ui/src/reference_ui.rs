@@ -18,7 +18,6 @@ pub enum Tab {
 
 #[derive(Default)]
 pub struct RefState {
-    pub open: bool,
     /// Bring the reference to the front (the panels layout shows it as a tab).
     pub raise: bool,
     pub tab: Tab,
@@ -33,7 +32,6 @@ pub struct RefState {
 impl RefState {
     /// Opens the window at the article `t`.
     pub fn show(&mut self, t: Topic) {
-        self.open = true;
         self.raise = true;
         self.tab = match t {
             Topic::Instr(_) => Tab::Instructions,
@@ -47,20 +45,9 @@ impl RefState {
     }
 
     pub fn show_tab(&mut self, tab: Tab) {
-        self.open = true;
         self.raise = true;
         self.tab = tab;
     }
-}
-
-pub fn reference_window(st: &mut RefState, ctx: &egui::Context) {
-    let mut open = st.open;
-    egui::Window::new("reference")
-        .open(&mut open)
-        .default_pos(egui::pos2(140.0, 80.0))
-        .default_size([880.0, 580.0])
-        .show(ctx, |ui| reference_ui(st, ui));
-    st.open = open;
 }
 
 pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
@@ -257,7 +244,7 @@ fn nasm_article(ui: &mut Ui, i: usize, l: Lang) {
         ui.add_space(6.0);
         for line in paragraph.lines() {
             match line.strip_prefix("- ") {
-                Some(item) => crate::windows::bullet(ui, item),
+                Some(item) => crate::utility::bullet(ui, item),
                 None => {
                     ui.label(line);
                 }

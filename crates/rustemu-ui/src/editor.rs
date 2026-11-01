@@ -5,23 +5,24 @@ use egui::{Align, Color32, FontId, Rect, RichText, Sense, Stroke, TextEdit, Ui, 
 
 use crate::app::App;
 use crate::highlight::Palette;
+use crate::tools::Tool;
 
 pub fn editor(app: &mut App, ui: &mut Ui) {
     let font = FontId::monospace(app.settings.font_size);
     let row_h = ui.fonts_mut(|f| f.row_height(&font));
     let char_w = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
-    let lines = app.text.split('\n').count().max(1);
+    let lines = app.doc.text.split('\n').count().max(1);
     let digits = lines.to_string().len().max(3);
     // Breakpoint column (16 px), bookmark bar, line numbers.
     let gutter_w = digits as f32 * char_w + 34.0;
     let pal = Palette::for_theme(ui.visuals().dark_mode);
     let id = ui.make_persistent_id("source_editor");
-    let error_lines = app.error_lines.clone();
-    if let Some(line) = app.goto_line.take() {
-        let idx = crate::find::line_start_char(&app.text, line);
-        app.pending_select = Some((idx, idx));
+    let error_lines = app.build.error_lines.clone();
+    if let Some(line) = app.editor.goto_line.take() {
+        let idx = crate::find::line_start_char(&app.doc.text, line);
+        app.editor.pending_select = Some((idx, idx));
     }
-    let select = app.pending_select.take();
+    let select = app.editor.pending_select.take();
     // Line of the current instruction (strong) or of the statement that called the macro (soft).
     let exec_line = exec_line(app);
 
@@ -32,11 +33,11 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                 ui.allocate_exact_size(vec2(gutter_w, row_h * lines as f32 + 8.0), Sense::click());
 
             let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
-                let job = app.highlighter.job(buf.as_str(), &font, &pal);
+                let job = app.editor.highlighter.job(buf.as_str(), &font, &pal);
                 ui.fonts_mut(|f| f.layout_job(job))
             };
-            let marks = !app.bp_lines.is_empty() || !app.bookmarks.is_empty();
-            let mut text = Tracked { text: &mut app.text, before: None, track: marks };
+            let marks = !app.debugger.bp_lines.is_empty() || !app.editor.bookmarks.is_empty();
+            let mut text = Tracked { text: &mut app.doc.text, before: None, track: marks };
             let out = TextEdit::multiline(&mut text)
                 .id(id)
                 .font(font.clone())
@@ -64,7 +65,7 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
             for i in first..last {
                 let y = top + i as f32 * row_h;
                 let n = i as u32 + 1;
-                if let Some(bp) = app.bp_lines.get(&(0, n)) {
+                if let Some(bp) = app.debugger.bp_lines.get(&(0, n)) {
                     painter.circle_filled(
                         pos2(gutter_rect.left() + 8.0, y + row_h / 2.0),
                         (row_h * 0.3).min(5.5),
@@ -74,7 +75,7 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                 if let Some((l, strong)) = exec_line
                     && l == n
                 {
-                    let c = app.current_line_color.unwrap_or_else(|| crate::colors::info(ui));
+                    let c = app.editor.current_line_color.unwrap_or_else(|| crate::colors::info(ui));
                     let band = Rect::from_min_max(pos2(gutter_rect.right() - 2.0, y), pos2(clip.right(), y + row_h));
                     painter_full(ui).rect_filled(band, 0.0, c.gamma_multiply(if strong { 0.28 } else { 0.12 }));
                     if strong {
@@ -87,7 +88,7 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                         );
                     }
                 }
-                if app.bookmarks.contains(&n) {
+                if app.editor.bookmarks.contains(&n) {
                     painter.rect_filled(
                         Rect::from_min_size(pos2(gutter_rect.left() + 17.0, y + 2.0), vec2(4.0, row_h - 4.0)),
                         2.0,
@@ -128,7 +129,7 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
             // Keep the current instruction in view when execution stops somewhere else.
             if app.run == crate::app::RunMode::Paused
                 && let Some((l, _)) = exec_line
-                && app.editor_exec_line != Some(l)
+                && app.editor.exec_line != Some(l)
             {
                 let y = top + (l - 1) as f32 * row_h;
                 let r = Rect::from_min_size(pos2(gutter_rect.left(), y), vec2(10.0, row_h));
@@ -136,17 +137,17 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                     ui.scroll_to_rect(r, Some(Align::Center));
                 }
             }
-            app.editor_exec_line = exec_line.map(|(l, _)| l);
+            app.editor.exec_line = exec_line.map(|(l, _)| l);
 
             // The parts of lines the errors are about: a wavy underline.
             let red = Color32::from_rgb(230, 60, 60);
-            for &(line, col, len) in &app.error_spans {
-                let Some(text) = app.text.split('\n').nth(line as usize - 1) else { continue };
+            for &(line, col, len) in &app.build.error_spans {
+                let Some(text) = app.doc.text.split('\n').nth(line as usize - 1) else { continue };
                 let n = text.chars().count();
                 if col >= n {
                     continue;
                 }
-                let start = crate::find::line_start_char(&app.text, line) + col;
+                let start = crate::find::line_start_char(&app.doc.text, line) + col;
                 let a = out.galley.pos_from_cursor(CCursor::new(start));
                 let b = out.galley.pos_from_cursor(CCursor::new(start + len.min(n - col)));
                 let y = out.galley_pos.y + a.bottom() - 1.0;
@@ -157,20 +158,20 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
             hover_help(app, ui, &out);
 
             if let Some(old) = old_text
-                && old != app.text
+                && old != app.doc.text
             {
                 move_line_marks(app, &old);
             }
 
             // Undo / redo requested from the Edit menu.
-            if let Some(undo) = app.pending_undo.take() {
+            if let Some(undo) = app.editor.pending_undo.take() {
                 let mut state = out.state.clone();
                 let mut undoer = state.undoer();
                 let range = state.cursor.char_range().unwrap_or_default();
-                let current = (range, app.text.clone());
+                let current = (range, app.doc.text.clone());
                 let restored = if undo { undoer.undo(&current) } else { undoer.redo(&current) }.cloned();
                 if let Some((r, text)) = restored {
-                    app.text = text;
+                    app.doc.text = text;
                     state.cursor.set_char_range(Some(r));
                 }
                 state.set_undoer(undoer);
@@ -179,9 +180,9 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
 
             if let Some(r) = &out.cursor_range {
                 let idx = r.primary.index.0;
-                app.cursor_line = app.text.chars().take(idx).filter(|&c| c == '\n').count() as u32 + 1;
+                app.editor.cursor_line = app.doc.text.chars().take(idx).filter(|&c| c == '\n').count() as u32 + 1;
                 let (a, b) = (r.primary.index.0, r.secondary.index.0);
-                app.selection = (a.min(b), a.max(b));
+                app.editor.selection = (a.min(b), a.max(b));
             }
 
             if let Some((start, end)) = select {
@@ -189,8 +190,8 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                 state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(start), CCursor::new(end))));
                 state.store(ui.ctx(), id);
                 out.response.request_focus();
-                app.selection = (start, end);
-                let line = app.text.chars().take(start).filter(|&c| c == '\n').count() as u32 + 1;
+                app.editor.selection = (start, end);
+                let line = app.doc.text.chars().take(start).filter(|&c| c == '\n').count() as u32 + 1;
                 let y = top + (line.saturating_sub(1)) as f32 * row_h;
                 ui.scroll_to_rect(
                     Rect::from_min_size(pos2(gutter_rect.left(), y), vec2(10.0, row_h)),
@@ -257,10 +258,10 @@ fn painter_full(ui: &Ui) -> egui::Painter {
 /// Editor line of the current instruction: `(line, true)`, or `(line, false)` for the statement
 /// that invoked the macro / library code being executed. None while the program is outdated.
 fn exec_line(app: &App) -> Option<(u32, bool)> {
-    if !app.loaded() || app.source_files.is_empty() || app.is_stale() {
+    if !app.loaded() || app.program.files.is_empty() || app.is_stale() {
         return None;
     }
-    let v = app.session.current_view(app.show_macro_code)?;
+    let v = app.session.current_view(app.settings.show_macro_code)?;
     if v.file == 0 {
         Some((v.line, true))
     } else if v.statement.0 == 0 {
@@ -300,13 +301,13 @@ pub fn line_mapper(old: &str, new: &str) -> impl Fn(u32) -> Option<u32> {
 
 /// Moves breakpoints and bookmarks of the edited file with their lines.
 fn move_line_marks(app: &mut App, old: &str) {
-    let map = line_mapper(old, &app.text);
-    let bps = std::mem::take(&mut app.bp_lines);
-    app.bp_lines = bps
+    let map = line_mapper(old, &app.doc.text);
+    let bps = std::mem::take(&mut app.debugger.bp_lines);
+    app.debugger.bp_lines = bps
         .into_iter()
         .filter_map(|((f, l), bp)| if f == 0 { map(l).map(|l| ((0, l), bp)) } else { Some(((f, l), bp)) })
         .collect();
-    app.bookmarks = app.bookmarks.iter().filter_map(|&l| map(l)).collect();
+    app.editor.bookmarks = app.editor.bookmarks.iter().filter_map(|&l| map(l)).collect();
 }
 
 /// Right-click menu of the editor: breakpoints, run to cursor, watches, reference.
@@ -317,22 +318,23 @@ fn context_menu(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput, t
     {
         let line = ((p.y - top) / row_h).floor().max(0.0) as u32 + 1;
         let ci = out.galley.cursor_from_pos(p - out.galley_pos).index.0;
-        let word = word_at(&app.text, ci).map(|(w, _)| w).unwrap_or_default();
+        let word = word_at(&app.doc.text, ci).map(|(w, _)| w).unwrap_or_default();
         ui.data_mut(|d| d.insert_temp(id, (line, word)));
     }
     out.response.response.clone().context_menu(|ui| {
-        let (line, word) = ui.data(|d| d.get_temp::<(u32, String)>(id)).unwrap_or((app.cursor_line, String::new()));
+        let (line, word) =
+            ui.data(|d| d.get_temp::<(u32, String)>(id)).unwrap_or((app.editor.cursor_line, String::new()));
         if ui.button(format!("Run to line {line}          F4")).clicked() {
             app.run_to_line(0, line);
             ui.close();
         }
-        let has_bp = app.bp_lines.contains_key(&(0, line));
+        let has_bp = app.debugger.bp_lines.contains_key(&(0, line));
         if ui.button(if has_bp { "Remove breakpoint      ⌘F8" } else { "Add breakpoint         ⌘F8" }).clicked() {
             app.toggle_breakpoint_at_line(0, line);
             ui.close();
         }
         if has_bp && ui.button("Breakpoint condition…").clicked() {
-            app.windows.breakpoints = true;
+            app.windows[Tool::Breakpoints] = true;
             ui.close();
         }
         if !word.is_empty() && !word.starts_with(|c: char| c.is_ascii_digit()) {
@@ -390,7 +392,7 @@ fn word_at(text: &str, ci: usize) -> Option<(String, usize)> {
 
 /// Tooltip with a summary of an instruction, directive or interrupt; Cmd-click opens the reference.
 fn reference_hover(app: &mut App, ci: usize, out: &egui::text_edit::TextEditOutput, cmd_click: bool) {
-    let Some(topic) = crate::reference::topic_at(&app.text, ci) else { return };
+    let Some(topic) = crate::reference::topic_at(&app.doc.text, ci) else { return };
     let (title, details) = topic.tooltip(app.reference.lang);
     out.response.response.clone().on_hover_ui_at_pointer(|ui| {
         ui.set_max_width(460.0);
@@ -407,9 +409,9 @@ fn reference_hover(app: &mut App, ci: usize, out: &egui::text_edit::TextEditOutp
 fn hover_help(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput) {
     let Some(pos) = out.response.hover_pos() else { return };
     let ci = out.galley.cursor_from_pos(pos - out.galley_pos).index.0;
-    let Some((word, line)) = word_at(&app.text, ci) else { return };
+    let Some((word, line)) = word_at(&app.doc.text, ci) else { return };
     let upper = word.to_ascii_uppercase();
-    let line_text = app.text.lines().nth(line - 1).unwrap_or("").to_ascii_lowercase();
+    let line_text = app.doc.text.lines().nth(line - 1).unwrap_or("").to_ascii_lowercase();
     let cmd_click = out.response.clicked() && ui.input(|i| i.modifiers.command);
     if line_text.contains("include") && line_text.contains("emu8086") {
         out.response.response.clone().on_hover_ui_at_pointer(|ui| {
@@ -417,13 +419,13 @@ fn hover_help(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput) {
             ui.weak("⌘-click to open it");
         });
         if cmd_click {
-            app.library.open = true;
+            app.windows[Tool::Library] = true;
         }
         return;
     }
     // Macros defined in this file take precedence over the library.
-    let own = rustemu_asm::library::index(&app.text).into_iter().find(|e| e.name == upper);
-    let uses_lib = app.text.to_ascii_lowercase().contains("emu8086.inc");
+    let own = rustemu_asm::library::index(&app.doc.text).into_iter().find(|e| e.name == upper);
+    let uses_lib = app.doc.text.to_ascii_lowercase().contains("emu8086.inc");
     let found = match own {
         Some(e) => Some((e, false)),
         None if uses_lib => app.library.find(&upper).map(|e| (e, true)),
@@ -458,7 +460,7 @@ fn hover_help(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput) {
         if from_lib {
             app.library.show_entry(&upper);
         } else {
-            app.goto_line = Some(entry.line);
+            app.editor.goto_line = Some(entry.line);
         }
     }
 }
