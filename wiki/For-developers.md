@@ -42,7 +42,7 @@ browser.
 |---|---|
 | `rustemu-target` | the boundary between a processor and the rest: the `Target` trait (steps, step back, breakpoints, memory, disassembly, registers by name). No dependencies |
 | `rustemu-core` | the 8086 processor (+ 80186 extensions), 1 MB of memory, `Machine` (loading, steps, step back, breakpoints), BIOS, DOS, video, devices, disassembler, 8087; `Machine` implements `Target`. No GUI dependencies |
-| `rustemu-mips` | MIPS32 (in progress): the integer instruction set, memory and exceptions of MARS, its system services (`syscall`), a text console, files in a sandbox, step back; the assembler of MARS's dialect |
+| `rustemu-mips` | MIPS32 (in progress): the integer instruction set, memory and exceptions of MARS, its system services (`syscall`), a text console, files in a sandbox, step back; the assembler of MARS's dialect and a disassembler |
 | `rustemu-asm` | the Emu8086 / MASM and NASM assembler: preprocessor, multi-pass assembly, encoding, listing; the built-in `emu8086.inc` |
 | `rustemu-session` | glue between the assembler and the emulator through `Target`: source line ↔ address, debugger expressions, call stack, Step Over / Out; the 8086 part (program formats, floppies) in `x86.rs` |
 | `rustemu-cli` | the `rustemu` program |
@@ -86,6 +86,8 @@ cargo test -p rustemu-desktop -p rustemu-tablet   # UI tests, PNG snapshots in t
 - **binutils** (the MIPS assembler): every basic instruction form with random operands, assembled by RustEmu8086 and
   by `mipsel-linux-gnu-as`, word by word, when the binutils are installed (`brew install
   mipsel-linux-gnu-binutils`).
+- **objdump** (the MIPS disassembler): every basic form decodes to the same instruction and operand values as
+  `mipsel-linux-gnu-objdump`, and back to the assembler's text.
 - **SingleStepTests 8088**: ~2.9 million tests recorded on a real processor. Download `v2/*.json.gz` and
   `v2/metadata.json` from [SingleStepTests/8088](https://github.com/SingleStepTests/8088) into `testdata/8088/`,
   then `cargo test -p rustemu-core --release --test singlestep -- --ignored`. Every processor change is checked
