@@ -48,7 +48,7 @@ pub const CGA: [Color32; 16] = [
 
 /// Title of the screen window: the video mode.
 pub(crate) fn title(app: &App) -> String {
-    let m = &app.session.machine.sys.mem;
+    let Some(m) = app.session.x86().map(|m| &m.sys.mem) else { return "emulator screen".into() };
     match m.read8(video::BDA_MODE) {
         0x13 => "emulator screen (320x200, 256 colours)".to_string(),
         _ => format!("emulator screen ({}x{} chars)", Video::cols(m), Video::rows(m)),
@@ -65,9 +65,10 @@ pub enum Fit {
     Cursor(egui::Vec2, f32),
 }
 
-/// The screen itself with keyboard and mouse input.
+/// The screen itself with keyboard and mouse input: the PC screen of the 8086 (text modes at
+/// B800:0000, mode 13h at A000:0000), its BIOS keyboard and INT 33h mouse.
 pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
-    let mem = &app.session.machine.sys.mem;
+    let Some(mem) = app.session.x86().map(|m| &m.sys.mem) else { return ui.weak("no screen for this processor") };
     let mode = Video::mode(mem);
     let (cols, rows) = (Video::cols(mem) as f32, Video::rows(mem) as f32);
     let text = Video::is_text(mem);
@@ -115,12 +116,14 @@ pub fn screen_view(app: &mut App, ui: &mut Ui, fit: Fit) -> egui::Response {
 
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, Color32::BLACK);
-    if Video::is_text(&app.session.machine.sys.mem) {
+    if app.session.x86().is_some_and(|m| Video::is_text(&m.sys.mem)) {
         draw_text(app, ui, rect, (cw, ch), (first_row, shown_rows));
-    } else if mode == 0x13 {
-        let mem = &app.session.machine.sys.mem;
+    } else if mode == 0x13
+        && let Some(m) = app.session.x86()
+    {
+        let mem = &m.sys.mem;
         let mut img = ColorImage::new([320, 200], vec![Color32::BLACK; 320 * 200]);
-        let pal = &app.session.machine.sys.dev.palette;
+        let pal = &m.sys.dev.palette;
         let vram = mem.slice(video::GFX_BASE, 64000);
         for (i, &p) in vram.iter().enumerate() {
             let c = pal[p as usize];
@@ -167,7 +170,7 @@ fn screen_with_controls(app: &mut App, ui: &mut Ui, fit: Fit) {
     ui.allocate_ui(vec2(screen.rect.width(), ui.spacing().interact_size.y), |ui| {
         ui.set_max_width(screen.rect.width());
         ui.horizontal(|ui| {
-            let waiting = app.session.machine.is_waiting_input();
+            let waiting = app.session.target.is_waiting_input();
             if waiting {
                 ui.colored_label(crate::colors::warn(ui), "⌨ waiting for input");
             } else if focused {
@@ -176,8 +179,10 @@ fn screen_with_controls(app: &mut App, ui: &mut Ui, fit: Fit) {
                 ui.weak("click the screen to type");
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("copy").on_hover_text("Copy the text on the screen (⌘C)").clicked() {
-                    ui.ctx().copy_text(screen_text(&app.session.machine.sys.mem));
+                if ui.small_button("copy").on_hover_text("Copy the text on the screen (⌘C)").clicked()
+                    && let Some(m) = app.session.x86()
+                {
+                    ui.ctx().copy_text(screen_text(&m.sys.mem));
                 }
                 if ui
                     .small_button("paste")
@@ -187,12 +192,14 @@ fn screen_with_controls(app: &mut App, ui: &mut Ui, fit: Fit) {
                     paste_from_clipboard(app);
                     app.screen.focus_request = true;
                 }
-                if ui.small_button("clear").on_hover_text("Clear the screen").clicked() {
-                    let m = &mut app.session.machine.sys.mem;
+                if ui.small_button("clear").on_hover_text("Clear the screen").clicked()
+                    && let Some(m) = app.session.x86_mut()
+                {
+                    let m = &mut m.sys.mem;
                     let mode = Video::mode(m);
                     Video::set_mode(m, mode);
                 }
-                let n = app.session.machine.sys.keys.len();
+                let n = app.session.x86().map_or(0, |m| m.sys.keys.len());
                 if n > 0 {
                     ui.weak(format!("{n} key(s) buffered"));
                 }
@@ -252,7 +259,7 @@ fn draw_text(app: &mut App, ui: &Ui, rect: Rect, (cw, ch): (f32, f32), (first, s
         .glyphs
         .get_or_insert_with(|| ui.ctx().load_texture("cp437_8x16", glyph_atlas(), TextureOptions::LINEAR))
         .id();
-    let mem = &app.session.machine.sys.mem;
+    let Some(mem) = app.session.x86().map(|m| &m.sys.mem) else { return };
     let painter = ui.painter_at(rect);
     let page = Video::page(mem);
     let (cols, rows) = (Video::cols(mem), Video::rows(mem));
@@ -336,14 +343,16 @@ pub fn paste_keys(m: &mut rustemu_core::Machine, text: &str) {
 
 /// Paste from the menu or the button (egui only delivers the clipboard with ⌘V events).
 pub fn paste_from_clipboard(app: &mut App) {
-    if let Some(text) = crate::platform::read_clipboard() {
-        paste_keys(&mut app.session.machine, &text);
+    if let Some(text) = crate::platform::read_clipboard()
+        && let Some(m) = app.session.x86_mut()
+    {
+        paste_keys(m, &text);
     }
 }
 
 fn keyboard(app: &mut App, ui: &Ui) {
     let events = ui.input(|i| i.events.clone());
-    let m = &mut app.session.machine;
+    let Some(m) = app.session.x86_mut() else { return };
     for ev in events {
         match ev {
             egui::Event::Paste(t) => paste_keys(m, &t),
@@ -417,6 +426,8 @@ fn mouse(app: &mut App, ui: &Ui, rect: Rect, resp: &egui::Response) {
                 | ((i.pointer.secondary_down() as u16) << 1)
                 | ((i.pointer.middle_down() as u16) << 2)
         });
-        app.session.machine.mouse = (x, y, buttons);
+        if let Some(m) = app.session.x86_mut() {
+            m.mouse = (x, y, buttons);
+        }
     }
 }

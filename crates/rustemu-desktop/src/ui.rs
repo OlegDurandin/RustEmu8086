@@ -295,7 +295,7 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
     if ui.button("Clear all breakpoints").clicked() {
         app.debugger.bp_lines.clear();
         app.debugger.bp_addr.clear();
-        app.session.machine.breakpoints.clear();
+        app.session.target.breakpoints_mut().clear();
     }
 }
 

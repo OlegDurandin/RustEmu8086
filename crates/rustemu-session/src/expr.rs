@@ -1,15 +1,18 @@
 //! Debugger expressions: watches, breakpoint conditions and "stop on condition".
 //!
+//! Registers, flags and memory come from the [`Target`]: its register table
+//! ([`Target::registers`]) gives the names and widths, [`Target::data_address`] turns `[off]` /
+//! `seg:[off]` into a physical address.
+//!
 //! Operands: numbers in assembler notation (`10`, `0Ah`, `0x0A`, `1010b`, `12o`, `'c'`), registers
-//! (`AX`, `AL`, `CS`, `IP`, `FLAGS`), flags (`CF`, `ZF`, `SF`, `OF`, `PF`, `AF`, `IF`, `DF`, `TF`),
+//! (8086: `AX`, `AL`, `CS`, `IP`, `FLAGS`), flags (`CF`, `ZF`, `SF`, `OF`, `PF`, `AF`, `IF`, `DF`, `TF`),
 //! program symbols (a variable gives its value from memory, a label its offset, `OFFSET name` the
 //! offset of a variable), memory `[expr]`, `seg:[expr]`, `BYTE [..]` / `WORD [..]` / `b.[..]` / `w.[..]`,
 //! indexed variables `table[si]`.
 //! Operators (C precedence): `! ~ -` (unary), `* / %`, `+ -`, `<< >>`, `< <= > >=`, `== !=` (`=` too),
 //! `&`, `^`, `|`, `&&`, `||`, and the assembler words `MOD SHL SHR AND OR XOR NOT`.
 
-use rustemu_core::cpu::{self, flags};
-use rustemu_core::{Machine, linear};
+use rustemu_target::{RegKind, Target};
 
 /// A compiled expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,19 +23,18 @@ pub struct Expr {
 #[derive(Debug, Clone, PartialEq)]
 enum Node {
     Num(i64),
-    Reg16(usize),
-    Reg8(u8),
-    Sreg(usize),
-    Ip,
-    Flags,
-    Flag(u16),
-    /// Memory at segment:offset; `seg` = None means DS.
+    /// Register `index` of the target's table, `bits` wide (1 for a flag).
+    Reg {
+        index: usize,
+        bits: u8,
+    },
+    /// Memory at segment:offset; `seg` = None means the target's default (8086: DS).
     Mem {
         size: u8,
         seg: Option<Box<Node>>,
         off: Box<Node>,
     },
-    /// A variable at a fixed linear address (for COM/EXE images).
+    /// A variable at a fixed physical address.
     Var {
         addr: u32,
         size: u8,
@@ -80,13 +82,13 @@ pub enum SymbolRef {
 }
 
 impl Expr {
-    /// Parses `text`, resolving names with `lookup`.
-    pub fn parse(text: &str, lookup: &dyn Fn(&str) -> Option<SymbolRef>) -> Result<Expr, String> {
+    /// Parses `text`, resolving names with `lookup` and the registers of `target`.
+    pub fn parse(text: &str, lookup: &dyn Fn(&str) -> Option<SymbolRef>, target: &dyn Target) -> Result<Expr, String> {
         let tokens = lex(text)?;
         if tokens.is_empty() {
             return Err("empty expression".into());
         }
-        let mut p = Parser { t: &tokens, pos: 0, lookup };
+        let mut p = Parser { t: &tokens, pos: 0, lookup, target };
         let node = p.binary(0)?;
         if p.pos < tokens.len() {
             return Err(format!("unexpected '{}'", tokens[p.pos].text()));
@@ -94,63 +96,58 @@ impl Expr {
         Ok(Expr { node })
     }
 
-    /// The value of the expression in the current state of `m`.
-    pub fn eval(&self, m: &Machine) -> i64 {
-        eval(&self.node, m)
+    /// The value of the expression in the current state of `t`.
+    pub fn eval(&self, t: &dyn Target) -> i64 {
+        eval(&self.node, t)
     }
 
     /// Natural width of the value in bits (8 for byte registers and variables, 16 for words, ...).
     pub fn bits(&self) -> u32 {
         match &self.node {
-            Node::Reg8(_) | Node::Flag(_) => 8,
-            Node::Reg16(_) | Node::Sreg(_) | Node::Ip | Node::Flags => 16,
+            Node::Reg { bits, .. } => (*bits).max(8) as u32,
             Node::Mem { size, .. } | Node::Var { size, .. } | Node::Indexed { size, .. } => *size as u32 * 8,
             _ => 16,
         }
     }
 
-    /// Linear address of the memory the expression reads directly (for `[..]` and variables).
-    pub fn address(&self, m: &Machine) -> Option<u32> {
+    /// Physical address of the memory the expression reads directly (for `[..]` and variables).
+    pub fn address(&self, t: &dyn Target) -> Option<u32> {
         match &self.node {
-            Node::Mem { seg, off, .. } => Some(mem_addr(m, seg.as_deref(), off)),
+            Node::Mem { seg, off, .. } => Some(mem_addr(t, seg.as_deref(), off)),
             Node::Var { addr, .. } => Some(*addr),
-            Node::Indexed { seg, off, index, .. } => Some(linear(*seg, off.wrapping_add(eval(index, m) as u16))),
+            Node::Indexed { seg, off, index, .. } => Some(indexed_addr(t, *seg, *off, index)),
             _ => None,
         }
     }
 }
 
-fn mem_addr(m: &Machine, seg: Option<&Node>, off: &Node) -> u32 {
-    let s = seg.map_or(m.cpu.sregs[cpu::DS], |s| eval(s, m) as u16);
-    linear(s, eval(off, m) as u16)
+fn mem_addr(t: &dyn Target, seg: Option<&Node>, off: &Node) -> u32 {
+    t.data_address(seg.map(|s| eval(s, t) as u64), eval(off, t) as u64)
 }
 
-fn read(m: &Machine, addr: u32, size: u8) -> i64 {
+/// `var[index]`: the variable's offset plus the index, in the variable's segment.
+fn indexed_addr(t: &dyn Target, seg: u16, off: u16, index: &Node) -> u32 {
+    t.data_address(Some(seg as u64), off.wrapping_add(eval(index, t) as u16) as u64)
+}
+
+fn read(t: &dyn Target, addr: u32, size: u8) -> i64 {
     let mut v: i64 = 0;
     for i in (0..size as u32).rev() {
-        v = (v << 8) | m.sys.mem.read8((addr + i) & 0xFFFFF) as i64;
+        v = (v << 8) | t.read8(addr.wrapping_add(i)) as i64;
     }
     v
 }
 
-fn eval(n: &Node, m: &Machine) -> i64 {
-    let c = &m.cpu;
+fn eval(n: &Node, t: &dyn Target) -> i64 {
     match n {
         Node::Num(v) => *v,
-        Node::Reg16(r) => c.regs[*r] as i64,
-        Node::Reg8(r) => c.reg8(*r) as i64,
-        Node::Sreg(r) => c.sregs[*r] as i64,
-        Node::Ip => c.ip as i64,
-        Node::Flags => c.flags as i64,
-        Node::Flag(f) => (c.flags & f != 0) as i64,
-        Node::Mem { size, seg, off } => read(m, mem_addr(m, seg.as_deref(), off), *size),
-        Node::Var { addr, size } => read(m, *addr, *size),
-        Node::Indexed { seg, off, size, index } => {
-            read(m, linear(*seg, off.wrapping_add(eval(index, m) as u16)), *size)
-        }
+        Node::Reg { index, .. } => t.register(*index) as i64,
+        Node::Mem { size, seg, off } => read(t, mem_addr(t, seg.as_deref(), off), *size),
+        Node::Var { addr, size } => read(t, *addr, *size),
+        Node::Indexed { seg, off, size, index } => read(t, indexed_addr(t, *seg, *off, index), *size),
         Node::Addr { off, .. } => *off as i64,
         Node::Unary(op, a) => {
-            let a = eval(a, m);
+            let a = eval(a, t);
             match op {
                 '-' => a.wrapping_neg(),
                 '~' => !a,
@@ -158,14 +155,14 @@ fn eval(n: &Node, m: &Machine) -> i64 {
             }
         }
         Node::Binary(op, a, b) => {
-            let a = eval(a, m);
+            let a = eval(a, t);
             if *op == "&&" {
-                return (a != 0 && eval(b, m) != 0) as i64;
+                return (a != 0 && eval(b, t) != 0) as i64;
             }
             if *op == "||" {
-                return (a != 0 || eval(b, m) != 0) as i64;
+                return (a != 0 || eval(b, t) != 0) as i64;
             }
-            let b = eval(b, m);
+            let b = eval(b, t);
             match *op {
                 "*" => a.wrapping_mul(b),
                 "/" => a.checked_div(b).unwrap_or(0),
@@ -271,6 +268,7 @@ struct Parser<'a> {
     t: &'a [Tok],
     pos: usize,
     lookup: &'a dyn Fn(&str) -> Option<SymbolRef>,
+    target: &'a dyn Target,
 }
 
 /// Binary operators from the lowest precedence level up.
@@ -382,10 +380,10 @@ impl Parser<'_> {
         if let Some(size) = self.size_prefix() {
             let mut seg = None;
             if let Some(Tok::Name(n)) = self.peek()
-                && let Some(r) = sreg(n)
+                && let Some(r) = self.segment_register(n)
                 && self.t.get(self.pos + 1) == Some(&Tok::Op(":"))
             {
-                seg = Some(Box::new(Node::Sreg(r)));
+                seg = Some(Box::new(r));
                 self.pos += 2;
             }
             self.expect("[")?;
@@ -406,17 +404,17 @@ impl Parser<'_> {
                 // NASM style segment override inside the brackets: [es:di].
                 let mut seg = None;
                 if let Some(Tok::Name(n)) = self.peek()
-                    && let Some(r) = sreg(n)
+                    && let Some(r) = self.segment_register(n)
                     && self.t.get(self.pos + 1) == Some(&Tok::Op(":"))
                 {
-                    seg = Some(Box::new(Node::Sreg(r)));
+                    seg = Some(Box::new(r));
                     self.pos += 2;
                 }
                 let off = self.binary(0)?;
                 self.expect("]")?;
                 // [nasm_label] reads the label's data size.
                 if let (None, Node::Addr { seg: s, off: o, size }) = (&seg, &off) {
-                    return Ok(Node::Var { addr: linear(*s, *o), size: *size });
+                    return Ok(Node::Var { addr: self.target.data_address(Some(*s as u64), *o as u64), size: *size });
                 }
                 Ok(Node::Mem { size: 1, seg, off: Box::new(off) })
             }
@@ -438,34 +436,16 @@ impl Parser<'_> {
         }
     }
 
+    /// A segment register named `n` (it can prefix a memory reference).
+    fn segment_register(&self, n: &str) -> Option<Node> {
+        let index = self.target.register_index(n)?;
+        let r = self.target.registers()[index];
+        (r.kind == RegKind::Segment).then_some(Node::Reg { index, bits: r.bits })
+    }
+
     fn name(&mut self, n: &str) -> Result<Node, String> {
-        const R16: [&str; 8] = ["AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"];
-        const R8: [&str; 8] = ["AL", "CL", "DL", "BL", "AH", "CH", "DH", "BH"];
-        if let Some(i) = R16.iter().position(|r| *r == n) {
-            return Ok(Node::Reg16(i));
-        }
-        if let Some(i) = R8.iter().position(|r| *r == n) {
-            return Ok(Node::Reg8(i as u8));
-        }
-        if let Some(i) = sreg(n) {
-            return Ok(Node::Sreg(i));
-        }
-        let flag = match n {
-            "IP" => return Ok(Node::Ip),
-            "FLAGS" | "FL" => return Ok(Node::Flags),
-            "CF" => flags::CF,
-            "PF" => flags::PF,
-            "AF" => flags::AF,
-            "ZF" => flags::ZF,
-            "SF" => flags::SF,
-            "TF" => flags::TF,
-            "IF" => flags::IF,
-            "DF" => flags::DF,
-            "OF" => flags::OF,
-            _ => 0,
-        };
-        if flag != 0 {
-            return Ok(Node::Flag(flag));
+        if let Some(index) = self.target.register_index(n) {
+            return Ok(Node::Reg { index, bits: self.target.registers()[index].bits });
         }
         match (self.lookup)(n) {
             Some(SymbolRef::Variable { seg, off, size }) => {
@@ -474,7 +454,7 @@ impl Parser<'_> {
                     self.expect("]")?;
                     Ok(Node::Indexed { seg, off, size, index: Box::new(index) })
                 } else {
-                    Ok(Node::Var { addr: linear(seg, off), size })
+                    Ok(Node::Var { addr: self.target.data_address(Some(seg as u64), off as u64), size })
                 }
             }
             Some(SymbolRef::Value(v)) => Ok(Node::Num(v)),
@@ -484,13 +464,11 @@ impl Parser<'_> {
     }
 }
 
-fn sreg(n: &str) -> Option<usize> {
-    ["ES", "CS", "SS", "DS"].iter().position(|r| *r == n)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustemu_core::cpu::{self, flags};
+    use rustemu_core::{Machine, linear};
 
     fn machine() -> Machine {
         let mut m = Machine::new();
@@ -512,7 +490,8 @@ mod tests {
             "COUNT" => Some(SymbolRef::Value(7)),
             _ => None,
         };
-        Expr::parse(text, &lookup).map(|e| e.eval(&machine()))
+        let m = machine();
+        Expr::parse(text, &lookup, &m).map(|e| e.eval(&m))
     }
 
     #[test]

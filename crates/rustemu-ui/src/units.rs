@@ -12,7 +12,10 @@ use crate::inspect::bin;
 pub(crate) fn fpu_ui(app: &mut App, ui: &mut Ui) {
     use rustemu_core::fpu::{Tag, sw, to_f64};
     let changed = egui::Color32::from_rgb(220, 40, 40);
-    let (f, prev) = (&app.session.machine.sys.fpu, &app.exec.prev_fpu);
+    let Some(m) = app.session.x86() else { return };
+    let f = &m.sys.fpu;
+    // Without an 8086 checkpoint there is nothing to compare with: nothing is highlighted.
+    let prev = app.exec.prev_x86().map_or(f, |p| &p.fpu);
     egui::Grid::new("fpu_regs").striped(true).spacing([14.0, 2.0]).show(ui, |ui| {
         for h in ["", "value", "tag", "80-bit hex"] {
             ui.label(RichText::new(h).weak());
@@ -86,13 +89,13 @@ pub(crate) fn fpu_ui(app: &mut App, ui: &mut Ui) {
 
 /// The last ALU operation: operands, result and flags in all bases.
 pub fn alu_ui(app: &mut App, ui: &mut Ui) {
-    let t = app.session.machine.cpu.alu_trace;
+    let Some(t) = app.session.x86().map(|m| m.cpu.alu_trace) else { return };
     if t.op == AluOp::None {
         ui.weak("No arithmetic or logic instruction executed yet.");
         return;
     }
     let addr = rustemu_core::linear(t.cs, t.ip);
-    let ago = app.session.machine.cpu.instr_count.saturating_sub(t.instr + 1);
+    let ago = app.session.target.instr_count().saturating_sub(t.instr + 1);
     ui.horizontal_wrapped(|ui| {
         let w = if t.wide { "word" } else { "byte" };
         ui.label(RichText::new(format!("{} ({w})", t.op.name())).strong().monospace().size(15.0));

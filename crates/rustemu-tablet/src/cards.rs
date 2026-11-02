@@ -30,9 +30,11 @@ pub(crate) fn output_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect:
     {
         match tab {
             Output::Screen => {
-                let m = &mut app.session.machine.sys.mem;
-                let mode = rustemu_core::video::Video::mode(m);
-                rustemu_core::video::Video::set_mode(m, mode);
+                if let Some(m) = app.session.x86_mut() {
+                    let m = &mut m.sys.mem;
+                    let mode = rustemu_core::video::Video::mode(m);
+                    rustemu_core::video::Video::set_mode(m, mode);
+                }
             }
             Output::Messages => app.build.messages.clear(),
         }
@@ -46,7 +48,7 @@ pub(crate) fn output_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect:
     }
     match tab {
         Output::Screen => {
-            let waiting = app.session.machine.is_waiting_input();
+            let waiting = app.session.target.is_waiting_input();
             let avail = b.available_size() - vec2(0.0, if waiting { 48.0 } else { 26.0 });
             let resp = b
                 .vertical_centered(|ui| rustemu_ui::screen::screen_view(app, ui, rustemu_ui::screen::Fit::Whole(avail)))
@@ -54,7 +56,7 @@ pub(crate) fn output_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect:
             if resp.clicked() {
                 t.keypad.open = true;
             }
-            if app.session.machine.is_waiting_input() {
+            if app.session.target.is_waiting_input() {
                 waiting_banner(app, t, &mut b);
             } else if resp.has_focus() {
                 b.label(RichText::new("keys go to the emulated PC").color(pal::WEAK));
@@ -93,7 +95,7 @@ fn waiting_banner(app: &App, t: &mut TabletState, ui: &mut Ui) {
     let s = &app.session;
     let int = s.bios_caller().map(|(cs, ip)| {
         let a = rustemu_core::linear(cs, ip);
-        disassemble(s.machine.sys.mem.slice(a, 4), ip).text
+        s.target.disassemble(a, ip as u32).text
     });
     let at = s.current_view(app.settings.show_macro_code).map(|v| rustemu_ui::debugger::file_line(app, v.file, v.line));
     let mut text = String::from("Waiting for a key");
@@ -125,7 +127,7 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
     let (mut head, mut b) = card(ui, rect, "BREAKPOINTS");
     if small_icon(&mut head, Icon::Plus, "breakpoint at the selected instruction or the editor line").clicked() {
         match app.selected_addr() {
-            Some(a) if !app.session.machine.breakpoints.contains(&a) => app.toggle_breakpoint_at_addr(a),
+            Some(a) if !app.session.target.breakpoints().contains(&a) => app.toggle_breakpoint_at_addr(a),
             _ if !app.debugger.bp_lines.contains_key(&(0, app.editor.cursor_line)) => {
                 app.toggle_breakpoint_at_line(0, app.editor.cursor_line)
             }
@@ -138,9 +140,9 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
     let mut remove_addr = None;
     let mut goto = None;
     egui::ScrollArea::vertical().id_salt("t_bps").auto_shrink([false, false]).show(&mut b, |ui| {
-        let cs = app.session.machine.cpu.cs();
+        let cs = app.session.x86().map_or(0, |m| m.cpu.cs());
         let keys: Vec<(usize, u32)> = app.debugger.bp_lines.keys().copied().collect();
-        if keys.is_empty() && app.session.machine.breakpoints.is_empty() {
+        if keys.is_empty() && app.session.target.breakpoints().is_empty() {
             ui.label(
                 RichText::new("Tap the left margin of the editor or the disassembly to add one.").color(pal::WEAK),
             );
@@ -176,8 +178,14 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
                 }
             });
         }
-        let mut addrs: Vec<u32> =
-            app.session.machine.breakpoints.iter().copied().filter(|a| !app.debugger.bp_addr.contains_key(a)).collect();
+        let mut addrs: Vec<u32> = app
+            .session
+            .target
+            .breakpoints()
+            .iter()
+            .copied()
+            .filter(|a| !app.debugger.bp_addr.contains_key(a))
+            .collect();
         addrs.sort_unstable();
         for a in addrs {
             let desc = match app.session.view_at(a, true) {
@@ -214,7 +222,7 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
         resync = true;
     }
     if let Some(a) = remove_addr {
-        app.session.machine.breakpoints.remove(&a);
+        app.session.target.breakpoints_mut().remove(&a);
     }
     if resync {
         app.sync_breakpoints();
@@ -301,7 +309,7 @@ pub(crate) fn watch_card(app: &mut App, ui: &mut Ui, rect: Rect) {
 
 pub(crate) fn trace_card(app: &mut App, ui: &mut Ui, rect: Rect) {
     let (mut head, mut b) = card(ui, rect, "EXECUTION TRACE");
-    let m = &app.session.machine;
+    let Some(m) = app.session.x86() else { return };
     head.label(RichText::new(format!("{} steps back", m.history_len())).color(pal::WEAK));
     let font = FontId::monospace(14.0);
     let cw = b.fonts_mut(|f| f.glyph_width(&font, '0'));

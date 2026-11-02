@@ -40,9 +40,10 @@ browser.
 
 | Crate | What is inside |
 |---|---|
-| `rustemu-core` | the 8086 processor (+ 80186 extensions), 1 MB of memory, `Machine` (loading, steps, step back, breakpoints), BIOS, DOS, video, devices, disassembler, 8087. No GUI dependencies |
+| `rustemu-target` | the boundary between a processor and the rest: the `Target` trait (steps, step back, breakpoints, memory, disassembly, registers by name). No dependencies |
+| `rustemu-core` | the 8086 processor (+ 80186 extensions), 1 MB of memory, `Machine` (loading, steps, step back, breakpoints), BIOS, DOS, video, devices, disassembler, 8087; `Machine` implements `Target`. No GUI dependencies |
 | `rustemu-asm` | the Emu8086 / MASM and NASM assembler: preprocessor, multi-pass assembly, encoding, listing; the built-in `emu8086.inc` |
-| `rustemu-session` | glue between the assembler and the emulator: source line ↔ CS:IP, debugger expressions, call stack |
+| `rustemu-session` | glue between the assembler and the emulator through `Target`: source line ↔ address, debugger expressions, call stack, Step Over / Out; the 8086 part (program formats, floppies) in `x86.rs` |
 | `rustemu-cli` | the `rustemu` program |
 | `rustemu-ui` | the shared part of the interface: application state, editor, screen, debug windows, reference |
 | `rustemu-desktop` | the Emu8086-style interface, the macOS program |
@@ -51,6 +52,10 @@ browser.
 
 Key decisions:
 
+- **An architecture boundary.** The session and the shared interface (run loop, breakpoints, watches, call stack,
+  disassembly list, memory dump) work with any processor through the `Target` trait; the 8086 windows (Emu8086
+  registers, flags, FPU, screen, devices, drives, DEBUG.EXE console) reach the 8086 `Machine` with `x86()`. This
+  prepares a second architecture (MIPS): its own crate implementing `Target`, its own windows.
 - **Interrupts are "real".** The vector table at 0000:0000 points to ROM stubs (`F000:1000 + 4·n`): a service
   opcode `0F FF nn` and `IRET`. On it the emulator calls a BIOS / DOS handler written in Rust. Programs can hook
   the vectors.

@@ -121,7 +121,7 @@ pub(crate) fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
     }
     // Address breakpoints set in the disassembly (macro code).
     let mut addrs: Vec<u32> =
-        app.session.machine.breakpoints.iter().copied().filter(|a| !app.debugger.bp_addr.contains_key(a)).collect();
+        app.session.target.breakpoints().iter().copied().filter(|a| !app.debugger.bp_addr.contains_key(a)).collect();
     addrs.sort_unstable();
     if !addrs.is_empty() {
         ui.separator();
@@ -133,7 +133,7 @@ pub(crate) fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
                     ui.weak(format!("{}  {}", file_line(app, v.file, v.line), source_text(app, v.file, v.line)));
                 }
                 if ui.small_button("✖").clicked() {
-                    app.session.machine.breakpoints.remove(&a);
+                    app.session.target.breakpoints_mut().remove(&a);
                 }
             });
         }
@@ -152,7 +152,7 @@ pub(crate) fn breakpoints_ui(app: &mut App, ui: &mut Ui) {
         }
         if ui.button("delete all").clicked() {
             app.debugger.bp_lines.clear();
-            app.session.machine.breakpoints.clear();
+            app.session.target.breakpoints_mut().clear();
             app.debugger.bp_addr.clear();
         }
     });
@@ -191,7 +191,7 @@ pub(crate) fn stop_condition_ui(app: &mut App, ui: &mut Ui) {
             ui.colored_label(crate::colors::error(ui), e);
         }
         Some(Ok(e)) => {
-            let v = e.eval(&app.session.machine);
+            let v = e.eval(&*app.session.target);
             ui.weak(format!("now: {v} ({})", hex(v, e.bits())));
         }
         None => {}
@@ -471,11 +471,12 @@ pub(crate) fn value_viewer_ui(app: &mut App, ui: &mut Ui) {
             ui.add(egui::TextEdit::singleline(&mut vv.addr).hint_text("DS:0100 or 07100").desired_width(110.0));
         }
     });
-    let cpu = &app.session.machine.cpu;
-    let addr = if vv.reg.is_none() { parse_view_addr(cpu, &vv.addr) } else { None };
+    // The extended value viewer of Emu8086: 8086 registers and memory words.
+    let Some(m) = app.session.x86() else { return };
+    let addr = if vv.reg.is_none() { parse_view_addr(&m.cpu, &vv.addr) } else { None };
     let value = match (vv.reg, addr) {
-        (Some(i), _) => read_view_reg(cpu, i),
-        (None, Some(a)) => app.session.machine.sys.mem.read16(a),
+        (Some(i), _) => read_view_reg(&m.cpu, i),
+        (None, Some(a)) => m.sys.mem.read16(a),
         (None, None) => {
             ui.colored_label(crate::colors::error(ui), "bad address");
             return;
@@ -520,11 +521,11 @@ pub(crate) fn value_viewer_ui(app: &mut App, ui: &mut Ui) {
 
 /// Writes the value of expression `text` to the register or memory word shown in the viewer.
 pub fn set_viewed_value(app: &mut App, text: &str) -> Result<(), String> {
-    let v = app.session.compile(text)?.eval(&app.session.machine);
+    let v = app.session.compile(text)?.eval(&*app.session.target);
     if !(-32768..=65535).contains(&v) {
         return Err(format!("{v} does not fit in a word"));
     }
-    let m = &mut app.session.machine;
+    let m = app.session.x86_mut().ok_or("the viewer shows 8086 registers")?;
     match app.debugger.value_viewer.reg {
         Some(i) => {
             m.set_register(VIEW_REGS[i], v as u16);

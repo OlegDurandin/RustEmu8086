@@ -121,7 +121,7 @@ impl App {
 
     /// Puts a file on the memory drive C: (an upload for DOS programs).
     pub fn add_drive_file(&mut self, name: &str, bytes: Vec<u8>) {
-        let Some(drive) = self.session.machine.dos_memory_drive_mut() else { return };
+        let Some(drive) = self.session.dos_memory_drive_mut() else { return };
         match drive.write(name, bytes) {
             Ok(key) => self.status = format!("C:\\{} added to drive C:", key.replace('/', "\\")),
             Err(e) => self.notice("Drive C:", &e),

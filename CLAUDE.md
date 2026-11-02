@@ -9,9 +9,10 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 
 | Крейт | Назначение |
 |---|---|
-| `crates/rustemu-core` | Эмулятор: CPU 8086 (`cpu.rs`), шина/память 1 MiB с журналом (`bus.rs`), `Machine` (загрузчики, шаг/run/шаг назад, точки останова — `machine.rs`), BIOS (`bios.rs`: INT 10h/13h/15h/16h/1Ah/33h), DOS (`dos.rs`: INT 21h, файлы в песочнице), видео (`video.rs`), порты и виртуальные устройства (`devices.rs`), шрифт/CP437 (`font.rs`), скан-коды (`keyboard.rs`), дизассемблер (`disasm.rs`), сопроцессор 8087 (`fpu.rs`). Без зависимостей от GUI. |
+| `crates/rustemu-target` | Граница архитектуры, без зависимостей: трейт `Target` (шаг/run/шаг назад, точки останова, память по физическим адресам, дизассемблер, `flow_at`, `call_stack`, `system_caller`, таблица регистров `registers()` для выражений, `data_address`, `code_segment`, снимки `State`), `Arch`, `Event`, `Flow`, `Frame`. Через него session и общий UI работают с любой машиной; специфичное — downcast `as_any`. |
+| `crates/rustemu-core` | Эмулятор: CPU 8086 (`cpu.rs`), шина/память 1 MiB с журналом (`bus.rs`), `Machine` (загрузчики, шаг/run/шаг назад, точки останова — `machine.rs`), BIOS (`bios.rs`: INT 10h/13h/15h/16h/1Ah/33h), DOS (`dos.rs`: INT 21h, файлы в песочнице), видео (`video.rs`), порты и виртуальные устройства (`devices.rs`), шрифт/CP437 (`font.rs`), скан-коды (`keyboard.rs`), дизассемблер (`disasm.rs`), сопроцессор 8087 (`fpu.rs`). `target.rs` — `impl Target for Machine` (+ `bios_caller`, `call_frames`, `flow_at`, `Checkpoint`, `AsMachine::x86()`). Без зависимостей от GUI. |
 | `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
-| `crates/rustemu-session` | Связка ассемблер ↔ эмулятор: загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT), строки дизассемблера (`code.rs`: `Session::code_row` — данные программы как `DB`/`DW`/`DD` по `LineInfo::is_code`/`data_size`, нули вне кода — `DB n DUP (0)`; инструкция на CS:IP — всегда код). |
+| `crates/rustemu-session` | Связка ассемблер ↔ эмулятор через `pub target: Box<dyn Target>` (8086-машина — `Session::x86()`/`x86_mut()`; зависящее от процессора — `match target.arch()`; 8086-часть — `x86.rs`: форматы COM/EXE/BIN/BOOT, дискеты, символы seg:off, диск C: в памяти): загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT), строки дизассемблера (`code.rs`: `Session::code_row` — данные программы как `DB`/`DW`/`DD` по `LineInfo::is_code`/`data_size`, нули вне кода — `DB n DUP (0)`; инструкция на CS:IP — всегда код). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
 | `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки), редактор, экран, инструменты (`tools.rs` — одна таблица всех окон, `Host` — свои инструменты интерфейса) и диалоги (`rustemu_ui::windows` раз в кадр), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
 | `crates/rustemu-desktop` | Интерфейс Emu8086: библиотека (`DesktopApp`, главное окно с меню/тулбаром — `ui.rs`, окно эмулятора и исходника — `emulator.rs`; UI-тесты `ui_tests.rs`) + бинарь `RustEmu8086` (macOS). |
@@ -19,6 +20,12 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 | `crates/rustemu-web` | Веб-версия (см. 6.8): wasm-бинарь для trunk (`index.html`); `layout.rs` — `WebApp` с `DesktopApp` или `TabletApp`, переключение на лету (`FrontEnd::switch_layout`, выбор в localStorage); раскладка по умолчанию — iPad (`MacIntel` + касания), `pointer: coarse` или узкое окно; `?ui=`, `?example=…&run`, ссылки с программой `#name=…&code=…` (`rustemu_ui::share`). |
 
 ### Ключевые решения
+- **Граница архитектуры** (подготовка ко второму процессору — MIPS). Session и общий UI (цикл выполнения, точки
+  останова, watch/условия, стек вызовов, Step Over/Out, список дизассемблера, дамп памяти, переменные) обращаются
+  к машине только через `Target`; окна 8086 (регистры Emu8086, флаги, FPU/ALU, экран B800/A000, устройства, диск и
+  дискеты, консоль DEBUG.EXE, value viewer, CPU и Memory планшета) берут `Machine` через `x86()` и ничего не
+  показывают для другого процессора. Новая архитектура = свой крейт с `impl Target` + ветки `match arch` в session
+  + свои окна. Состояние «до шага» — `Exec::prev` (`Target::checkpoint`, у 8086 — `Checkpoint { cpu, fpu }`).
 - **Прерывания — «настоящие».** IVT в 0000:0000 указывает на заглушки `F000:1000+4*n`, заглушка —
   опкод `0F FF nn` («BOP») + `IRET`. На BOP `Machine::service` вызывает HLE-обработчик; изменённые
   статусные флаги копируются в FLAGS, сохранённые в стеке. Программы могут перехватывать векторы.
@@ -261,6 +268,14 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       двойной клик по имени регистра; F11 — журнал), virtual devices (имена exe Emu8086 + вкладка VGA state:
       порт 3DAh и палитра DAC), virtual drive (общий с главным меню; запись .bin с цилиндра/головки/сектора —
       `Session::write_floppy`), help (справочник, страница релизов, about). Меню external не делаем
+
+### Этап 7. Вторая архитектура (MIPS)
+- [x] 7.0 Граница архитектуры: `rustemu-target` (`Target`), `impl Target for Machine`, session и общий UI через
+      трейт, окна 8086 через `x86()`. Поведение не менялось: все тесты, корпус Emu8086 и 68 UI-снимков побайтно
+      совпадают с прежними
+- [ ] 7.1 Ядро MIPS32 (MARS): крейт `rustemu-mips`, разреженная память с журналом, syscall MARS/SPIM, `impl Target`
+- [ ] 7.2 Ассемблер MARS (`.text/.data`, псевдоинструкции), сверка с binutils / QEMU
+- [ ] 7.3 Окна MIPS (регистры $0..$31, HI/LO, PC; консоль), справочник, примеры
 
 ### Этап 6. Полировка
 - [x] 6.1 Сравнение с Emu8086: корпус из 84 оригинальных примеров (сборка + выполнение), устройства по

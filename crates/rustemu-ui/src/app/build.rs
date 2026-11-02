@@ -171,8 +171,10 @@ impl App {
         self.program.files = source_files;
         self.program.index = source_index;
         self.program.text = Some(self.doc.text.clone());
-        if let Some(root) = root {
-            self.session.machine.set_dos_root(root);
+        if let Some(root) = root
+            && let Some(m) = self.session.x86_mut()
+        {
+            m.set_dos_root(root);
         }
         if !same_image {
             self.clear_address_breakpoints();
@@ -194,8 +196,10 @@ impl App {
     pub fn load_binary(&mut self, p: &Path) {
         match self.session.load_path(p) {
             Ok(()) => {
-                if let Some(root) = self.vdrive(Some(p)) {
-                    self.session.machine.set_dos_root(root);
+                if let Some(root) = self.vdrive(Some(p))
+                    && let Some(m) = self.session.x86_mut()
+                {
+                    m.set_dos_root(root);
                 }
                 self.after_binary_load();
             }
@@ -233,12 +237,14 @@ impl App {
     /// Line breakpoints are mapped again by [`App::sync_breakpoints`].
     fn clear_address_breakpoints(&mut self) {
         let lines = &self.debugger.bp_addr;
-        self.session.machine.breakpoints.retain(|a| lines.contains_key(a));
+        self.session.target.breakpoints_mut().retain(|a| lines.contains_key(a));
     }
 
     fn after_load(&mut self) {
         self.build.failed = false;
-        self.session.machine.timer_irq = self.settings.timer_irq;
+        if let Some(m) = self.session.x86_mut() {
+            m.timer_irq = self.settings.timer_irq;
+        }
         self.program.generation += 1;
         self.exec.last_event = None;
         for w in &mut self.debugger.watches {
@@ -257,16 +263,16 @@ impl App {
         self.windows[Tool::Screen] = true;
         self.windows[Tool::Source] = !self.program.files.is_empty();
         self.screen.focus_request = true;
-        let c = &self.session.machine.cpu;
-        self.view.mem_view_addr = rustemu_core::linear(c.sregs[rustemu_core::cpu::DS], 0);
-        self.status = format!("Loaded - CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
+        // The memory window starts at the data (8086: DS:0000).
+        self.view.mem_view_addr = self.session.target.data_address(None, 0);
+        self.status = format!("Loaded - {}", self.pc_status());
     }
 
     /// The directory DOS file functions see as drive C: when `program` runs: a folder of its own,
     /// as Emu8086's `vdrive\C` ([`App::drive_dir`]), or the program's folder with
     /// [`Settings::drive_c_source_folder`]. None for the memory drive (the browser).
     fn vdrive(&self, program: Option<&Path>) -> Option<PathBuf> {
-        if self.session.machine.dos_memory_drive().is_some() {
+        if self.session.x86().is_some_and(|m| m.dos_memory_drive().is_some()) {
             return None;
         }
         if self.settings.drive_c_source_folder
@@ -280,7 +286,7 @@ impl App {
 
     /// The folder that is drive C: on the desktop: the loaded program's, otherwise the default.
     pub fn host_drive(&self) -> &Path {
-        self.session.machine.dos_host_root().unwrap_or(&self.drive_dir)
+        self.session.x86().and_then(|m| m.dos_host_root()).unwrap_or(&self.drive_dir)
     }
 
     /// Loads the same program again (Reload): registers, memory and devices as at the start.
@@ -293,7 +299,7 @@ impl App {
 
     /// A program is loaded in the emulator.
     pub fn loaded(&self) -> bool {
-        self.session.machine.loaded.is_some()
+        self.session.target.is_loaded()
     }
 
     /// The loaded program was assembled from a different version of the editor text.

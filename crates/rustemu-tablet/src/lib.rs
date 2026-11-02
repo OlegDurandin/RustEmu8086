@@ -172,7 +172,7 @@ fn follow_errors(app: &mut App, t: &mut TabletState) {
 
 fn measure_speed(app: &mut App, t: &mut TabletState, ui: &Ui) {
     let now = ui.input(|i| i.time);
-    let count = app.session.machine.cpu.instr_count;
+    let count = app.session.target.instr_count();
     let (t0, c0) = t.speed_sample;
     if app.run == RunMode::Paused {
         t.speed_sample = (now, count);

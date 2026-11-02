@@ -23,10 +23,10 @@ fn run_src(src: &str, input: &str) -> (Session, Event) {
 fn finish(mut s: Session, input: &str) -> (Session, Event) {
     let mut keys: Vec<u8> = input.bytes().map(|b| if b == b'\n' { b'\r' } else { b }).collect();
     loop {
-        match s.machine.run(10_000_000) {
+        match s.x86_mut().unwrap().run(10_000_000) {
             Event::WaitingInput if !keys.is_empty() => {
                 let k = keys.remove(0);
-                s.machine.push_char(k);
+                s.x86_mut().unwrap().push_char(k);
             }
             ev => return (s, ev),
         }
@@ -37,7 +37,7 @@ fn run_example(name: &str, input: &str) -> (String, Event) {
     let mut s = Session::new();
     s.load_path(&examples().join(name)).unwrap();
     let (s, ev) = finish(s, input);
-    (String::from_utf8_lossy(&s.machine.output).into_owned(), ev)
+    (String::from_utf8_lossy(&s.x86().unwrap().output).into_owned(), ev)
 }
 
 #[test]
@@ -55,17 +55,17 @@ fn failed_load_keeps_the_previous_session_intact() {
     let original = rustemu_asm::assemble_str("org 100h\nmov ax, 1234h\nhlt\n").unwrap();
     let mut s = Session::new();
     s.load_program(original).unwrap();
-    assert_eq!(s.machine.step(), Event::Continue);
-    let old_cpu = s.machine.cpu.clone();
-    let old_info = s.machine.loaded.clone();
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    let old_cpu = s.x86().unwrap().cpu.clone();
+    let old_info = s.x86().unwrap().loaded.clone();
     let old_image = s.program.as_ref().unwrap().image.clone();
 
     let mut oversized = rustemu_asm::assemble_str("org 100h\nnop\n").unwrap();
     oversized.image.resize(0xFF00, 0);
     assert!(s.load_program(oversized).is_err());
 
-    assert_eq!(s.machine.cpu, old_cpu);
-    assert_eq!(s.machine.loaded, old_info);
+    assert_eq!(s.x86().unwrap().cpu, old_cpu);
+    assert_eq!(s.x86().unwrap().loaded, old_info);
     assert_eq!(s.program.as_ref().unwrap().image, old_image);
 
     // This MZ gets past the basic header checks but has a truncated relocation
@@ -79,15 +79,15 @@ fn failed_load_keeps_the_previous_session_intact() {
     word(8, 2); // 32-byte header
     word(0x18, 0x1F); // relocation starts one byte before EOF
     assert!(s.load_bytes(Loadable::Exe, corrupt_exe).is_err());
-    assert_eq!(s.machine.cpu, old_cpu);
-    assert_eq!(s.machine.loaded, old_info);
+    assert_eq!(s.x86().unwrap().cpu, old_cpu);
+    assert_eq!(s.x86().unwrap().loaded, old_info);
     assert_eq!(s.program.as_ref().unwrap().image, old_image);
 
     // Reload still refers to the original program, not either failed attempt.
     s.reload().unwrap();
     assert_eq!(s.program.as_ref().unwrap().image, old_image);
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.cpu.regs[0], 0x1234);
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86().unwrap().cpu.regs[0], 0x1234);
 
     s.load_bytes(Loadable::Com, vec![0xF4]).unwrap();
     assert!(s.program.is_none());
@@ -125,20 +125,20 @@ org 100h
 ";
     let (s, ev) = run_src(src, "");
     assert_eq!(ev, Event::Terminated(0));
-    let screen = s.machine.screen_text();
+    let screen = s.x86().unwrap().screen_text();
     let lines: Vec<&str> = screen.lines().collect();
     assert_eq!(lines[0], "A");
     assert_eq!(lines[5], format!("{}XXX", " ".repeat(16)));
-    assert_eq!(s.machine.sys.mem.read8(0xB8000 + (5 * 80 + 16) * 2 + 1), 0x1E);
+    assert_eq!(s.x86().unwrap().sys.mem.read8(0xB8000 + (5 * 80 + 16) * 2 + 1), 0x1E);
 }
 
 #[test]
 fn teletype_scrolls() {
     let src = "org 100h\nmov cx, 30\nl: mov ah, 2\nmov dl, 'a'\nint 21h\nmov dl, 13\nint 21h\nmov dl, 10\nint 21h\nloop l\nret\n";
     let (s, _) = run_src(src, "");
-    let text = s.machine.screen_text();
+    let text = s.x86().unwrap().screen_text();
     assert_eq!(text.lines().filter(|l| *l == "a").count(), 24);
-    let (_, row) = rustemu_core::video::Video::cursor(&s.machine.sys.mem, 0);
+    let (_, row) = rustemu_core::video::Video::cursor(&s.x86().unwrap().sys.mem, 0);
     assert_eq!(row, 24);
 }
 
@@ -147,7 +147,7 @@ fn divide_error_stops() {
     let (s, ev) = run_src("org 100h\nmov bl, 0\ndiv bl\nret\n", "");
     assert!(matches!(ev, Event::Error(_)));
     // Stopped right after the faulting instruction, back in user code.
-    assert_eq!(s.machine.cpu.ip, 0x104);
+    assert_eq!(s.x86().unwrap().cpu.ip, 0x104);
 }
 
 #[test]
@@ -169,9 +169,9 @@ handler:
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
     s.load_program(prog).unwrap();
-    assert_eq!(s.machine.run(1000), Event::Breakpoint);
-    assert_eq!(s.machine.cpu.regs[3], 0x1234);
-    assert_eq!(s.machine.run(1000), Event::Terminated(7));
+    assert_eq!(s.x86_mut().unwrap().run(1000), Event::Breakpoint);
+    assert_eq!(s.x86().unwrap().cpu.regs[3], 0x1234);
+    assert_eq!(s.x86_mut().unwrap().run(1000), Event::Terminated(7));
 }
 
 #[test]
@@ -179,20 +179,20 @@ fn step_back_restores_registers_and_memory() {
     let prog = rustemu_asm::assemble_str("org 100h\nmov ax, 1\nmov [200h], ax\ninc ax\nret\n").unwrap();
     let mut s = Session::new();
     s.load_program(prog).unwrap();
-    let base = s.machine.cpu.pc();
+    let base = s.x86().unwrap().cpu.pc();
     for _ in 0..3 {
-        assert_eq!(s.machine.step(), Event::Continue);
+        assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
     }
-    assert_eq!(s.machine.cpu.regs[0], 2);
-    let a = rustemu_core::linear(s.machine.cpu.sregs[3], 0x200);
-    assert_eq!(s.machine.sys.mem.read16(a), 1);
-    assert!(s.machine.step_back());
-    assert!(s.machine.step_back());
-    assert_eq!(s.machine.cpu.regs[0], 1);
-    assert_eq!(s.machine.sys.mem.read16(a), 0);
-    assert!(s.machine.step_back());
-    assert_eq!(s.machine.cpu.pc(), base);
-    assert!(!s.machine.step_back());
+    assert_eq!(s.x86().unwrap().cpu.regs[0], 2);
+    let a = rustemu_core::linear(s.x86().unwrap().cpu.sregs[3], 0x200);
+    assert_eq!(s.x86().unwrap().sys.mem.read16(a), 1);
+    assert!(s.x86_mut().unwrap().step_back());
+    assert!(s.x86_mut().unwrap().step_back());
+    assert_eq!(s.x86().unwrap().cpu.regs[0], 1);
+    assert_eq!(s.x86().unwrap().sys.mem.read16(a), 0);
+    assert!(s.x86_mut().unwrap().step_back());
+    assert_eq!(s.x86().unwrap().cpu.pc(), base);
+    assert!(!s.x86_mut().unwrap().step_back());
 }
 
 #[test]
@@ -202,39 +202,39 @@ fn step_back_restores_input_devices_and_floppy() {
             .unwrap();
     let mut s = Session::new();
     s.load_program(input).unwrap();
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.step(), Event::Continue);
-    s.machine.push_char(b'a');
-    assert_eq!(s.machine.step(), Event::WaitingInput);
-    assert!(s.machine.step_back());
-    assert_eq!(s.machine.step(), Event::WaitingInput);
-    s.machine.push_char(b'\r');
-    assert_eq!(s.machine.step(), Event::Continue);
-    let ds = s.machine.cpu.sregs[3];
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    s.x86_mut().unwrap().push_char(b'a');
+    assert_eq!(s.x86_mut().unwrap().step(), Event::WaitingInput);
+    assert!(s.x86_mut().unwrap().step_back());
+    assert_eq!(s.x86_mut().unwrap().step(), Event::WaitingInput);
+    s.x86_mut().unwrap().push_char(b'\r');
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    let ds = s.x86().unwrap().cpu.sregs[3];
     let buf = s.program.as_ref().unwrap().symbols.iter().find(|v| v.name == "BUF").unwrap().value as u16;
-    assert_eq!(s.machine.sys.mem.read8(rustemu_core::linear(ds, buf + 1)), 1);
-    assert_eq!(s.machine.sys.mem.read8(rustemu_core::linear(ds, buf + 2)), b'a');
+    assert_eq!(s.x86().unwrap().sys.mem.read8(rustemu_core::linear(ds, buf + 1)), 1);
+    assert_eq!(s.x86().unwrap().sys.mem.read8(rustemu_core::linear(ds, buf + 2)), b'a');
 
     let io = rustemu_asm::assemble_str(
         "org 100h\nmov ax, 0249h\nout 4, ax\nmov ax, 0301h\nmov bx, offset data\nmov cx, 1\nmov dx, 0\nint 13h\nhlt\ndata db 512 dup(0AAh)\n",
     )
     .unwrap();
     s.load_program(io).unwrap();
-    assert!(s.machine.floppies[0].is_empty());
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.sys.dev.traffic_lights, 0x0249);
-    assert!(s.machine.step_back());
-    assert_eq!(s.machine.sys.dev.traffic_lights, 0);
-    assert_eq!(s.machine.step(), Event::Continue);
+    assert!(s.x86().unwrap().floppies[0].is_empty());
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86().unwrap().sys.dev.traffic_lights, 0x0249);
+    assert!(s.x86_mut().unwrap().step_back());
+    assert_eq!(s.x86().unwrap().sys.dev.traffic_lights, 0);
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
     for _ in 0..4 {
-        assert_eq!(s.machine.step(), Event::Continue);
+        assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
     }
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.floppies[0].len(), 1_474_560);
-    assert_eq!(s.machine.floppies[0][0], 0xAA);
-    assert!(s.machine.step_back());
-    assert!(s.machine.floppies[0].is_empty());
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86().unwrap().floppies[0].len(), 1_474_560);
+    assert_eq!(s.x86().unwrap().floppies[0][0], 0xAA);
+    assert!(s.x86_mut().unwrap().step_back());
+    assert!(s.x86().unwrap().floppies[0].is_empty());
 }
 
 #[test]
@@ -277,14 +277,14 @@ fn host_file_io_is_a_step_back_boundary() {
     )
     .unwrap();
     let mut s = Session::new();
-    s.machine.set_dos_root(root.clone());
+    s.x86_mut().unwrap().set_dos_root(root.clone());
     s.load_program(prog).unwrap();
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert!(s.machine.history_len() >= 2);
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.history_len(), 0);
-    assert!(!s.machine.step_back());
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert!(s.x86().unwrap().history_len() >= 2);
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86().unwrap().history_len(), 0);
+    assert!(!s.x86_mut().unwrap().step_back());
     assert!(root.join("created.txt").exists());
     drop(s);
     std::fs::remove_dir_all(root).unwrap();
@@ -298,12 +298,12 @@ fn breakpoints_and_line_mapping() {
     s.load_program(prog).unwrap();
     assert_eq!(s.current_line(), Some((0, 3)));
     let bp = s.addr_of_line(0, 5).unwrap();
-    s.machine.breakpoints.insert(bp);
-    assert_eq!(s.machine.run(100), Event::Breakpoint);
+    s.x86_mut().unwrap().breakpoints.insert(bp);
+    assert_eq!(s.x86_mut().unwrap().run(100), Event::Breakpoint);
     assert_eq!(s.current_line(), Some((0, 5)));
-    assert_eq!(s.machine.cpu.regs[1], 3);
-    assert_eq!(s.machine.run(100), Event::Breakpoint);
-    assert_eq!(s.machine.cpu.regs[1], 2);
+    assert_eq!(s.x86().unwrap().cpu.regs[1], 3);
+    assert_eq!(s.x86_mut().unwrap().run(100), Event::Breakpoint);
+    assert_eq!(s.x86().unwrap().cpu.regs[1], 2);
 }
 
 #[test]
@@ -346,11 +346,11 @@ buf   db 10 dup(0)
 ";
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
-    s.machine.set_dos_root(dir.clone());
+    s.x86_mut().unwrap().set_dos_root(dir.clone());
     s.load_program(prog).unwrap();
     let (s, ev) = finish(s, "");
     assert_eq!(ev, Event::Terminated(0));
-    assert_eq!(s.machine.cpu.regs[1], 5);
+    assert_eq!(s.x86().unwrap().cpu.regs[1], 5);
     assert_eq!(std::fs::read(dir.join("test.txt")).unwrap(), b"hello");
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -446,11 +446,11 @@ dta     db 43 dup(0)
     let mut s = Session::new();
     let mut drive = rustemu_core::memdrive::MemDrive::new();
     drive.write("in.txt", b"hello".to_vec()).unwrap();
-    s.machine.set_dos_memory_drive(drive);
+    s.x86_mut().unwrap().set_dos_memory_drive(drive);
     s.load_program(prog).unwrap();
     let (s, ev) = finish(s, "");
-    assert_eq!(ev, Event::Terminated(0), "{:?}", s.machine.log);
-    let d = s.machine.dos_memory_drive().unwrap();
+    assert_eq!(ev, Event::Terminated(0), "{:?}", s.x86().unwrap().log);
+    let d = s.x86().unwrap().dos_memory_drive().unwrap();
     assert_eq!(d.read("sub/result.txt"), Some(&b"h!llo"[..]));
     assert_eq!(d.read("sub/out.txt"), None);
     assert_eq!(d.read("in.txt"), Some(&b"hello"[..]));
@@ -486,28 +486,28 @@ fname db 'big.dat', 0
 ";
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
-    s.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    s.x86_mut().unwrap().set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     s.load_program(prog).unwrap();
     let (s, ev) = finish(s, "");
-    assert_eq!(ev, Event::Terminated(0), "{:?}", s.machine.log);
-    assert_eq!(s.machine.dos_memory_drive().unwrap().read("big.dat"), Some(&b""[..]));
+    assert_eq!(ev, Event::Terminated(0), "{:?}", s.x86().unwrap().log);
+    assert_eq!(s.x86().unwrap().dos_memory_drive().unwrap().read("big.dat"), Some(&b""[..]));
 }
 
 #[test]
 fn devices_ports() {
     let src = "org 100h\nmov ax, 0249h\nout 4, ax\nmov al, 'P'\nout 130, al\nmov ax, 1234\nout 199, ax\nret\n";
     let (s, _) = run_src(src, "");
-    assert_eq!(s.machine.sys.dev.traffic_lights, 0x0249);
-    assert_eq!(s.machine.sys.dev.printer, b"P");
-    assert_eq!(s.machine.sys.dev.led, 1234);
+    assert_eq!(s.x86().unwrap().sys.dev.traffic_lights, 0x0249);
+    assert_eq!(s.x86().unwrap().sys.dev.printer, b"P");
+    assert_eq!(s.x86().unwrap().sys.dev.led, 1234);
 }
 
 #[test]
 fn graphics_mode_13h() {
     let src = "org 100h\nmov ax, 13h\nint 10h\nmov ah, 0Ch\nmov al, 4\nmov cx, 10\nmov dx, 20\nint 10h\nmov ah, 0Dh\nint 10h\nret\n";
     let (s, _) = run_src(src, "");
-    assert_eq!(s.machine.sys.mem.read8(0xA0000 + 20 * 320 + 10), 4);
-    assert_eq!(s.machine.cpu.regs[0] & 0xFF, 4);
+    assert_eq!(s.x86().unwrap().sys.mem.read8(0xA0000 + 20 * 320 + 10), 4);
+    assert_eq!(s.x86().unwrap().cpu.regs[0] & 0xFF, 4);
 }
 
 #[test]
@@ -515,18 +515,18 @@ fn waiting_for_input_does_not_flood_history() {
     let prog = rustemu_asm::assemble_str("org 100h\nmov ah, 0\nint 16h\nret\n").unwrap();
     let mut s = Session::new();
     s.load_program(prog).unwrap();
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.step(), Event::WaitingInput);
-    let n = s.machine.history_len();
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86_mut().unwrap().step(), Event::WaitingInput);
+    let n = s.x86().unwrap().history_len();
     for _ in 0..10 {
-        assert_eq!(s.machine.step(), Event::WaitingInput);
+        assert_eq!(s.x86_mut().unwrap().step(), Event::WaitingInput);
     }
-    assert_eq!(s.machine.history_len(), n);
-    s.machine.push_char(b'z');
-    assert_eq!(s.machine.step(), Event::Continue);
-    assert_eq!(s.machine.cpu.regs[0] & 0xFF, b'z' as u16);
+    assert_eq!(s.x86().unwrap().history_len(), n);
+    s.x86_mut().unwrap().push_char(b'z');
+    assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
+    assert_eq!(s.x86().unwrap().cpu.regs[0] & 0xFF, b'z' as u16);
     // Back in user code right after INT 16h.
-    assert_eq!(s.machine.cpu.ip, 0x104);
+    assert_eq!(s.x86().unwrap().cpu.ip, 0x104);
 }
 
 #[test]
@@ -535,7 +535,7 @@ fn current_line_while_waiting_for_key_is_the_int() {
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
     s.load_program(prog).unwrap();
-    assert_eq!(s.machine.run(100), Event::WaitingInput);
+    assert_eq!(s.x86_mut().unwrap().run(100), Event::WaitingInput);
     assert_eq!(s.current_line(), Some((0, 3)));
 }
 
@@ -544,10 +544,10 @@ fn robot_example_lights_lamps() {
     use rustemu_core::robot::Cell;
     let mut s = Session::new();
     s.load_path(&examples().join("robot.asm")).unwrap();
-    s.machine.sys.dev.clock = rustemu_core::devices::DeviceClock::Instructions(10);
-    s.machine.history_enabled = false;
-    assert_eq!(s.machine.run(20_000_000), Event::Budget);
-    let r = &s.machine.sys.dev.robot;
+    s.x86_mut().unwrap().sys.dev.clock = rustemu_core::devices::DeviceClock::Instructions(10);
+    s.x86_mut().unwrap().history_enabled = false;
+    assert_eq!(s.x86_mut().unwrap().run(20_000_000), Event::Budget);
+    let r = &s.x86().unwrap().sys.dev.robot;
     let lit = r.cells.iter().filter(|c| **c == Cell::Lamp { on: true }).count();
     assert!(lit >= 2, "only {lit} lamps lit");
 }
@@ -568,10 +568,10 @@ wait_t:
 ";
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
-    s.machine.instructions_per_tick = Some(1000);
+    s.x86_mut().unwrap().instructions_per_tick = Some(1000);
     s.load_program(prog).unwrap();
-    assert_eq!(s.machine.run(100_000), Event::Terminated(0));
-    assert!(s.machine.cpu.instr_count >= 4000);
+    assert_eq!(s.x86_mut().unwrap().run(100_000), Event::Terminated(0));
+    assert!(s.x86().unwrap().cpu.instr_count >= 4000);
 }
 
 #[test]
@@ -594,12 +594,12 @@ count dw 0
 ";
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
-    s.machine.instructions_per_tick = Some(500);
-    s.machine.timer_irq = true;
+    s.x86_mut().unwrap().instructions_per_tick = Some(500);
+    s.x86_mut().unwrap().timer_irq = true;
     s.load_program(prog).unwrap();
-    assert_eq!(s.machine.run(100_000), Event::Terminated(0));
+    assert_eq!(s.x86_mut().unwrap().run(100_000), Event::Terminated(0));
     // The ROM INT 08h handler also advanced the BIOS tick count.
-    assert!(s.machine.sys.mem.read16(0x46C) >= 3);
+    assert!(s.x86().unwrap().sys.mem.read16(0x46C) >= 3);
 }
 
 #[test]
@@ -640,7 +640,7 @@ mod source_stepping {
         let mut keys: Vec<u8> = keys.bytes().collect();
         loop {
             match s.run_step_goal(&mut goal, 1_000_000) {
-                Some(Event::WaitingInput) if !keys.is_empty() => s.machine.push_char(keys.remove(0)),
+                Some(Event::WaitingInput) if !keys.is_empty() => s.x86_mut().unwrap().push_char(keys.remove(0)),
                 Some(ev) => return ev,
                 None => panic!("step did not finish"),
             }
@@ -678,8 +678,8 @@ end
         assert_eq!((view(&s).level, view(&s).line), (0, 4));
         assert_eq!(step(&mut s, StepKind::Over, "42\r"), Event::Continue);
         assert_eq!((view(&s).level, view(&s).line), (0, 5));
-        assert_eq!(s.machine.cpu.regs[1], 42);
-        assert_eq!(String::from_utf8_lossy(&s.machine.output), "Number: 42\r");
+        assert_eq!(s.x86().unwrap().cpu.regs[1], 42);
+        assert_eq!(String::from_utf8_lossy(&s.x86().unwrap().output), "Number: 42\r");
         // PUSH inside the line being stepped does not confuse step over.
         assert_eq!(step(&mut s, StepKind::Over, ""), Event::Continue);
         assert_eq!(step(&mut s, StepKind::Over, ""), Event::Continue);
@@ -689,7 +689,7 @@ end
     #[test]
     fn single_step_enters_macro_and_step_out_leaves_it() {
         let mut s = session(SRC);
-        s.machine.step(); // PUSH AX of PRINT
+        s.x86_mut().unwrap().step(); // PUSH AX of PRINT
         let v = view(&s);
         assert_eq!(v.level, 1);
         assert_eq!(v.statement, (0, 3));
@@ -701,21 +701,21 @@ end
     fn step_out_of_library_procedure_and_user_procedure() {
         let mut s = session(SRC);
         step(&mut s, StepKind::Over, ""); // print
-        s.machine.step(); // CALL SCAN_NUM -> inside the procedure
+        s.x86_mut().unwrap().step(); // CALL SCAN_NUM -> inside the procedure
         assert_eq!(view(&s).level, 1);
         for _ in 0..4 {
-            s.machine.step();
+            s.x86_mut().unwrap().step();
         }
         // Inside SCAN_NUM: waiting for keys, then out to the caller.
         assert_eq!(step(&mut s, StepKind::Out, "7\r"), Event::Continue);
         assert_eq!((view(&s).level, view(&s).line), (0, 5));
-        s.machine.step(); // mov ax, cx
-        s.machine.step(); // call twice
-        s.machine.step(); // push ax (inside twice)
+        s.x86_mut().unwrap().step(); // mov ax, cx
+        s.x86_mut().unwrap().step(); // call twice
+        s.x86_mut().unwrap().step(); // push ax (inside twice)
         assert_eq!(view(&s).line, 10);
         assert_eq!(step(&mut s, StepKind::Out, ""), Event::Continue);
         assert_eq!(view(&s).line, 7);
-        assert_eq!(s.machine.cpu.regs[0], 14);
+        assert_eq!(s.x86().unwrap().cpu.regs[0], 14);
     }
 
     #[test]
@@ -755,8 +755,8 @@ fn command_line_parameters_in_psp() {
     let mut s = Session::new();
     s.command_line = "ab".into();
     s.load_program(prog).unwrap();
-    assert_eq!(s.machine.run(100), Event::Terminated(0));
-    let c = &s.machine.cpu;
+    assert_eq!(s.x86_mut().unwrap().run(100), Event::Terminated(0));
+    let c = &s.x86().unwrap().cpu;
     assert_eq!(c.regs[1] & 0xFF, 3); // " ab"
     assert_eq!(c.regs[0], ((0x62u16) << 8) | 0x20); // ' ' at 81h, 'b' at 83h
     assert_eq!(c.regs[3] & 0xFF, 0x0D);
@@ -788,13 +788,13 @@ table db 1, 2, 3
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
     s.load_program(prog).unwrap();
-    assert_eq!(s.machine.run(1000), Event::Breakpoint);
+    assert_eq!(s.x86_mut().unwrap().run(1000), Event::Breakpoint);
     let frames = s.call_stack();
     let lines: Vec<u32> = frames.iter().map(|f| s.line_at_addr(f.call_addr).unwrap().1).collect();
     assert_eq!(lines, [7, 3], "{frames:?}");
     let names: Vec<&str> = frames.iter().map(|f| s.symbol_at(f.target.unwrap()).unwrap()).collect();
     assert_eq!(names, ["INNER", "OUTER"]);
-    let ev = |e: &str| s.compile(e).map(|x| x.eval(&s.machine));
+    let ev = |e: &str| s.compile(e).map(|x| x.eval(&*s.target));
     assert_eq!(ev("value"), Ok(0x1234));
     assert_eq!(ev("table[bx-1]"), Ok(3));
     assert_eq!(ev("byte [offset table + 1]"), Ok(2));
@@ -815,9 +815,9 @@ end start
 ";
     let mut s = Session::new();
     s.load_program(rustemu_asm::assemble_str(exe).unwrap()).unwrap();
-    assert_eq!(s.machine.run(1000), Event::Breakpoint);
-    assert_eq!(s.compile("n").unwrap().eval(&s.machine), 77);
-    assert_eq!(s.compile("ds == data").unwrap().eval(&s.machine), 1);
+    assert_eq!(s.x86_mut().unwrap().run(1000), Event::Breakpoint);
+    assert_eq!(s.compile("n").unwrap().eval(&*s.target), 77);
+    assert_eq!(s.compile("ds == data").unwrap().eval(&*s.target), 1);
 }
 
 #[test]
@@ -841,23 +841,23 @@ next:
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
     s.load_program(prog).unwrap();
-    let cpu0 = s.machine.cpu.clone();
-    let led0 = s.machine.sys.dev.led;
-    let mem0 = s.machine.sys.mem.read16(rustemu_core::linear(s.machine.cpu.sregs[3], 0x500));
+    let cpu0 = s.x86().unwrap().cpu.clone();
+    let led0 = s.x86().unwrap().sys.dev.led;
+    let mem0 = s.x86().unwrap().sys.mem.read16(rustemu_core::linear(s.x86().unwrap().cpu.sregs[3], 0x500));
     let mut steps = 0;
-    while s.machine.step() == Event::Continue {
+    while s.x86_mut().unwrap().step() == Event::Continue {
         steps += 1;
     }
-    assert_eq!(s.machine.sys.dev.led, 0x5678);
-    assert!(s.machine.history_len() > steps - 1);
-    while s.machine.step_back() {}
-    assert!(s.machine.cpu.same_state(&cpu0));
-    assert_eq!(s.machine.sys.dev.led, led0);
-    assert_eq!(s.machine.sys.mem.read16(rustemu_core::linear(s.machine.cpu.sregs[3], 0x500)), mem0);
+    assert_eq!(s.x86().unwrap().sys.dev.led, 0x5678);
+    assert!(s.x86().unwrap().history_len() > steps - 1);
+    while s.x86_mut().unwrap().step_back() {}
+    assert!(s.x86().unwrap().cpu.same_state(&cpu0));
+    assert_eq!(s.x86().unwrap().sys.dev.led, led0);
+    assert_eq!(s.x86().unwrap().sys.mem.read16(rustemu_core::linear(s.x86().unwrap().cpu.sregs[3], 0x500)), mem0);
     // And forward again gives the same result.
-    while s.machine.step() == Event::Continue {}
-    assert_eq!(s.machine.sys.dev.led, 0x5678);
-    assert_eq!(s.machine.cpu.regs[3], 3);
+    while s.x86_mut().unwrap().step() == Event::Continue {}
+    assert_eq!(s.x86().unwrap().sys.dev.led, 0x5678);
+    assert_eq!(s.x86().unwrap().cpu.regs[3], 3);
 }
 
 #[test]
@@ -866,24 +866,24 @@ fn saved_state_restores_the_whole_machine() {
     let mut s = Session::new();
     s.load_program(rustemu_asm::assemble_str(src).unwrap()).unwrap();
     for _ in 0..6 {
-        s.machine.step();
+        s.x86_mut().unwrap().step();
     }
     let saved = s.save_state();
-    let (cpu, out) = (s.machine.cpu.clone(), s.machine.output.clone());
-    assert_eq!(s.machine.run(1000), Event::Halted);
-    let (end_cpu, end_out) = (s.machine.cpu.clone(), s.machine.output.clone());
+    let (cpu, out) = (s.x86().unwrap().cpu.clone(), s.x86().unwrap().output.clone());
+    assert_eq!(s.x86_mut().unwrap().run(1000), Event::Halted);
+    let (end_cpu, end_out) = (s.x86().unwrap().cpu.clone(), s.x86().unwrap().output.clone());
     s.restore_state(saved);
-    assert!(s.machine.cpu.same_state(&cpu));
-    assert_eq!(s.machine.output, out);
-    assert_eq!(s.current_line(), s.line_at_addr(s.machine.cpu.pc()));
+    assert!(s.x86().unwrap().cpu.same_state(&cpu));
+    assert_eq!(s.x86().unwrap().output, out);
+    assert_eq!(s.current_line(), s.line_at_addr(s.x86().unwrap().cpu.pc()));
     // Running again gives the same result.
-    assert_eq!(s.machine.run(1000), Event::Halted);
-    assert!(s.machine.cpu.same_state(&end_cpu));
-    assert_eq!(s.machine.output, end_out);
+    assert_eq!(s.x86_mut().unwrap().run(1000), Event::Halted);
+    assert!(s.x86().unwrap().cpu.same_state(&end_cpu));
+    assert_eq!(s.x86().unwrap().output, end_out);
     // Reset emulator and RAM: nothing is loaded any more.
     s.unload();
-    assert!(s.machine.loaded.is_none() && s.program.is_none());
-    assert_eq!(s.machine.sys.mem.read8(rustemu_core::linear(0x0700, 0x100)), 0);
+    assert!(s.x86().unwrap().loaded.is_none() && s.program.is_none());
+    assert_eq!(s.x86().unwrap().sys.mem.read8(rustemu_core::linear(0x0700, 0x100)), 0);
 }
 
 #[test]
@@ -892,11 +892,11 @@ fn bin_file_written_to_floppy_sectors() {
     let data: Vec<u8> = (0..1000u32).map(|i| i as u8).collect();
     // Cylinder 0, head 0, sector 2 = right after the boot sector.
     assert_eq!(s.write_floppy(0, 0, 0, 2, &data), Ok(2));
-    assert_eq!(s.machine.floppies[0].len(), 1_474_560);
-    assert_eq!(&s.machine.floppies[0][512..1512], &data[..]);
+    assert_eq!(s.x86().unwrap().floppies[0].len(), 1_474_560);
+    assert_eq!(&s.x86().unwrap().floppies[0][512..1512], &data[..]);
     // Cylinder 1, head 1, sector 18 is the last sector of the second cylinder: LBA 71.
     assert_eq!(s.write_floppy(0, 1, 1, 18, &[7; 512]), Ok(1));
-    assert_eq!(s.machine.floppies[0][71 * 512], 7);
+    assert_eq!(s.x86().unwrap().floppies[0][71 * 512], 7);
     assert!(s.write_floppy(0, 0, 0, 0, &data).is_err());
     assert!(s.write_floppy(0, 79, 1, 18, &data).is_err(), "does not fit after the last sector");
 }
@@ -918,26 +918,29 @@ data db 512 dup(55h)
     let prog = rustemu_asm::assemble_str(src).unwrap();
     let mut s = Session::new();
     s.load_program(prog.clone()).unwrap();
-    s.machine.run(100);
-    assert!(s.machine.cpu.flags & rustemu_core::cpu::flags::CF != 0, "no FLOPPY_1 yet");
-    assert_eq!(s.machine.cpu.regs[rustemu_core::cpu::AX] >> 8, 0x80);
-    assert_eq!(s.machine.cpu.regs[rustemu_core::cpu::SI] & 0xC1, 0x01, "one drive");
+    s.x86_mut().unwrap().run(100);
+    assert!(s.x86().unwrap().cpu.flags & rustemu_core::cpu::flags::CF != 0, "no FLOPPY_1 yet");
+    assert_eq!(s.x86().unwrap().cpu.regs[rustemu_core::cpu::AX] >> 8, 0x80);
+    assert_eq!(s.x86().unwrap().cpu.regs[rustemu_core::cpu::SI] & 0xC1, 0x01, "one drive");
 
-    assert_eq!(s.machine.add_floppy(), Some(1));
+    assert_eq!(s.x86_mut().unwrap().add_floppy(), Some(1));
     s.load_program(prog).unwrap();
-    while s.machine.cpu.regs[rustemu_core::cpu::SI] == 0 || s.machine.floppies[1][0] == 0 {
-        assert_eq!(s.machine.step(), Event::Continue);
+    while s.x86().unwrap().cpu.regs[rustemu_core::cpu::SI] == 0 || s.x86().unwrap().floppies[1][0] == 0 {
+        assert_eq!(s.x86_mut().unwrap().step(), Event::Continue);
     }
-    assert_eq!(s.machine.cpu.regs[rustemu_core::cpu::SI] & 0xC1, 0x41, "two drives in INT 11h");
-    assert_eq!(s.machine.floppies[1][..512], [0x55; 512]);
-    assert!(s.machine.floppies[0].iter().all(|&b| b == 0), "FLOPPY_0 untouched");
-    assert!(s.machine.step_back());
-    assert_eq!(s.machine.floppies[1][0], 0, "step back undoes the write on FLOPPY_1");
+    assert_eq!(s.x86().unwrap().cpu.regs[rustemu_core::cpu::SI] & 0xC1, 0x41, "two drives in INT 11h");
+    assert_eq!(s.x86().unwrap().floppies[1][..512], [0x55; 512]);
+    assert!(s.x86().unwrap().floppies[0].iter().all(|&b| b == 0), "FLOPPY_0 untouched");
+    assert!(s.x86_mut().unwrap().step_back());
+    assert_eq!(s.x86().unwrap().floppies[1][0], 0, "step back undoes the write on FLOPPY_1");
     // Booting from FLOPPY_1 passes its number in DL; at most four drives.
     s.write_floppy(1, 0, 0, 1, &[0xF4]).unwrap();
     s.boot_from_floppy(1).unwrap();
-    assert_eq!(s.machine.cpu.regs[rustemu_core::cpu::DX], 1);
-    assert_eq!((s.machine.add_floppy(), s.machine.add_floppy(), s.machine.add_floppy()), (Some(2), Some(3), None));
+    assert_eq!(s.x86().unwrap().cpu.regs[rustemu_core::cpu::DX], 1);
+    assert_eq!(
+        (s.x86_mut().unwrap().add_floppy(), s.x86_mut().unwrap().add_floppy(), s.x86_mut().unwrap().add_floppy()),
+        (Some(2), Some(3), None)
+    );
     assert!(s.boot_from_floppy(4).is_err());
 }
 
@@ -965,11 +968,11 @@ count dw 0
     let mut s = Session::new();
     s.load_program(prog).unwrap();
     assert_eq!(s.current_line(), Some((0, 5)));
-    assert_eq!(s.machine.run(10_000), Event::Breakpoint);
-    assert_eq!(String::from_utf8_lossy(&s.machine.output), "ok\r\nok\r\nok\r\n");
+    assert_eq!(s.x86_mut().unwrap().run(10_000), Event::Breakpoint);
+    assert_eq!(String::from_utf8_lossy(&s.x86().unwrap().output), "ok\r\nok\r\nok\r\n");
     assert_eq!(s.current_line(), Some((0, 13)));
     // NASM meaning of names in debugger expressions: `count` is the address, `[count]` the word.
-    let ev = |e: &str| s.compile(e).map(|x| x.eval(&s.machine));
+    let ev = |e: &str| s.compile(e).map(|x| x.eval(&*s.target));
     let addr = s.program.as_ref().unwrap().symbols.iter().find(|x| x.name == "COUNT").unwrap().value;
     assert_eq!(ev("count"), Ok(addr));
     assert_eq!(ev("[count]"), Ok(0));
@@ -984,23 +987,23 @@ fn nasm_examples() {
     let mut s = Session::new();
     s.load_path(&nasm_examples_dir().join("hello_nasm.asm")).unwrap();
     let (s, ev) = finish(s, "");
-    let out = String::from_utf8_lossy(&s.machine.output).into_owned();
+    let out = String::from_utf8_lossy(&s.x86().unwrap().output).into_owned();
     assert_eq!(out, "Hello from NASM!\r\n".repeat(3));
     assert_eq!(ev, Event::Terminated(0));
     let mut s = Session::new();
     s.load_path(&nasm_examples_dir().join("boot_nasm.asm")).unwrap();
     assert_eq!(s.program.as_ref().unwrap().format, rustemu_asm::Format::Boot);
-    assert_eq!(s.machine.run(100_000), Event::Halted);
-    assert!(s.machine.screen_text().contains("Booted from a NASM boot sector!"));
+    assert_eq!(s.x86_mut().unwrap().run(100_000), Event::Halted);
+    assert!(s.x86().unwrap().screen_text().contains("Booted from a NASM boot sector!"));
 }
 
 /// Rows of the disassembly from the entry point (`data`: data-aware).
 fn code_rows(s: &Session, n: usize, data: bool) -> Vec<String> {
-    let mut a = s.machine.cpu.pc();
-    let mut ip = s.machine.cpu.ip;
+    let mut a = s.x86().unwrap().cpu.pc();
+    let mut ip = s.x86().unwrap().cpu.ip;
     (0..n)
         .map(|_| {
-            let r = s.code_row(a, ip, data);
+            let r = s.code_row(a, ip as u32, data);
             a += r.len;
             ip = ip.wrapping_add(r.len as u16);
             r.text
@@ -1018,7 +1021,7 @@ fn disassembly_shows_data_as_data() {
     assert_eq!(rows[..4], ["PUSH AX", "PUSH SI", "JMP 0113h", "DB 'First number: ', 0"]);
     // The zeros after the program, up to the end of the segment.
     assert_eq!(rows[17..21], ["RET", "DB 'Hello', 0Dh, 0Ah, '$'", "DW 1234h, 1234h, 1234h", "DB 65219 DUP (0)"]);
-    let msg = s.machine.cpu.pc() - 0x100 + 0x12F;
+    let msg = s.x86().unwrap().cpu.pc() - 0x100 + 0x12F;
     assert_eq!(s.symbol_at(msg), Some("MSG"));
     // Without data awareness the string is decoded as instructions.
     assert_eq!(code_rows(&s, 4, false)[3], "INC SI");
@@ -1027,9 +1030,9 @@ fn disassembly_shows_data_as_data() {
     let src = "org 100h\n jmp code\nd db 1, 2, 90h, 90h\ncode: mov ax, offset d + 2\n jmp ax\n";
     let mut s = Session::new();
     s.load_program(rustemu_asm::assemble_str(src).unwrap()).unwrap();
-    s.machine.run(3);
-    let start = s.machine.cpu.pc() - 2;
-    let row = |a: u32| s.code_row(a, (a - 0x7000) as u16, true);
+    s.x86_mut().unwrap().run(3);
+    let start = s.x86().unwrap().cpu.pc() - 2;
+    let row = |a: u32| s.code_row(a, a - 0x7000, true);
     assert_eq!((row(start).text.as_str(), row(start).len), ("DB 1, 2", 2));
     assert_eq!(row(start + 2).text, "NOP");
     assert!(!row(start + 2).data && row(start + 3).data);
@@ -1055,14 +1058,14 @@ fn fpu_step_back() {
     let mut s = Session::new();
     s.load_program(rustemu_asm::assemble_str("org 100h\nfinit\nfld1\nfldpi\nfaddp\nret\n").unwrap()).unwrap();
     for _ in 0..5 {
-        s.machine.step();
+        s.x86_mut().unwrap().step();
     }
-    let after = s.machine.sys.fpu.clone();
+    let after = s.x86().unwrap().sys.fpu.clone();
     assert_eq!(after.top(), 7);
     assert!((rustemu_core::fpu::to_f64(after.st(0)) - (1.0 + std::f64::consts::PI)).abs() < 1e-15);
     // Back over FADDP and FLDPI: the stack holds 1.0 alone again.
-    assert!(s.machine.step_back() && s.machine.step_back());
-    let f = &s.machine.sys.fpu;
+    assert!(s.x86_mut().unwrap().step_back() && s.x86_mut().unwrap().step_back());
+    let f = &s.x86().unwrap().sys.fpu;
     assert_eq!((f.top(), rustemu_core::fpu::to_f64(f.st(0))), (7, 1.0));
     assert_eq!(f.st_tag(1), rustemu_core::fpu::Tag::Empty);
 }

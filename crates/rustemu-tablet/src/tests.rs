@@ -36,7 +36,7 @@ fn tablet_app() -> TabletApp {
     for w in ["ax", "cx * 2"] {
         app.debugger.watches.push(rustemu_ui::app::Watch { text: w.into(), compiled: None, before: None });
     }
-    let ds = app.session.machine.cpu.sregs[rustemu_core::cpu::DS];
+    let ds = app.session.x86().unwrap().cpu.sregs[rustemu_core::cpu::DS];
     let mut t = TabletApp::new(app);
     crate::memory::show_address(&mut t.app, &mut t.state.mem, rustemu_core::linear(ds, 0x0102));
     t
@@ -67,25 +67,25 @@ fn tablet_run_step_and_tabs() {
     // Run assembles the editor text, loads it and runs it to the end.
     h.get_by_label("Run").click();
     h.run_steps(10);
-    assert!(h.state().app.session.machine.terminated.is_some(), "{}", h.state().app.status);
-    assert!(rustemu_ui::screen::screen_text(&h.state().app.session.machine.sys.mem).contains("Hello, World!"));
+    assert!(h.state().app.session.target.terminated().is_some(), "{}", h.state().app.status);
+    assert!(rustemu_ui::screen::screen_text(&h.state().app.session.x86().unwrap().sys.mem).contains("Hello, World!"));
     // Reset reloads it; Step executes one instruction.
     h.get_by_label("Reset").click();
     h.run_steps(2);
-    assert_eq!(h.state().app.session.machine.cpu.instr_count, 0);
+    assert_eq!(h.state().app.session.target.instr_count(), 0);
     h.get_by_label("Step").click();
     h.run_steps(2);
-    assert_eq!(h.state().app.session.machine.cpu.instr_count, 1);
+    assert_eq!(h.state().app.session.target.instr_count(), 1);
     h.get_by_label("Debugger").click();
     h.run_steps(2);
     assert_eq!(h.state().state.tab, Tab::Debugger);
     // A flag cell shows the flag in the inspector, which sets it.
-    let cf = h.state().app.session.machine.cpu.flags & rustemu_core::cpu::flags::CF;
+    let cf = h.state().app.session.x86().unwrap().cpu.flags & rustemu_core::cpu::flags::CF;
     h.get_by_label("CF = 0").click();
     h.run_steps(2);
     h.get_by_label("Set the flag").click();
     h.run_steps(2);
-    assert_ne!(h.state().app.session.machine.cpu.flags & rustemu_core::cpu::flags::CF, cf);
+    assert_ne!(h.state().app.session.x86().unwrap().cpu.flags & rustemu_core::cpu::flags::CF, cf);
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn tablet_keyboard_types_into_the_program() {
     h.get_by_label("Run").click();
     h.run_steps(6);
     // The keyboard opens when the program waits for input.
-    assert!(h.state().app.session.machine.is_waiting_input());
+    assert!(h.state().app.session.target.is_waiting_input());
     assert!(h.state().state.keypad.open);
     save(&mut h, "31_tablet_keyboard");
     for key in ["key H", "key Shift", "key I", "key Enter"] {
@@ -106,9 +106,9 @@ fn tablet_keyboard_types_into_the_program() {
         h.run_steps(2);
     }
     h.run_steps(6);
-    assert!(h.state().app.session.machine.terminated.is_some(), "{}", h.state().app.status);
+    assert!(h.state().app.session.target.terminated().is_some(), "{}", h.state().app.status);
     // Shift applied to "i" only: "hI", printed back in upper case.
-    let text = rustemu_ui::screen::screen_text(&h.state().app.session.machine.sys.mem);
+    let text = rustemu_ui::screen::screen_text(&h.state().app.session.x86().unwrap().sys.mem);
     assert!(text.contains("hI") && text.contains("HI"), "{text}");
     // Fn shows the function keys; Hide closes the keyboard.
     h.get_by_label("key Fn").click();
@@ -184,7 +184,7 @@ fn step(h: &mut Harness<'_, TabletApp>) {
 /// Step once more: the first Step only assembles and loads the program.
 fn load(h: &mut Harness<'_, TabletApp>) {
     step(h);
-    assert_eq!(h.state().app.session.machine.cpu.instr_count, 0);
+    assert_eq!(h.state().app.session.target.instr_count(), 0);
 }
 
 #[test]
@@ -238,7 +238,7 @@ fn registers_are_edited_in_the_inspector() {
     h.run_steps(2);
     load(&mut h);
     step(&mut h);
-    let ax = |h: &Harness<'_, TabletApp>| h.state().app.session.machine.cpu.regs[rustemu_core::cpu::AX];
+    let ax = |h: &Harness<'_, TabletApp>| h.state().app.session.x86().unwrap().cpu.regs[rustemu_core::cpu::AX];
     // R1: AL = AA keeps AH.
     h.get_by_label("AL = 34").click();
     h.run_steps(2);
@@ -273,7 +273,7 @@ fn waiting_for_a_key_is_explained() {
     // Hide does not end the wait; the output offers the keyboard again.
     h.get_by_label("Hide").click();
     h.run_steps(2);
-    assert!(h.state().app.session.machine.is_waiting_input());
+    assert!(h.state().app.session.target.is_waiting_input());
     h.get_by_label("Open keyboard").click();
     h.run_steps(2);
     assert!(h.state().state.keypad.open);
@@ -297,12 +297,12 @@ fn a_key_completes_a_step_that_waits() {
     load(&mut h);
     step(&mut h);
     step(&mut h);
-    assert!(h.state().app.session.machine.is_waiting_input());
+    assert!(h.state().app.session.target.is_waiting_input());
     assert!(h.state().state.keypad.open);
     h.get_by_label("key A").click();
     h.run_steps(3);
-    let c = &h.state().app.session.machine.cpu;
-    assert!(!h.state().app.session.machine.is_waiting_input());
+    let c = &h.state().app.session.x86().unwrap().cpu;
+    assert!(!h.state().app.session.target.is_waiting_input());
     assert_eq!(c.regs[rustemu_core::cpu::AX], 0x1E61, "scan code and ASCII of 'a'");
     assert!(h.query_by_label("INT 16h").is_some(), "the visual step shows the INT");
 }
@@ -364,7 +364,7 @@ fn source_follows_into_and_out_of_the_library() {
     let mut keys = ["key 5", "key Enter"].into_iter();
     let mut in_library = false;
     for _ in 0..200 {
-        if h.state().app.session.machine.is_waiting_input() {
+        if h.state().app.session.target.is_waiting_input() {
             h.get_by_label(keys.next().unwrap_or("key Enter")).click();
             h.run_steps(3);
         } else {
@@ -422,7 +422,7 @@ fn virtual_drive_is_in_the_menu() {
     // The browser: drive C: in memory, its files one tap away; the floppies in "Virtual drive".
     let mut t = TabletApp::new(app_with_example(0));
     t.app.front.browser = true;
-    t.app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    t.app.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     let mut h = tablet_harness(t, [1376.0, 1032.0]);
     h.run_steps(2);
     h.get_by_label("file, examples, tools").click();

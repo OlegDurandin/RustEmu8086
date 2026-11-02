@@ -35,13 +35,22 @@ pub struct ConsoleState {
     logged: Option<(u64, u32)>,
 }
 
+/// The 8086 the console works with; [`execute`] and [`log_state`] check that there is one.
+fn m(app: &App) -> &rustemu_core::Machine {
+    app.session.x86().expect("the DEBUG.EXE console needs an 8086")
+}
+
+fn m_mut(app: &mut App) -> &mut rustemu_core::Machine {
+    app.session.x86_mut().expect("the DEBUG.EXE console needs an 8086")
+}
+
 fn hex(s: &str) -> Option<u32> {
     u32::from_str_radix(s.trim_end_matches(['h', 'H']), 16).ok()
 }
 
 /// Parses an address: `seg:off`, `reg:off`, or a bare offset in `default_seg`.
 fn addr(app: &App, s: &str, default_seg: u16) -> Option<(u16, u16)> {
-    let c = &app.session.machine.cpu;
+    let c = &m(app).cpu;
     let part = |t: &str| -> Option<u16> {
         let u = t.to_ascii_uppercase();
         if let Some(i) = SREG_NAMES.iter().position(|r| *r == u) {
@@ -62,7 +71,7 @@ fn addr(app: &App, s: &str, default_seg: u16) -> Option<(u16, u16)> {
 }
 
 fn regs_text(app: &App) -> Vec<String> {
-    let c = &app.session.machine.cpu;
+    let c = &m(app).cpu;
     let mut l1 = String::new();
     // DEBUG.EXE order: AX BX CX DX SP BP SI DI.
     for i in [0, 3, 1, 2, 4, 5, 6, 7] {
@@ -88,14 +97,18 @@ fn regs_text(app: &App) -> Vec<String> {
         fl(CF, "CY", "NC")
     );
     let pc = c.pc();
-    let ins = disassemble(app.session.machine.sys.mem.slice(pc, 8), c.ip);
-    let bytes: String = app.session.machine.sys.mem.slice(pc, ins.len).iter().map(|b| format!("{b:02X}")).collect();
+    let ins = disassemble(m(app).sys.mem.slice(pc, 8), c.ip);
+    let bytes: String = m(app).sys.mem.slice(pc, ins.len).iter().map(|b| format!("{b:02X}")).collect();
     vec![l1.trim_end().to_string(), l2, format!("{:04X}:{:04X} {bytes:<14} {}", c.cs(), c.ip, ins.text)]
 }
 
 /// Runs a console command and appends its output.
 pub fn execute(app: &mut App, line: &str) {
-    let out = run_command(app, line);
+    let out = if app.session.x86().is_some() {
+        run_command(app, line)
+    } else {
+        vec!["the DEBUG.EXE console works with the 8086 only".into()]
+    };
     let con = &mut app.console;
     con.lines.push(format!("-{line}"));
     con.lines.extend(out);
@@ -110,8 +123,8 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
     let Some(cmd) = words.next() else { return vec![] };
     let args: Vec<&str> = words.collect();
     let loaded = app.loaded();
-    let ds = app.session.machine.cpu.sregs[3];
-    let cs = app.session.machine.cpu.cs();
+    let ds = m(app).cpu.sregs[3];
+    let cs = m(app).cpu.cs();
     match cmd.to_ascii_lowercase().as_str() {
         "?" | "help" => HELP.lines().map(str::to_string).collect(),
         "cls" => {
@@ -121,7 +134,7 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
         "r" => {
             if let Some(reg) = args.first() {
                 let Some(v) = args.get(1).and_then(|v| hex(v)) else { return vec!["usage: r reg value".into()] };
-                if !app.session.machine.set_register(reg, v as u16) {
+                if !m_mut(app).set_register(reg, v as u16) {
                     return vec![format!("unknown register {reg}")];
                 }
             }
@@ -136,7 +149,7 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
                 None => app.console.last_dump.unwrap_or(linear(ds, 0)),
             };
             let len = args.get(1).and_then(|v| hex(v)).unwrap_or(0x80);
-            let mem = &app.session.machine.sys.mem;
+            let mem = &m(app).sys.mem;
             let mut out = Vec::new();
             let mut a = start & !0xF;
             while a < start + len {
@@ -176,7 +189,7 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
                 }
             }
             for (i, b) in bytes.iter().enumerate() {
-                app.session.machine.sys.mem.write8(linear(s, o.wrapping_add(i as u16)), *b);
+                m_mut(app).sys.mem.write8(linear(s, o.wrapping_add(i as u16)), *b);
             }
             vec![format!("{} byte(s) written", bytes.len())]
         }
@@ -189,7 +202,7 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
                 return vec!["usage: f addr len byte".into()];
             };
             for i in 0..len {
-                app.session.machine.sys.mem.write8(linear(s, o.wrapping_add(i as u16)), v as u8);
+                m_mut(app).sys.mem.write8(linear(s, o.wrapping_add(i as u16)), v as u8);
             }
             vec![]
         }
@@ -199,13 +212,13 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
                     Some(x) => x,
                     None => return vec!["bad address".into()],
                 },
-                None => app.console.last_unasm.unwrap_or((cs, app.session.machine.cpu.ip)),
+                None => app.console.last_unasm.unwrap_or((cs, m(app).cpu.ip)),
             };
             let n = args.get(1).and_then(|v| hex(v)).unwrap_or(0x10);
             let mut out = Vec::new();
             for _ in 0..n {
                 let a = linear(s, o);
-                let mem = &app.session.machine.sys.mem;
+                let mem = &m(app).sys.mem;
                 let ins = disassemble(mem.slice(a, 8), o);
                 let bytes: String = mem.slice(a, ins.len).iter().map(|b| format!("{b:02X}")).collect();
                 out.push(format!("{s:04X}:{o:04X} {bytes:<14} {}", ins.text));
@@ -220,7 +233,7 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
             for _ in 0..n {
                 app.single_step();
                 out.extend(regs_text(app));
-                if app.session.machine.terminated.is_some() {
+                if app.session.target.terminated().is_some() {
                     out.push("program terminated".into());
                     break;
                 }
@@ -253,10 +266,10 @@ fn run_command(app: &mut App, line: &str) -> Vec<String> {
 /// Writes the machine state to the log whenever execution stops at a new place (like Emu8086's
 /// debug window, which logs every step).
 pub fn log_state(app: &mut App) {
-    if !app.loaded() || app.run != crate::app::RunMode::Paused {
+    if !app.loaded() || app.run != crate::app::RunMode::Paused || app.session.x86().is_none() {
         return;
     }
-    let c = &app.session.machine.cpu;
+    let c = &m(app).cpu;
     let now = (c.instr_count, c.pc());
     if app.console.logged == Some(now) {
         return;
@@ -331,9 +344,9 @@ mod tests {
         execute(&mut a, "u cs:100 1");
         assert!(a.console.lines.last().unwrap().contains("MOV DX, 0108h"));
         execute(&mut a, "t");
-        assert_eq!(a.session.machine.cpu.ip, 0x103);
+        assert_eq!(a.session.x86().unwrap().cpu.ip, 0x103);
         execute(&mut a, "r ax 1234");
-        assert_eq!(a.session.machine.cpu.regs[0], 0x1234);
+        assert_eq!(a.session.x86().unwrap().cpu.regs[0], 0x1234);
         execute(&mut a, "h 10 1");
         assert_eq!(a.console.lines.last().unwrap(), "0011  000F");
     }
