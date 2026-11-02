@@ -16,6 +16,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install NASM (reference assembler for encoding tests)
         run: brew install nasm
+      - name: Install MIPS binutils (reference assembler for the MIPS encoding tests)
+        run: brew install mipsel-linux-gnu-binutils
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy

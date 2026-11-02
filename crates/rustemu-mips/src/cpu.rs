@@ -226,10 +226,12 @@ impl Cpu {
         }
     }
 
-    /// Records an exception in coprocessor 0 (as MARS does whether or not there is a handler)
-    /// and goes to the exception handler when it holds code; otherwise the program counter stays
-    /// at the instruction.
-    fn raise(
+    /// Records an exception of the instruction at `pc` in coprocessor 0 (as MARS does whether or
+    /// not there is a handler) and goes to the exception handler when it holds code; otherwise the
+    /// program counter stays at the instruction. `bad` is the refused address of an address
+    /// exception, `fetch` tells that the instruction itself could not be fetched. The machine
+    /// raises the errors of system calls with this too.
+    pub fn raise(
         &mut self,
         mem: &Memory,
         code: ExcCode,

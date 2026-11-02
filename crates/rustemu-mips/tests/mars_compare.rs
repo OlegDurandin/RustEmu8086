@@ -61,6 +61,10 @@ enum Line {
     Ins(String, u32),
     /// A forward branch: source with a label name, the word without the offset, the label.
     Branch(String, u32, usize),
+    /// A forward jump (`j` / `jal`): source, the word without the target, the label.
+    Jump(String, u32, usize),
+    /// `la reg, label` (MARS: `lui $1, hi` + `ori reg, $1, lo`).
+    La(u32, usize),
     Label(usize),
 }
 
@@ -153,7 +157,9 @@ fn instruction(g: &mut Rng, labels: &mut usize, lines: &mut Vec<Line>) {
                 ("lwr", 0x26, 1),
                 ("swl", 0x2A, 1),
                 ("swr", 0x2E, 1),
-            ][g.below(12) as usize];
+                ("ll", 0x30, 4),
+                ("sc", 0x38, 4),
+            ][g.below(14) as usize];
             // Mostly aligned; sometimes not, for the address exceptions.
             let mut off = g.below(256) as i32;
             if g.below(16) != 0 {
@@ -164,15 +170,32 @@ fn instruction(g: &mut Rng, labels: &mut usize, lines: &mut Vec<Line>) {
         10 => {
             let label = *labels;
             *labels += 1;
-            let (text, word) = match g.below(6) {
+            let (text, word) = match g.below(11) {
                 0 => (format!("beq {}, {}", n(s), n(t)), i(0x04, s, t, 0)),
                 1 => (format!("bne {}, {}", n(s), n(t)), i(0x05, s, t, 0)),
                 2 => (format!("blez {}", n(s)), i(0x06, s, 0, 0)),
                 3 => (format!("bgtz {}", n(s)), i(0x07, s, 0, 0)),
                 4 => (format!("bltz {}", n(s)), i(0x01, s, 0, 0)),
-                _ => (format!("bgez {}", n(s)), i(0x01, s, 1, 0)),
+                5 => (format!("bgez {}", n(s)), i(0x01, s, 1, 0)),
+                // MARS links only when the branch is taken.
+                6 => (format!("bltzal {}", n(s)), i(0x01, s, 0x10, 0)),
+                7 => (format!("bgezal {}", n(s)), i(0x01, s, 0x11, 0)),
+                8 => (String::new(), 0x02 << 26),
+                9 => (String::new(), 0x03 << 26),
+                _ => (String::new(), u32::MAX),
             };
-            lines.push(Line::Branch(format!("{text}, L{label}"), word, label));
+            match word {
+                u32::MAX => {
+                    // jalr through a register loaded with la.
+                    lines.push(Line::La(25, label));
+                    lines.push(Line::Ins(format!("jalr {}, $t9", n(d)), r(25, 0, d, 0, 0x09)));
+                }
+                w if text.is_empty() => {
+                    let m = if w >> 26 == 2 { "j" } else { "jal" };
+                    lines.push(Line::Jump(format!("{m} L{label}"), w, label));
+                }
+                w => lines.push(Line::Branch(format!("{text}, L{label}"), w, label)),
+            }
             for _ in 0..=g.below(2) {
                 instruction(g, labels, lines);
             }
@@ -219,6 +242,7 @@ fn program(seed: u64) -> (String, Vec<u32>) {
         at.push(pc);
         match l {
             Line::Label(k) => label_at[*k] = pc,
+            Line::La(..) => pc += 8,
             _ => pc += 4,
         }
     }
@@ -234,6 +258,16 @@ fn program(seed: u64) -> (String, Vec<u32>) {
                 src += &format!("    {t}\n");
                 let off = (label_at[*k] as i64 - (pc as i64 + 4)) / 4;
                 code.push(w | (off as u32 & 0xFFFF));
+            }
+            Line::Jump(t, w, k) => {
+                src += &format!("    {t}\n");
+                code.push(w | (label_at[*k] >> 2 & 0x03FF_FFFF));
+            }
+            Line::La(reg, k) => {
+                src += &format!("    la {}, L{k}\n", n(*reg));
+                let a = label_at[*k];
+                code.push(i(0x0F, 0, 1, (a >> 16) as i32));
+                code.push(i(0x0D, 1, *reg, (a & 0xFFFF) as i32));
             }
             Line::Label(k) => src += &format!("L{k}:\n"),
         }
@@ -347,7 +381,10 @@ fn generated_programs_run_on_the_core() {
     let mut ends = std::collections::BTreeMap::new();
     for seed in 1..201 {
         let (src, code) = program(seed);
-        assert_eq!(code.len(), src.lines().filter(|l| l.starts_with("    ")).count());
+        // The core's assembler encodes the program as the generator does.
+        let assembled: Vec<u32> =
+            rustemu_mips::asm::assemble(&src).unwrap().statements.iter().flat_map(|s| s.words.clone()).collect();
+        assert_eq!(assembled, code, "seed {seed}:\n{src}");
         let end = match run_core(&code).error {
             None => "completed".to_string(),
             Some(e) => e.split(": ").nth(1).unwrap_or(&e).split(" 0x").next().unwrap().to_string(),
@@ -360,4 +397,233 @@ fn generated_programs_run_on_the_core() {
         assert!(ends.get(kind).is_some_and(|&n| n >= 10), "too few programs end with {kind}: {ends:?}");
     }
     assert!(ends.keys().any(|k| k.contains("not aligned")), "no address exceptions: {ends:?}");
+}
+
+/// MARS's services without input: the printing formats, `sbrk`, seeded random numbers, `exit2`.
+#[test]
+fn services_match_mars() {
+    let Some(mars) = std::env::var_os("MARS") else {
+        eprintln!("MARS is not set: skipping the comparison with MARS");
+        return;
+    };
+    let mars = Path::new(&mars).canonicalize().expect("MARS exists");
+    // (MARS source, machine code) of each instruction.
+    let li = |r: u32, v: i32| (format!("addiu {}, $zero, {v}", n(r)), i(0x09, 0, r, v));
+    let sys = |v: i32| [li(2, v), ("syscall".to_string(), 0x0000_000C)];
+    let mv = |d: u32, s: u32| (format!("addu {}, {}, $zero", n(d), n(s)), r(s, 0, d, 0, 0x21));
+    let mut p: Vec<(String, u32)> = Vec::new();
+    for v in [0, -1, 12345, -32768, 32767] {
+        p.push(li(4, v));
+        for s in [1, 34, 35, 36] {
+            p.extend(sys(s));
+            p.push(li(4, b' ' as i32));
+            p.extend(sys(11));
+            p.push(li(4, v));
+        }
+    }
+    p.push(("lui $a0, 0x1001".into(), i(0x0F, 0, 4, 0x1001)));
+    p.extend(sys(4));
+    for size in [5, 0, 3, 100] {
+        p.push(li(4, size));
+        p.extend(sys(9));
+        p.push(mv(4, 2));
+        p.extend(sys(34));
+    }
+    p.push(li(4, 1));
+    p.push(li(5, 2024));
+    p.extend(sys(40));
+    for bound in [10, 16, 1000, 7, 0x7fff] {
+        p.push(li(4, 1));
+        p.push(li(5, bound));
+        p.extend(sys(42));
+        p.extend(sys(1));
+    }
+    p.push(li(4, 1));
+    p.extend(sys(41));
+    p.extend(sys(1));
+    p.push(li(4, 7));
+    p.extend(sys(17));
+    let src = format!(
+        ".data\n.asciiz \" text\\n\"\n.text\n{}",
+        p.iter().map(|(t, _)| format!("    {t}\n")).collect::<String>()
+    );
+    let words: Vec<u32> = p.iter().map(|&(_, w)| w).collect();
+
+    let mut m = rustemu_mips::Machine::new();
+    let mut data = b" text\n\0".to_vec();
+    data.resize(8, 0);
+    m.load(&rustemu_mips::Image {
+        chunks: vec![
+            rustemu_mips::Chunk {
+                addr: TEXT_BASE,
+                bytes: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+                code: true,
+            },
+            rustemu_mips::Chunk { addr: DATA_BASE, bytes: data, code: false },
+        ],
+        entry: TEXT_BASE,
+    })
+    .unwrap();
+    let ev = m.run(100_000);
+    let ours = m.console.text();
+
+    let dir = std::env::temp_dir().join(format!("rustemu_mars_sys_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("services.asm");
+    std::fs::write(&file, &src).unwrap();
+    let mut cmd = Command::new("java");
+    if mars.extension().is_some_and(|e| e == "jar") {
+        cmd.arg("-jar").arg(&mars);
+    } else {
+        cmd.arg("-cp").arg(&mars).arg("Mars");
+    }
+    let out = cmd.arg("nc").arg(&file).output().expect("java runs");
+    std::fs::remove_dir_all(&dir).ok();
+    let theirs = String::from_utf8_lossy(&out.stdout).to_string();
+    // MARS ends its output with a new line of its own.
+    assert_eq!(ours, theirs.strip_suffix('\n').unwrap_or(&theirs), "\n{src}");
+    assert_eq!(ev, rustemu_target::Event::Terminated(7));
+    assert_eq!(out.status.code(), Some(7), "MARS exits with the code of exit2");
+}
+
+/// A source operand of the kind `op` requires (for the assembler comparison).
+fn source_operand(g: &mut Rng, op: rustemu_mips::asm::Operand, branch: bool) -> String {
+    use rustemu_mips::asm::{IntClass, Operand};
+    match op {
+        Operand::Reg => n(g.reg()),
+        Operand::Int(IntClass::I5) => g.below(32).to_string(),
+        Operand::Int(IntClass::I16U) => (32 + g.below(65536 - 32)).to_string(),
+        Operand::Int(IntClass::I16) => (-1 - g.below(32768) as i64).to_string(),
+        Operand::Int(IntClass::I32) => {
+            let v = g.next() as i32;
+            if (-32768..=65535).contains(&v) { "100000".into() } else { v.to_string() }
+        }
+        Operand::Label if branch => format!("t{}", g.below(4)),
+        Operand::Label => format!("d{}", g.below(4)),
+        Operand::LParen => "(".into(),
+        Operand::RParen => ")".into(),
+        Operand::Plus => "+".into(),
+    }
+}
+
+/// Every form of every instruction, with random operands, assembled by the core's assembler and
+/// by MARS: the machine code and the data must be the same.
+#[test]
+fn assembler_matches_mars() {
+    use rustemu_mips::asm::{Table, assemble};
+    let Some(mars) = std::env::var_os("MARS") else {
+        eprintln!("MARS is not set: skipping the comparison with MARS");
+        return;
+    };
+    let mars = Path::new(&mars).canonicalize().expect("MARS exists");
+    let table = Table::get();
+    let mut mnemonics: Vec<&str> = table.mnemonics().collect();
+    mnemonics.sort();
+    let dir = std::env::temp_dir().join(format!("rustemu_mars_asm_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rounds: u64 = std::env::var("MARS_PROGRAMS").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    let mut failures = 0;
+    for round in 0..rounds {
+        let mut g = Rng(0x5EED + round * 7919);
+        // Data labels around a 0x8000 boundary (the upper half of their address is rounded up
+        // for signed offsets), text labels between the instructions.
+        let mut src = String::from(
+            ".data\nd0: .word 1, 2, 3\n.space 0x7ff0\nd1: .byte 7\nd2: .half 9\n.align 2\nd3: .asciiz \"x\\n\"\n.word d1, d3\n.text\n",
+        );
+        let mut lines = Vec::new();
+        for m in &mnemonics {
+            if matches!(*m, "syscall" | "break" | "eret") {
+                continue;
+            }
+            for form in table.forms(m).unwrap() {
+                // MARS assembles a nop for this one (see the instruction table).
+                if form.example == "swr $t1,100" {
+                    continue;
+                }
+                let branch = m.starts_with('b') || m.starts_with('j');
+                let ops: Vec<String> = form.operands.iter().map(|&o| source_operand(&mut g, o, branch)).collect();
+                let mut line = format!("{m} ");
+                for (i, o) in ops.iter().enumerate() {
+                    let sep = if i == 0 || o == "(" || o == ")" || ops[i - 1] == "(" || o == "+" || ops[i - 1] == "+" {
+                        ""
+                    } else {
+                        ", "
+                    };
+                    line += sep;
+                    line += o;
+                }
+                lines.push(line);
+            }
+        }
+        // Shuffle, with the text labels spread among the lines.
+        for i in (1..lines.len()).rev() {
+            lines.swap(i, g.below(i as u64 + 1) as usize);
+        }
+        for (i, l) in lines.iter().enumerate() {
+            if i % (lines.len() / 4) == 0 && i / (lines.len() / 4) < 4 {
+                src += &format!("t{}:\n", i / (lines.len() / 4));
+            }
+            src += &format!("    {l}\n");
+        }
+        let ours = assemble(&src).unwrap_or_else(|e| panic!("{:?}\n{src}", &e[..e.len().min(5)]));
+        let words: Vec<u32> = ours.statements.iter().flat_map(|s| s.words.clone()).collect();
+        let mut data = Vec::new();
+        let mut m = rustemu_mips::Machine::new();
+        m.load(&ours.image).unwrap();
+        for k in 0..((0x8010 + 24) / 4) {
+            data.push(m.mem.peek32(DATA_BASE + 4 * k));
+        }
+
+        let file = dir.join("asm.asm");
+        std::fs::write(&file, &src).unwrap();
+        let (text_dump, data_dump) = (dir.join("text.hex"), dir.join("data.hex"));
+        let mut cmd = Command::new("java");
+        if mars.extension().is_some_and(|e| e == "jar") {
+            cmd.arg("-jar").arg(&mars);
+        } else {
+            cmd.arg("-cp").arg(&mars).arg("Mars");
+        }
+        let out = cmd
+            .args(["nc", "a", "dump", ".text", "HexText"])
+            .arg(&text_dump)
+            .args(["dump", ".data", "HexText"])
+            .arg(&data_dump)
+            .arg(&file)
+            .output()
+            .expect("java runs");
+        let hex = |p: &Path| -> Vec<u32> {
+            std::fs::read_to_string(p)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| u32::from_str_radix(l.trim(), 16).unwrap())
+                .collect()
+        };
+        let (theirs, their_data) = (hex(&text_dump), hex(&data_dump));
+        if theirs.is_empty() {
+            panic!("MARS did not assemble:\n{}\n{src}", String::from_utf8_lossy(&out.stdout));
+        }
+        // The listing pairs source lines with both encodings.
+        let mut k = 0;
+        for s in &ours.statements {
+            for (w, b) in s.words.iter().zip(&s.basic) {
+                if theirs.get(k) != Some(w) {
+                    failures += 1;
+                    if failures <= 20 {
+                        let line = src.lines().nth(s.line - 1).unwrap_or("");
+                        eprintln!(
+                            "round {round}, line {}: {line:<40} ours {w:08x} {b:<24} MARS {:08x?}",
+                            s.line,
+                            theirs.get(k)
+                        );
+                    }
+                }
+                k += 1;
+            }
+        }
+        assert_eq!(words.len(), theirs.len(), "the same number of instructions (round {round})");
+        let n = data.len().min(their_data.len());
+        assert_eq!(data[..n], their_data[..n], "the data segment (round {round})");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(failures, 0, "{failures} instructions differ from MARS");
 }
