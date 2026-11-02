@@ -14,6 +14,7 @@
 pub mod asm;
 pub mod console;
 pub mod cpu;
+pub mod disasm;
 pub mod files;
 pub mod machine;
 pub mod memory;
