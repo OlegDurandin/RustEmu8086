@@ -23,7 +23,7 @@ mod table;
 use std::collections::{BTreeMap, HashMap};
 
 pub use basic::{BASIC, Basic, Format};
-pub use lexer::{IntClass, Kind, Token, parse_int, tokenize};
+pub use lexer::{DIRECTIVES, IntClass, Kind, Token, parse_int, tokenize};
 pub use table::{Def, Form, Operand, Table};
 
 use crate::machine::{Chunk, Image};
@@ -628,7 +628,7 @@ impl Asm {
         }
         let mut word = 0u32;
         let mask = b.mask.as_bytes();
-        for (k, letter) in [b'f', b's', b't'].into_iter().enumerate() {
+        for (k, letter) in b"fst".iter().copied().enumerate() {
             let width = mask.iter().filter(|&&c| c == letter).count() as u32;
             if width == 0 {
                 continue;

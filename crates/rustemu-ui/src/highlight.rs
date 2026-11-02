@@ -1,4 +1,4 @@
-//! Syntax highlighting for 8086 assembly.
+//! Syntax highlighting for 8086 assembly and for MIPS (MARS syntax).
 
 use egui::text::{LayoutJob, TextFormat};
 use std::collections::HashMap;
@@ -168,11 +168,20 @@ pub fn highlight(text: &str, font: FontId, pal: &Palette) -> LayoutJob {
 pub struct Highlighter {
     last: Option<(LayoutJob, FontId, Palette)>,
     lines: HashMap<String, Spans>,
+    mips: bool,
 }
 
 impl Highlighter {
+    /// Highlights MIPS (MARS syntax) instead of 8086 assembly.
+    pub fn set_mips(&mut self, mips: bool) {
+        if self.mips != mips {
+            *self = Highlighter { mips, ..Default::default() };
+        }
+    }
+
     /// The highlighted layout of `text` (reused while nothing changed).
     pub fn job(&mut self, text: &str, font: &FontId, pal: &Palette) -> LayoutJob {
+        let spans = if self.mips { mips_line_spans } else { line_spans };
         if let Some((job, f, p)) = &self.last
             && job.text == text
             && f == font
@@ -185,7 +194,7 @@ impl Highlighter {
         let mut job = LayoutJob::default();
         for line in text.split_inclusive('\n') {
             if !self.lines.contains_key(line) {
-                let (k, v) = old.remove_entry(line).unwrap_or_else(|| (line.to_owned(), line_spans(line)));
+                let (k, v) = old.remove_entry(line).unwrap_or_else(|| (line.to_owned(), spans(line)));
                 self.lines.insert(k, v);
             }
             append_line(&mut job, line, &self.lines[line], font, pal);
@@ -208,6 +217,77 @@ fn append_line(job: &mut LayoutJob, line: &str, spans: &Spans, font: &FontId, pa
         );
         start = end;
     }
+}
+
+/// A MIPS line: `#` comments, strings, numbers, `$` registers, `.` directives, the mnemonics of
+/// MARS's instructions and pseudo-instructions, labels.
+fn mips_line_spans(line: &str) -> Spans {
+    let mut spans: Spans = Vec::new();
+    let mut push = |end: usize, k: Kind| match spans.last_mut() {
+        Some(last) if last.1 == k => last.0 = end,
+        _ => spans.push((end, k)),
+    };
+    let b = line.as_bytes();
+    let mut i = 0;
+    let mut first_word = true;
+    while i < b.len() {
+        let c = b[i];
+        let start = i;
+        if c == b'#' {
+            push(b.len(), Kind::Comment);
+            break;
+        }
+        if c == b'\'' || c == b'"' {
+            i += 1;
+            while i < b.len() && b[i] != c && b[i] != b'\n' {
+                i += usize::from(b[i] == b'\\') + 1;
+            }
+            i = (i + 1).min(b.len());
+            push(i, Kind::Str);
+            continue;
+        }
+        if c.is_ascii_digit() || (c == b'-' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+            i += 1;
+            while i < b.len() && b[i].is_ascii_alphanumeric() {
+                i += 1;
+            }
+            push(i, Kind::Number);
+            continue;
+        }
+        if c.is_ascii_alphabetic() || matches!(c, b'_' | b'.' | b'$' | b'%') {
+            i += 1;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'.' | b'$')) {
+                i += 1;
+            }
+            let word = &line[start..i];
+            let lower = word.to_ascii_lowercase();
+            let k = if c == b'$' {
+                Kind::Register
+            } else if rustemu_mips::asm::DIRECTIVES.contains(&lower.as_str()) || matches!(lower.as_str(), "%hi" | "%lo")
+            {
+                Kind::Directive
+            } else if b.get(i) == Some(&b':') {
+                Kind::Label
+            } else if first_word && rustemu_mips::asm::Table::get().forms(word).is_some() {
+                Kind::Mnemonic
+            } else {
+                Kind::Plain
+            };
+            first_word = first_word && k == Kind::Label;
+            push(i, k);
+            continue;
+        }
+        while i < b.len()
+            && !(b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'.' | b'$' | b'%' | b'#' | b'\'' | b'"' | b'-'))
+        {
+            i += 1;
+        }
+        if i == start {
+            i += 1;
+        }
+        push(i, Kind::Plain);
+    }
+    spans
 }
 
 fn line_spans(line: &str) -> Spans {

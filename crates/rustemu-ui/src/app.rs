@@ -7,14 +7,15 @@ use std::path::{Path, PathBuf};
 use egui::{Key, KeyboardShortcut, Modifiers};
 use rustemu_core::Event;
 use rustemu_core::cpu::Cpu;
-use rustemu_session::Target;
 use rustemu_session::expr::Expr;
+use rustemu_session::{Arch, Target};
 use rustemu_session::{Session, StepGoal, StepKind};
 use serde::{Deserialize, Serialize};
 
 use crate::examples::EXAMPLES;
 use crate::tools::Windows;
 
+mod arch;
 mod build;
 mod emulator_cmds;
 mod exec;
@@ -22,6 +23,8 @@ mod files;
 mod session;
 mod shortcuts;
 mod storage;
+
+pub use arch::{OpenAs, Workspace, detect_arch};
 
 /// Assembler syntax (options window).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -62,6 +65,8 @@ pub enum ThemeChoice {
 pub const RELEASES_URL: &str = "https://github.com/OlegDurandin/RustEmu8086/releases";
 /// The source code on GitHub.
 pub const REPO_URL: &str = "https://github.com/OlegDurandin/RustEmu8086";
+/// MARS, the MIPS simulator the MIPS workspace follows (its documentation and syntax).
+pub const MARS_URL: &str = "https://github.com/dpetersanderson/MARS";
 /// The web version (share links point there by default).
 pub const WEB_URL: &str = "https://olegdurandin.github.io/RustEmu8086/";
 
@@ -105,6 +110,22 @@ pub struct Settings {
     /// Drive C: of DOS programs is the folder of the program instead of its own folder (the
     /// desktop; programs can then change and delete the files next to the source).
     pub drive_c_source_folder: bool,
+    /// The processor of the workspace shown last ([`Arch::name`]; the 8086 when unknown).
+    pub arch: String,
+    /// What the MIPS workspace remembers (the 8086 one keeps it in the fields above).
+    pub mips: ArchSettings,
+}
+
+/// What the workspace of a processor other than the 8086 remembers between runs.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct ArchSettings {
+    /// The file opened at the last start.
+    pub last_file: Option<PathBuf>,
+    /// Open windows.
+    pub windows: Windows,
+    /// The arrangement of the panels in RON (see [`Settings::panels`]).
+    pub panels: Option<String>,
 }
 
 /// What is remembered per source file between runs.
@@ -125,6 +146,8 @@ pub struct FileSession {
     pub stop_on_change: bool,
     /// The editor line of the cursor.
     pub cursor_line: u32,
+    /// The processor the file is for ([`Arch::name`]; empty: the 8086).
+    pub arch: String,
 }
 
 /// A line breakpoint as saved in a [`FileSession`].
@@ -143,6 +166,24 @@ pub struct SavedBreakpoint {
 
 /// How many file sessions are remembered.
 const MAX_SESSIONS: usize = 30;
+
+impl Settings {
+    /// The file opened at the last start of the workspace of `arch`.
+    pub fn last_file_mut(&mut self, arch: Arch) -> &mut Option<PathBuf> {
+        match arch {
+            Arch::I8086 => &mut self.last_file,
+            Arch::Mips32 => &mut self.mips.last_file,
+        }
+    }
+
+    /// Open windows and panels of the workspace of `arch`.
+    pub(crate) fn layout_mut(&mut self, arch: Arch) -> (&mut Windows, &mut Option<String>) {
+        match arch {
+            Arch::I8086 => (&mut self.windows, &mut self.panels),
+            Arch::Mips32 => (&mut self.mips.windows, &mut self.mips.panels),
+        }
+    }
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -164,6 +205,8 @@ impl Default for Settings {
             syntax: SyntaxChoice::Auto,
             sessions: Vec::new(),
             drive_c_source_folder: false,
+            arch: String::new(),
+            mips: ArchSettings::default(),
         }
     }
 }
@@ -271,6 +314,7 @@ pub struct SavedState {
 }
 
 /// The program being edited: where it comes from and its text.
+#[derive(Default)]
 pub struct Document {
     /// The file on disk (`None`: new, an example or a program of the browser).
     pub path: Option<PathBuf>,
@@ -496,6 +540,11 @@ pub struct Dialogs {
     pub program_delete: Option<String>,
     /// "share link".
     pub share: Option<crate::share::ShareDialog>,
+    /// "open as": which processor a document is for.
+    pub open_as: Option<OpenAs>,
+    /// The next document opens in the workspace of this processor (chosen, or remembered by the
+    /// document), without asking.
+    pub open_in: Option<Arch>,
 }
 
 /// What lives in the browser (the web version): programs, the memory drive, uploads.
@@ -612,6 +661,10 @@ pub struct App {
     pub converter_text: String,
     /// Drive C: of DOS programs on the desktop (default [`crate::platform::vdrive_dir`]).
     pub drive_dir: PathBuf,
+    /// State of the MIPS tools (console input, register being edited, selection).
+    pub mips: crate::mips_ui::MipsState,
+    /// The workspaces of the other processors (see [`App::switch_arch`]).
+    pub(crate) parked: Vec<Workspace>,
 }
 
 /// An action that replaces the program in the editor (asked about unsaved changes first).
@@ -623,10 +676,14 @@ pub enum PendingAction {
     Open(Option<PathBuf>),
     /// A built-in example by index.
     Example(usize),
+    /// A built-in MIPS example by index ([`crate::examples::MIPS_EXAMPLES`]).
+    MipsExample(usize),
     /// A program saved in the browser.
     Program(String),
     /// A file from the computer (the browser asks for it).
     Upload,
+    /// A source uploaded from the computer, to keep in "my programs": its name and text.
+    Import(String, String),
     /// A program from a link.
     Shared(crate::share::Shared),
     /// Quit the application.
@@ -653,25 +710,18 @@ impl App {
     }
 
     /// The application with `settings` (opens the last file or the first example).
-    pub fn with_settings(settings: Settings) -> Self {
+    pub fn with_settings(mut settings: Settings) -> Self {
+        let browser = FrontEnd::default().browser;
+        let mut w = Workspace::new(Arch::I8086, &mut settings, browser);
         let mut app = App {
             settings,
             session: Session::new(),
             run: RunMode::Paused,
-            status: "Ready".into(),
+            status: String::new(),
             windows: Windows::default(),
             deferred_tools: None,
             panels: None,
-            doc: Document {
-                path: None,
-                name: None,
-                example_key: None,
-                program: None,
-                from_link: false,
-                text: String::new(),
-                saved_text: String::new(),
-                session_started: false,
-            },
+            doc: Document::default(),
             editor: Default::default(),
             build: Default::default(),
             program: Default::default(),
@@ -689,20 +739,15 @@ impl App {
             calculator: Default::default(),
             converter_text: String::new(),
             drive_dir: crate::platform::vdrive_dir(),
+            mips: Default::default(),
+            parked: Vec::new(),
         };
-        app.windows = app.settings.windows.clone();
-        app.deferred_tools = Some(app.windows.take_program_tools());
-        app.panels = app.settings.panels.as_deref().and_then(|s| ron::from_str(s).ok());
+        app.swap_workspace(&mut w);
         app.reference.lang = app.settings.reference_lang;
-        let last = app.settings.last_file.clone();
-        match last {
-            Some(p) if p.exists() => app.open_path(&p),
-            // The first item of the Examples menu: Hello, world.
-            _ => app.load_example(crate::examples::index(crate::examples::MENU[0].1).unwrap_or(0)),
-        }
-        // The browser has no file system: DOS programs get a drive in memory.
-        if app.front.browser {
-            app.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+        app.open_start_document();
+        // The workspace shown last.
+        if let Some(arch) = Arch::from_name(&app.settings.arch) {
+            app.switch_arch(arch);
         }
         app
     }
@@ -734,7 +779,8 @@ impl App {
             .map(|n| n.to_string_lossy().into_owned())
             .or_else(|| self.doc.name.clone())
             .or_else(|| {
-                self.doc.example_key.as_ref().and_then(|k| k.strip_prefix(files::EXAMPLE_KEY)).map(str::to_string)
+                let key = self.doc.example_key.as_ref()?;
+                key.strip_prefix(files::EXAMPLE_KEY).or(key.strip_prefix(files::MIPS_EXAMPLE_KEY)).map(str::to_string)
             })
             .unwrap_or_else(|| "untitled.asm".into())
     }
@@ -751,12 +797,15 @@ impl App {
     /// Runs `action` (see [`App::guarded`]).
     pub fn perform(&mut self, action: PendingAction) {
         match action {
+            PendingAction::New if self.arch() == Arch::Mips32 => self.new_mips_file(),
             PendingAction::New => self.dialogs.new_file = Some(0),
             PendingAction::Open(None) => self.open_dialog(),
             PendingAction::Open(Some(p)) => self.open_path(&p),
             PendingAction::Example(i) => self.load_example(i),
+            PendingAction::MipsExample(i) => self.load_mips_example(i),
             PendingAction::Program(name) => self.open_program(&name),
             PendingAction::Upload => self.web.pending_upload = Some(crate::platform::UploadFor::Open),
+            PendingAction::Import(name, text) => self.import_program(&name, text),
             PendingAction::Shared(s) => self.open_shared(s),
             PendingAction::Quit => {}
         }

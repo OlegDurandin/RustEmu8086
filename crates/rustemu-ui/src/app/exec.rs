@@ -233,6 +233,11 @@ impl App {
             Event::Sleeping => {
                 self.status = "Waiting (INT 15h/86h)...".into();
             }
+            Event::WaitingInput if t.arch() == rustemu_session::Arch::Mips32 => {
+                self.status = "Waiting for input - type it in the Run I/O console".into();
+                self.mips.focus_request = true;
+                self.windows[Tool::RunIo] = true;
+            }
             Event::WaitingInput => {
                 self.status = "Waiting for keyboard input - type in the emulator screen".into();
                 self.screen.focus_request = true;

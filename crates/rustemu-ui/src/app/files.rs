@@ -7,6 +7,8 @@ use crate::tools::Tool;
 /// Emu8086's (some with the same names): sessions saved under the former "example:" belong to
 /// other texts and are not restored.
 pub(crate) const EXAMPLE_KEY: &str = "emu8086-example:";
+/// Session key prefix of the built-in MIPS examples.
+pub(crate) const MIPS_EXAMPLE_KEY: &str = "mips-example:";
 
 impl App {
     /// A new file from the `i`-th code template.
@@ -23,6 +25,11 @@ impl App {
             _ => "bits 16\n",
         };
         self.new_from(t);
+    }
+
+    /// File -> New in the MIPS workspace: the MIPS template (it has no choices).
+    pub fn new_mips_file(&mut self) {
+        self.new_from(crate::examples::MIPS_TEMPLATE);
     }
 
     fn new_from(&mut self, template: &str) {
@@ -49,7 +56,7 @@ impl App {
         }
         let dir = self.doc.path.as_ref().and_then(|p| p.parent());
         let filters: [crate::platform::Filter; 2] =
-            [("Assembly", &["asm", "nasm", "inc", "txt"]), ("All files", &["*"])];
+            [("Assembly", &["asm", "s", "nasm", "inc", "txt"]), ("All files", &["*"])];
         if let Some(p) = crate::platform::pick_file(&filters, dir) {
             let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
             if matches!(ext.as_str(), "com" | "exe" | "bin" | "boot") {
@@ -64,8 +71,13 @@ impl App {
     pub fn open_path(&mut self, p: &Path) {
         match std::fs::read(p) {
             Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
+                let saved = self.saved_arch(&p.to_string_lossy());
+                if !self.enter_workspace_for(&PendingAction::Open(Some(p.to_path_buf())), saved, &text) {
+                    return;
+                }
                 self.store_session();
-                self.doc.text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
+                self.doc.text = text;
                 self.doc.saved_text = self.doc.text.clone();
                 self.doc.path = Some(p.to_path_buf());
                 self.doc.name = None;
@@ -74,7 +86,7 @@ impl App {
                 self.build.messages.clear();
                 self.clear_errors();
                 self.add_recent(p);
-                self.settings.last_file = Some(p.to_path_buf());
+                *self.settings.last_file_mut(self.arch()) = Some(p.to_path_buf());
                 self.doc.example_key = None;
                 self.restore_session();
                 self.status = format!("Opened {}", p.display());
@@ -159,7 +171,7 @@ impl App {
             return false;
         }
         let dir = self.doc.path.as_ref().and_then(|p| p.parent());
-        match crate::platform::save_file(&[("Assembly", &["asm"])], dir, &self.file_name()) {
+        match crate::platform::save_file(&[("Assembly", &["asm", "s"])], dir, &self.file_name()) {
             Some(p) => self.save_to(&p),
             None => false,
         }
@@ -193,7 +205,7 @@ impl App {
                 self.doc.saved_text = self.doc.text.clone();
                 self.doc.path = Some(p.to_path_buf());
                 self.add_recent(p);
-                self.settings.last_file = Some(p.to_path_buf());
+                *self.settings.last_file_mut(self.arch()) = Some(p.to_path_buf());
                 self.status = format!("Saved {}", p.display());
                 true
             }
@@ -206,7 +218,21 @@ impl App {
 
     /// Opens the built-in example `i` in the editor.
     pub fn load_example(&mut self, i: usize) {
+        self.dialogs.open_in = Some(Arch::I8086);
+        if !self.enter_workspace_for(&PendingAction::Example(i), None, "") {
+            return;
+        }
         let (name, src) = EXAMPLES[i];
+        self.load_example_text(name, src);
+    }
+
+    /// Opens the built-in MIPS example `i` in the MIPS workspace.
+    pub fn load_mips_example(&mut self, i: usize) {
+        self.dialogs.open_in = Some(Arch::Mips32);
+        if !self.enter_workspace_for(&PendingAction::MipsExample(i), None, "") {
+            return;
+        }
+        let (_, name, src) = crate::examples::MIPS_EXAMPLES[i];
         self.load_example_text(name, src);
     }
 
@@ -217,7 +243,8 @@ impl App {
         self.doc.name = None;
         self.doc.from_link = false;
         self.doc.program = None;
-        self.doc.example_key = Some(format!("{EXAMPLE_KEY}{name}"));
+        let prefix = if self.arch() == Arch::Mips32 { MIPS_EXAMPLE_KEY } else { EXAMPLE_KEY };
+        self.doc.example_key = Some(format!("{prefix}{name}"));
         // Emu8086's files have DOS line ends.
         self.doc.text = src.replace("\r\n", "\n");
         self.doc.saved_text = self.doc.text.clone();
