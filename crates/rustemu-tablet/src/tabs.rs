@@ -70,6 +70,18 @@ pub(crate) fn editor_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: 
     cpu_preview(app, t, ui, regs);
 }
 
+/// MIPS: the flat 32-bit memory (words, unmapped addresses marked) beside the program's data labels.
+fn mips_memory_tab(app: &mut App, ui: &mut Ui, rect: Rect) {
+    let side_w = (rect.width() * 0.32).clamp(260.0, 420.0);
+    let (mem, side) = split_x(rect, rect.width() - side_w - GAP);
+    let (_, mut b) = crate::widgets::card(ui, mem, "MEMORY");
+    egui::ScrollArea::both().id_salt("t_mips_mem").auto_shrink([false, false]).show(&mut b, |ui| {
+        rustemu_ui::mips_ui::memory_ui(app, ui);
+    });
+    let (_, mut b) = crate::widgets::card(ui, side, "VARIABLES");
+    rustemu_ui::tools::tool_ui(app, &mut b, rustemu_ui::tools::Tool::Vars, &mut rustemu_ui::tools::NoHost);
+}
+
 /// The code with the open tool below it.
 fn code_and_tools(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
     let tools_h =
@@ -88,7 +100,12 @@ pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect
     if landscape(rect) {
         let (left, right) = split_x(rect, rect.width() * 0.55);
         let w = right.width();
-        let cpu_h = cpu::full_height(w, &t.cpu).min(right.height());
+        let cpu_h = match app.session.mips() {
+            // MIPS reads its input in the output (Run I/O): it keeps its place beside the registers.
+            Some(_) => cpu::mips_height().min(right.height() - MIN_OUTPUT - GAP),
+            None => cpu::full_height(w, &t.cpu),
+        };
+        let cpu_h = cpu_h.min(right.height());
         let (regs, out) = split_y(right, cpu_h);
         t.debug.output_tool = out.height() < MIN_OUTPUT;
         let (step, rest) = split_y(left, step_h);
@@ -105,7 +122,8 @@ pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect
     let wide = rect.width() >= 900.0;
     // Portrait: the CPU beside the output; narrow: the CPU alone (the output is a tool).
     let cpu_w = if wide { rect.width() * 0.62 } else { rect.width() };
-    let cpu_h = cpu::full_height(cpu_w, &t.cpu).min(rest.height() * 0.6);
+    let cpu_h = if app.session.mips().is_some() { cpu::mips_height() } else { cpu::full_height(cpu_w, &t.cpu) };
+    let cpu_h = cpu_h.min(rest.height() * 0.6);
     t.debug.output_tool = !wide;
     let (code, bottom) = split_y(rest, rest.height() - cpu_h - GAP);
     code_and_tools(app, t, ui, code);
@@ -119,6 +137,9 @@ pub(crate) fn debugger_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect
 }
 
 pub(crate) fn memory_tab(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
+    if app.session.mips().is_some() {
+        return mips_memory_tab(app, ui, rect);
+    }
     let (top, map) = bottom_row(t, rect, 118.0);
     let side_w = (top.width() * 0.3).clamp(260.0, 330.0);
     let (hex, side) = split_x(top, top.width() - side_w - GAP);

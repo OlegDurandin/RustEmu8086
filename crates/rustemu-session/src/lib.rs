@@ -3,12 +3,14 @@
 //! The session works with the emulated computer through [`Target`]: mapping addresses to source
 //! lines, macro expansions, symbols, Step Over / Step Out and debugger expressions are the same
 //! for every processor. What depends on the processor is chosen by [`Target::arch`]; the 8086
-//! part (program formats, floppies, `segment:offset` symbols) is in [`x86`].
+//! part (program formats, floppies, `segment:offset` symbols) is in [`x86`], the MIPS part
+//! (MARS programs, flat addresses) in [`mips`].
 
 #![warn(missing_docs)]
 
 pub mod code;
 pub mod expr;
+pub mod mips;
 pub mod step;
 pub mod x86;
 
@@ -31,6 +33,8 @@ pub struct Session {
     pub command_line: String,
     /// Physical address -> procedure, label or variable name of the loaded program.
     symbols_by_addr: HashMap<u32, String>,
+    /// The MIPS program loaded (its own listing and data lines), None for the 8086.
+    pub mips_program: Option<rustemu_mips::asm::Program>,
     /// Indices into `program.lines` sorted by image offset (for binary search).
     lines_sorted: Vec<usize>,
     /// First instruction of every macro expansion: (statement file, line, chain prefix) -> address.
@@ -98,6 +102,7 @@ impl Session {
             command_line: String::new(),
             symbols_by_addr: HashMap::new(),
             lines_sorted: Vec::new(),
+            mips_program: None,
             expansion_starts: HashMap::new(),
         }
     }
@@ -110,6 +115,7 @@ impl Session {
                     if prog.format == rustemu_asm::Format::Boot { prog.image.clone() } else { prog.file_bytes() };
                 (Self::x86_loadable(&prog), bytes)
             }
+            Arch::Mips32 => return Err("an 8086 program cannot run on the MIPS machine".into()),
         };
         self.load_bytes_with_program(kind, bytes, Some(prog))
     }
@@ -129,6 +135,7 @@ impl Session {
     ) -> Result<(), String> {
         match self.target.arch() {
             Arch::I8086 => self.x86_load(kind, &bytes, program.as_ref())?,
+            Arch::Mips32 => return Err("8086 executables cannot run on the MIPS machine".into()),
         }
         self.program = program;
         self.loaded = Some((kind, bytes));
@@ -144,6 +151,12 @@ impl Session {
 
     /// Reloads the last program (fresh machine state, same breakpoints).
     pub fn reload(&mut self) -> Result<(), String> {
+        if self.target.arch() == Arch::Mips32 {
+            let bps = self.target.breakpoints().clone();
+            self.mips_reload()?;
+            *self.target.breakpoints_mut() = bps;
+            return Ok(());
+        }
         let bps = self.target.breakpoints().clone();
         let (kind, bytes) = self.loaded.clone().ok_or("nothing loaded")?;
         let program = self.program.clone();
@@ -154,13 +167,19 @@ impl Session {
 
     /// Saves the machine together with the program and its debug information.
     pub fn save_state(&self) -> SessionState {
-        SessionState { machine: self.target.save_state(), program: self.program.clone(), loaded: self.loaded.clone() }
+        SessionState {
+            machine: self.target.save_state(),
+            program: self.program.clone(),
+            mips_program: self.mips_program.clone(),
+            loaded: self.loaded.clone(),
+        }
     }
 
     /// Returns to a state saved with [`Session::save_state`] (breakpoints are kept).
     pub fn restore_state(&mut self, s: SessionState) {
         self.target.restore_state(&s.machine);
         self.program = s.program;
+        self.mips_program = s.mips_program;
         self.loaded = s.loaded;
         self.index_symbols();
         self.index_lines();
@@ -170,6 +189,7 @@ impl Session {
     pub fn unload(&mut self) {
         self.target.reset();
         self.program = None;
+        self.mips_program = None;
         self.loaded = None;
         self.index_symbols();
         self.index_lines();
@@ -258,6 +278,7 @@ impl Session {
     pub fn symbol_addr(&self, s: &rustemu_asm::Symbol) -> Option<u32> {
         match self.target.arch() {
             Arch::I8086 => self.x86_symbol_addr(s),
+            Arch::Mips32 => Some(s.value as u32),
         }
     }
 
@@ -322,10 +343,15 @@ impl Session {
     pub fn lookup_symbol(&self, name: &str) -> Option<expr::SymbolRef> {
         let p = self.program.as_ref()?;
         let s = p.symbols.iter().find(|s| s.name.eq_ignore_ascii_case(name))?;
+        // MIPS: a name is its address (flat memory); [name] reads there.
+        if self.target.arch() == Arch::Mips32 {
+            return Some(expr::SymbolRef::Value(s.value));
+        }
         Some(match s.kind {
             SymbolKind::Variable => {
                 let (seg, off) = match self.target.arch() {
                     Arch::I8086 => self.x86_symbol_seg_off(s)?,
+                    Arch::Mips32 => return None,
                 };
                 let size = s.size.unwrap_or(1).clamp(1, 8);
                 // NASM: the name is the address, [name] the value.
@@ -338,6 +364,7 @@ impl Session {
             SymbolKind::Segment => {
                 let base = match self.target.arch() {
                     Arch::I8086 => self.x86_load_segment(),
+                    Arch::Mips32 => 0,
                 };
                 expr::SymbolRef::Value(base as i64 + s.value)
             }
@@ -367,6 +394,7 @@ impl Session {
 pub struct SessionState {
     machine: rustemu_target::State,
     program: Option<Program>,
+    mips_program: Option<rustemu_mips::asm::Program>,
     loaded: Option<(Loadable, Vec<u8>)>,
 }
 

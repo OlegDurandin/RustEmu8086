@@ -19,6 +19,7 @@ path = "src/main.rs"
 [dependencies]
 rustemu-core.workspace = true
 rustemu-target.workspace = true
+rustemu-mips.workspace = true
 rustemu-session.workspace = true
 rustemu-ui.workspace = true
 eframe = { workspace = true }

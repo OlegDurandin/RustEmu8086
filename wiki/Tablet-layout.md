@@ -10,8 +10,9 @@ Dark theme, large finger-sized controls.
 
 ## Top bar
 
-The file name and the **Run / Pause / Step / Reset** buttons. Run, Step and Reset assemble the program themselves
-if the text has changed.
+The file name, the processor badge and the **Run / Pause / Step / Reset** buttons. Run, Step and Reset assemble the
+program themselves if the text has changed. The badge (*8086 REAL MODE* or *MIPS32*) switches the processor: each
+has its own program and debugging session, see [MIPS32](MIPS32).
 
 Tapping the file name opens the **project menu**:
 

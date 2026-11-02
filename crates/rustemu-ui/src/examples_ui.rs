@@ -1,12 +1,48 @@
-//! The Examples menu, as in Emu8086 (plus NASM), and the "more examples..." window.
+//! The Examples menu, as in Emu8086 (plus NASM, and the MIPS examples), and the "more
+//! examples..." window.
 
 use egui::{RichText, Ui};
+use rustemu_session::Arch;
 
 use crate::app::{App, PendingAction};
 
-/// The Examples menu, as in Emu8086 (plus NASM): from the emulator (`emulate`) the example is
-/// assembled and loaded at once.
+/// The Examples menu: the examples of the workspace's processor, and in a submenu the other's
+/// (opening one switches to its workspace). From the emulator (`emulate`) only the processor's
+/// own, assembled and loaded at once.
 pub fn examples_menu(app: &mut App, ui: &mut Ui, emulate: bool) {
+    match app.arch() {
+        Arch::I8086 => {
+            x86_examples(app, ui, emulate);
+            if !emulate {
+                ui.separator();
+                ui.menu_button("MIPS32 examples", |ui| mips_examples(app, ui, false));
+            }
+        }
+        Arch::Mips32 => {
+            mips_examples(app, ui, emulate);
+            if !emulate {
+                ui.separator();
+                ui.menu_button("Intel 8086 examples", |ui| x86_examples(app, ui, false));
+            }
+        }
+    }
+}
+
+/// The MIPS examples.
+pub fn mips_examples(app: &mut App, ui: &mut Ui, emulate: bool) {
+    for (i, &(caption, file, _)) in crate::examples::MIPS_EXAMPLES.iter().enumerate() {
+        if ui.button(caption).on_hover_text(file).clicked() {
+            app.guarded(PendingAction::MipsExample(i));
+            if emulate && app.dialogs.confirm_discard.is_none() {
+                app.emulate();
+            }
+            ui.close();
+        }
+    }
+}
+
+/// Emu8086's Examples menu (plus NASM) and "more examples...".
+pub fn x86_examples(app: &mut App, ui: &mut Ui, emulate: bool) {
     for &(caption, file) in crate::examples::MENU {
         if file == "hello_nasm.asm" {
             ui.separator();
