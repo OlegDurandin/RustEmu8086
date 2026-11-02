@@ -2,6 +2,7 @@
 
 use egui::{RichText, Ui};
 
+use rustemu_session::Arch;
 use rustemu_ui::app::{App, PendingAction, RunMode};
 use rustemu_ui::tools::Tool;
 
@@ -197,6 +198,17 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
         ui.menu_button("Options", |ui| rustemu_ui::dialogs::options_menu(app, ui));
         ui.menu_button("Help", |ui| {
             use rustemu_ui::reference_ui::Tab;
+            if app.arch() != Arch::I8086 {
+                // The reference describes the 8086 (BIOS, DOS, Emu8086's directives).
+                if ui.button("MARS documentation (MIPS)").clicked() {
+                    rustemu_ui::platform::open_url(rustemu_ui::app::MARS_URL);
+                }
+                ui.separator();
+                if ui.button("About RustEmu8086").clicked() {
+                    app.windows[Tool::About] = true;
+                }
+                return;
+            }
             for (tab, label) in [
                 (Tab::Instructions, "Instruction set (F1)"),
                 (Tab::Interrupts, "BIOS and DOS interrupts"),
@@ -262,35 +274,43 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
         app.reload();
     }
     ui.separator();
-    if ui.button("Load executable…").clicked() {
-        app.open_dialog();
+    if app.arch() == Arch::I8086 {
+        if ui.button("Load executable…").clicked() {
+            app.open_dialog();
+        }
+        if ui.button("Set command line parameters…").clicked() {
+            app.dialogs.cmdline = Some(app.session.command_line.clone());
+        }
+        ui.menu_button("Virtual drive", |ui| rustemu_ui::drive_ui::virtual_drive_menu(app, ui));
+        ui.menu_button("Virtual devices", |ui| {
+            crate::emulator::virtual_devices_menu(app, ui);
+        });
     }
-    if ui.button("Set command line parameters…").clicked() {
-        app.dialogs.cmdline = Some(app.session.command_line.clone());
-    }
-    ui.menu_button("Virtual drive", |ui| rustemu_ui::drive_ui::virtual_drive_menu(app, ui));
-    ui.menu_button("Virtual devices", |ui| {
-        crate::emulator::virtual_devices_menu(app, ui);
-    });
     ui.menu_button("Windows", |ui| {
-        let w = &mut app.windows;
-        ui.checkbox(&mut w[Tool::Emulator], "Emulator");
-        ui.checkbox(&mut w[Tool::Screen], "Screen");
-        ui.checkbox(&mut w[Tool::Source], "Source");
-        ui.checkbox(&mut w[Tool::Memory], "Memory");
-        ui.checkbox(&mut w[Tool::Stack], "Stack");
-        ui.checkbox(&mut w[Tool::Flags], "Flags");
-        ui.checkbox(&mut w[Tool::Vars], "Variables");
-        ui.checkbox(&mut w[Tool::Symbols], "Symbol table");
-        ui.checkbox(&mut w[Tool::Listing], "Listing");
-        ui.checkbox(&mut w[Tool::Log], "Log");
-        ui.checkbox(&mut w[Tool::Devices], "Virtual devices");
-        ui.checkbox(&mut w[Tool::Console], "Debug console");
-        ui.checkbox(&mut w[Tool::Breakpoints], "Breakpoints");
-        ui.checkbox(&mut w[Tool::Watch], "Watch");
-        ui.checkbox(&mut w[Tool::CallStack], "Call stack");
-        ui.checkbox(&mut w[Tool::Alu], "ALU");
-        ui.checkbox(&mut w[Tool::Fpu], "FPU");
+        for (tool, name) in [
+            (Tool::Emulator, "Emulator"),
+            (Tool::Screen, "Screen"),
+            (Tool::RunIo, "Run I/O"),
+            (Tool::Source, "Source"),
+            (Tool::Memory, "Memory"),
+            (Tool::Stack, "Stack"),
+            (Tool::Flags, "Flags"),
+            (Tool::Vars, "Variables"),
+            (Tool::Symbols, "Symbol table"),
+            (Tool::Listing, "Listing"),
+            (Tool::Log, "Log"),
+            (Tool::Devices, "Virtual devices"),
+            (Tool::Console, "Debug console"),
+            (Tool::Breakpoints, "Breakpoints"),
+            (Tool::Watch, "Watch"),
+            (Tool::CallStack, "Call stack"),
+            (Tool::Alu, "ALU"),
+            (Tool::Fpu, "FPU"),
+        ] {
+            if tool.available(app) {
+                ui.checkbox(&mut app.windows[tool], name);
+            }
+        }
     });
     if ui.button("Clear all breakpoints").clicked() {
         app.debugger.bp_lines.clear();
@@ -299,8 +319,29 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// The processor selector: each processor has its own workspace (file, breakpoints, emulator,
+/// windows); switching pauses the program and keeps everything of the other.
+pub fn arch_selector(app: &mut App, ui: &mut Ui) {
+    let current = app.arch();
+    let mut chosen = current;
+    egui::ComboBox::from_id_salt("arch")
+        .selected_text(RichText::new(current.title()).strong())
+        .show_ui(ui, |ui| {
+            for a in Arch::ALL {
+                ui.selectable_value(&mut chosen, a, a.title());
+            }
+        })
+        .response
+        .on_hover_text("The processor: each has its own file, breakpoints and emulator; switching keeps the other's");
+    if chosen != current {
+        app.switch_arch(chosen);
+    }
+}
+
 fn toolbar(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
+        arch_selector(app, ui);
+        ui.separator();
         if ui.button("🗋 new").on_hover_text("New file from a template (⌘N)").clicked() {
             app.guarded(PendingAction::New);
         }
@@ -335,7 +376,9 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         if ui.button("🔧 options").clicked() {
             app.dialogs.options = !app.dialogs.options;
         }
-        if ui.button("❓ help").on_hover_text("Instructions, interrupts, directives (F1)").clicked() {
+        if app.arch() == Arch::I8086
+            && ui.button("❓ help").on_hover_text("Instructions, interrupts, directives (F1)").clicked()
+        {
             app.windows[Tool::Reference] = !app.windows[Tool::Reference];
         }
         if ui.button("ℹ about").clicked() {

@@ -22,7 +22,7 @@ pub struct KeypadState {
     /// The first row shows F1-F10, the bottom row Home / End / PgUp / PgDn.
     fn_keys: bool,
     /// The program waited for input in the last frame (the keyboard opens when a wait starts).
-    was_waiting: bool,
+    pub(crate) was_waiting: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

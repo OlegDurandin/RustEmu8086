@@ -18,7 +18,7 @@ fn storage_key_name(key: &str) -> &'static str {
     match key {
         DRIVE_KEY => "drive C:",
         crate::programs::PROGRAMS_KEY => "my programs",
-        crate::programs::DRAFT_KEY => "the editor text",
+        crate::programs::DRAFT_KEY | crate::programs::MIPS_DRAFT_KEY => "the editor text",
         _ => "settings",
     }
 }
@@ -38,7 +38,8 @@ impl App {
     /// storage).
     pub fn restore_drive(&mut self, storage: &dyn eframe::Storage) {
         use base64::Engine;
-        if self.session.dos_memory_drive().is_none() {
+        let Some(session) = self.x86_session_mut() else { return };
+        if session.dos_memory_drive().is_none() {
             return;
         }
         let saved = storage
@@ -46,7 +47,7 @@ impl App {
             .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
             .and_then(|b| rustemu_core::memdrive::MemDrive::from_bytes(&b));
         if let Some(drive) = saved {
-            self.session.set_dos_memory_drive(drive);
+            session.set_dos_memory_drive(drive);
         }
     }
 
@@ -58,7 +59,7 @@ impl App {
         self.store_settings();
         let settings = ron::ser::to_string(&self.settings).unwrap_or_default();
         self.put(storage, eframe::APP_KEY, settings);
-        if let Some(drive) = self.web.own_drive.as_ref().or(self.session.dos_memory_drive()) {
+        if let Some(drive) = self.web.own_drive.as_ref().or(self.x86_session().and_then(|s| s.dos_memory_drive())) {
             let drive = base64::engine::general_purpose::STANDARD.encode(drive.to_bytes());
             self.put(storage, DRIVE_KEY, drive);
         }
@@ -98,7 +99,16 @@ impl App {
 
     /// Asks to save unsaved changes when the window is being closed.
     pub fn confirm_close(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty() && self.dialogs.confirm_discard.is_none() {
+        if !ctx.input(|i| i.viewport().close_requested()) || self.dialogs.confirm_discard.is_some() {
+            return;
+        }
+        // The workspace of another processor may have unsaved changes too: it is shown to ask.
+        if !self.dirty()
+            && let Some(arch) = self.parked_dirty()
+        {
+            self.switch_arch(arch);
+        }
+        if self.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.dialogs.confirm_discard = Some(PendingAction::Quit);
         }

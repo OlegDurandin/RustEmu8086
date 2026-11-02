@@ -42,7 +42,7 @@ browser.
 |---|---|
 | `rustemu-target` | the boundary between a processor and the rest: the `Target` trait (steps, step back, breakpoints, memory, disassembly, registers by name). No dependencies |
 | `rustemu-core` | the 8086 processor (+ 80186 extensions), 1 MB of memory, `Machine` (loading, steps, step back, breakpoints), BIOS, DOS, video, devices, disassembler, 8087; `Machine` implements `Target`. No GUI dependencies |
-| `rustemu-mips` | MIPS32 (in progress): the integer instruction set, memory and exceptions of MARS, its system services (`syscall`), a text console, files in a sandbox, step back; the assembler of MARS's dialect and a disassembler |
+| `rustemu-mips` | MIPS32: the integer instruction set, memory and exceptions of MARS, its system services (`syscall`), a text console, files in a sandbox, step back; the assembler of MARS's dialect and a disassembler; `impl Target` |
 | `rustemu-asm` | the Emu8086 / MASM and NASM assembler: preprocessor, multi-pass assembly, encoding, listing; the built-in `emu8086.inc` |
 | `rustemu-session` | glue between the assembler and the emulator through `Target`: source line ↔ address, debugger expressions, call stack, Step Over / Out; the 8086 part (program formats, floppies) in `x86.rs` |
 | `rustemu-cli` | the `rustemu` program |
@@ -55,8 +55,13 @@ Key decisions:
 
 - **An architecture boundary.** The session and the shared interface (run loop, breakpoints, watches, call stack,
   disassembly list, memory dump) work with any processor through the `Target` trait; the 8086 windows (Emu8086
-  registers, flags, FPU, screen, devices, drives, DEBUG.EXE console) reach the 8086 `Machine` with `x86()`. This
-  prepares a second architecture (MIPS): its own crate implementing `Target`, its own windows.
+  registers, flags, FPU, screen, devices, drives, DEBUG.EXE console) reach the 8086 `Machine` with `x86()`, the
+  MIPS ones (`rustemu_ui::mips_ui`) the MIPS machine with `mips()`. A new architecture is its own crate implementing
+  `Target`, `match arch` branches in the session and its own windows.
+- **A workspace per processor** (`rustemu-ui/src/app/arch.rs`). Each architecture has its own document, session,
+  debugger state and windows; `App::switch_arch` parks one and brings back the other. The architecture belongs to
+  the document (saved session, browser program, `&arch=` of a link); `App::has_tool` says which windows a processor
+  has.
 - **Interrupts are "real".** The vector table at 0000:0000 points to ROM stubs (`F000:1000 + 4·n`): a service
   opcode `0F FF nn` and `IRET`. On it the emulator calls a BIOS / DOS handler written in Rust. Programs can hook
   the vectors.

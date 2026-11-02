@@ -31,10 +31,13 @@ pub fn options_menu(app: &mut App, ui: &mut Ui) {
         ui.radio_value(&mut app.settings.layout, Layout::Panels, "panels");
         ui.separator();
     }
-    ui.label(RichText::new("assembler syntax").weak());
-    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(AUTO_SYNTAX);
-    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
-    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
+    // The MIPS assembler has one syntax, MARS's.
+    if app.arch() == rustemu_session::Arch::I8086 {
+        ui.label(RichText::new("assembler syntax").weak());
+        ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(AUTO_SYNTAX);
+        ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
+        ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
+    }
     // The tablet layout has a theme of its own.
     if app.front.fixed_theme.is_none() {
         ui.separator();
@@ -160,6 +163,10 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                 ui.label("assembler syntax");
                 ui.horizontal(|ui| {
                     use crate::app::SyntaxChoice;
+                    if app.arch() != rustemu_session::Arch::I8086 {
+                        ui.label("MARS (MIPS)");
+                        return;
+                    }
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(AUTO_SYNTAX);
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
@@ -258,9 +265,39 @@ fn small_dialogs(app: &mut App, ctx: &egui::Context) {
                     }
                     if ui.button("Cancel").clicked() {
                         app.dialogs.confirm_discard = None;
+                        app.dialogs.open_in = None;
                     }
                 });
             });
+    }
+    if let Some(open_as) = app.dialogs.open_as.take() {
+        let mut keep = true;
+        egui::Window::new("Which processor?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "This program looks like {} code, and the {} workspace is open.\nOpen it as:",
+                    open_as.detected.title(),
+                    app.arch().title()
+                ));
+                ui.horizontal(|ui| {
+                    for arch in [open_as.detected, app.arch()] {
+                        if ui.button(arch.title()).clicked() {
+                            keep = false;
+                            app.dialogs.open_in = Some(arch);
+                            app.perform(open_as.action.clone());
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep = false;
+                    }
+                });
+            });
+        if keep && app.dialogs.open_as.is_none() {
+            app.dialogs.open_as = Some(open_as);
+        }
     }
     if let Some((title, text)) = app.dialogs.notice.clone() {
         egui::Window::new(title)

@@ -96,6 +96,9 @@ pub(crate) fn step_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: R
         return;
     }
     let waiting = app.session.target.is_waiting_input();
+    if app.session.mips().is_some() {
+        return mips_step(app, &mut b);
+    }
     let Some(step) = app.session.last_step(into_macros(app)) else {
         b.label(RichText::new("Nothing executed yet.").size(17.0).color(pal::TEXT));
         b.label(RichText::new("Step (F8) runs one instruction; what it changed is shown here.").color(pal::WEAK));
@@ -134,6 +137,47 @@ pub(crate) fn step_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: R
         for line in step.why() {
             b.label(RichText::new(line).monospace().color(pal::TEXT));
         }
+    }
+}
+
+/// The last MIPS instruction: its text, address and line, the registers and bytes it changed.
+fn mips_step(app: &App, b: &mut Ui) {
+    let Some(step) = rustemu_ui::mips_ui::last_step(app) else {
+        b.label(RichText::new("Nothing executed yet.").size(17.0).color(pal::TEXT));
+        b.label(RichText::new("Step (F8) runs one instruction; what it changed is shown here.").color(pal::WEAK));
+        return;
+    };
+    b.horizontal(|ui| {
+        ui.label(RichText::new(&step.text).monospace().size(19.0).strong().color(pal::TEXT));
+        ui.label(RichText::new(format!("{:08x}", step.addr)).monospace().color(pal::WEAK));
+        if let Some((f, l)) = app.session.line_at_addr(step.addr) {
+            ui.label(RichText::new(rustemu_ui::debugger::file_line(app, f, l)).monospace().color(pal::LINK));
+        }
+    });
+    b.add_space(4.0);
+    b.horizontal_wrapped(|ui| {
+        if step.regs.is_empty() && step.memory.is_empty() {
+            ui.label(RichText::new("no register or memory changed").color(pal::WEAK));
+        }
+        for (name, before, after) in &step.regs {
+            ui.label(
+                RichText::new(format!("{name} {before:#x} → {after:#x}"))
+                    .monospace()
+                    .color(pal::TEXT)
+                    .background_color(pal::FIELD),
+            );
+        }
+        for (a, before, after) in step.memory.iter().take(8) {
+            ui.label(
+                RichText::new(format!("[{a:08x}] {before:02x} → {after:02x}"))
+                    .monospace()
+                    .color(pal::TEAL)
+                    .background_color(pal::FIELD),
+            );
+        }
+    });
+    if app.session.target.is_waiting_input() {
+        b.label(RichText::new("Waiting for input: type it in the Run I/O console").color(pal::AMBER).strong());
     }
 }
 
@@ -235,6 +279,12 @@ pub(crate) fn code_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: R
             b.label(RichText::new("No source (a binary was loaded): see Assembly.").color(pal::WEAK));
         }
         CodeMode::Source => source_rows(app, t, &mut b, &mk),
+        // MIPS: address, word, instruction and source line, as MARS lists the text segment.
+        CodeMode::Mixed | CodeMode::Assembly if app.session.mips().is_some() => {
+            egui::ScrollArea::both().id_salt("t_mips_code").auto_shrink([false, false]).show(&mut b, |ui| {
+                rustemu_ui::mips_ui::code_ui(app, ui);
+            });
+        }
         CodeMode::Mixed | CodeMode::Assembly => asm_rows(app, &mut b, &mk, mode == CodeMode::Mixed, t.debug.bios),
     }
 }
@@ -474,7 +524,14 @@ pub(crate) fn tools_area(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: 
         t.debug.tool = None;
     }
     let output = t.debug.output_tool.then_some((DebugTool::Output, "Output"));
-    for (tool, name) in output.into_iter().chain(DebugTool::ALL) {
+    // The trace, the ALU and the DEBUG.EXE log are the 8086's.
+    let mips = app.session.mips().is_some();
+    let ours =
+        |tool: &DebugTool| !mips || matches!(tool, DebugTool::Watch | DebugTool::Breakpoints | DebugTool::CallStack);
+    if t.debug.tool.as_ref().is_some_and(|t| *t != DebugTool::Output && !ours(t)) {
+        t.debug.tool = None;
+    }
+    for (tool, name) in output.into_iter().chain(DebugTool::ALL.into_iter().filter(|(t, _)| ours(t))) {
         let on = t.debug.tool == Some(tool);
         let resp = r.add(
             egui::Button::new(RichText::new(name).size(15.0).color(if on { egui::Color32::WHITE } else { pal::TEXT }))

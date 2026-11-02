@@ -2621,6 +2621,7 @@ dependencies = [
  "egui_kittest",
  "rustemu-asm",
  "rustemu-core",
+ "rustemu-mips",
  "rustemu-session",
  "rustemu-target",
  "rustemu-ui",
@@ -2640,6 +2641,7 @@ version = "0.2.0"
 dependencies = [
  "rustemu-asm",
  "rustemu-core",
+ "rustemu-mips",
  "rustemu-target",
 ]
 
@@ -2651,6 +2653,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "rustemu-core",
+ "rustemu-mips",
  "rustemu-session",
  "rustemu-target",
  "rustemu-ui",
@@ -2676,6 +2679,7 @@ dependencies = [
  "ron",
  "rustemu-asm",
  "rustemu-core",
+ "rustemu-mips",
  "rustemu-session",
  "rustemu-target",
  "serde",

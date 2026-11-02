@@ -2,6 +2,7 @@
 
 use egui::{Align, Align2, Color32, FontId, Layout, RichText, Sense, Ui, vec2};
 use rustemu_core::linear;
+use rustemu_session::Arch;
 use rustemu_ui::app::{App, PendingAction, RunMode};
 
 use crate::Tab;
@@ -52,16 +53,17 @@ pub(crate) fn top_bar(app: &mut App, ui: &mut Ui) {
         ui.set_min_height(44.0);
         let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
         paint_icon(ui.painter(), Icon::Chip, r.center(), 36.0, pal::TEXT);
-        ui.label(RichText::new("RustEmu8086").size(24.0).strong().color(pal::TEXT));
+        // Narrower windows leave the name out: the processor selector and the run buttons need it.
+        if ui.available_width() > 1100.0 {
+            ui.label(RichText::new("RustEmu8086").size(24.0).strong().color(pal::TEXT));
+        }
         ui.add_space(8.0);
         let (r, _) = ui.allocate_exact_size(vec2(2.0, 32.0), Sense::hover());
         ui.painter().rect_filled(r, 0.0, pal::BORDER);
         ui.add_space(8.0);
         project_button(app, ui);
         ui.add_space(16.0);
-        if ui.available_width() > 640.0 {
-            badge(ui, "8086 REAL MODE");
-        }
+        arch_button(app, ui);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let running = app.run != RunMode::Paused;
             // A step while the program waits for a key would wait again: type the key first.
@@ -88,6 +90,31 @@ pub(crate) fn top_bar(app: &mut App, ui: &mut Ui) {
                 run(app);
             }
         });
+    });
+}
+
+/// The processor of the workspace (a badge): it opens the list of processors. Each has its own
+/// program, breakpoints and emulator; switching pauses the program and keeps the other's.
+fn arch_button(app: &mut App, ui: &mut Ui) {
+    let text = match app.arch() {
+        Arch::I8086 if ui.available_width() > 640.0 => "8086 REAL MODE",
+        a => a.name(),
+    };
+    let resp = ui
+        .add(
+            egui::Button::new(RichText::new(format!("{text}  ▾")).size(14.0).strong().color(pal::LINK))
+                .fill(pal::FIELD)
+                .stroke(egui::Stroke::new(1.5, pal::BORDER))
+                .min_size(vec2(0.0, 36.0)),
+        )
+        .on_hover_text("The processor: switch to the other one's workspace");
+    egui::Popup::menu(&resp).show(|ui| {
+        for a in Arch::ALL {
+            let title = if a == app.arch() { format!("✔ {}", a.title()) } else { format!("   {}", a.title()) };
+            if ui.add(egui::Button::new(RichText::new(title).size(17.0)).min_size(vec2(260.0, 44.0))).clicked() {
+                app.switch_arch(a);
+            }
+        }
     });
 }
 
@@ -217,7 +244,8 @@ pub(crate) fn tabs_row(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let r = small_icon(ui, Icon::Menu, "file, examples, tools");
             egui::Popup::menu(&r).show(|ui| main_menu(app, t, ui));
-            if small_icon(ui, Icon::Keyboard, "on-screen keyboard").clicked() {
+            // MIPS programs read lines typed in the Run I/O console instead.
+            if app.session.x86().is_some() && small_icon(ui, Icon::Keyboard, "on-screen keyboard").clicked() {
                 t.keypad.open = !t.keypad.open;
             }
             if small_icon(ui, Icon::Share, "share link").clicked() {
@@ -322,7 +350,16 @@ pub(crate) fn status_bar(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         };
         ui.label(RichText::new(state).size(16.0).color(color));
         let sep = |ui: &mut Ui| ui.label(RichText::new("·").size(16.0).color(pal::WEAK));
-        if t.tab == Tab::Memory {
+        let mips = app.session.mips();
+        if t.tab == Tab::Memory
+            && let Some(mips) = mips
+        {
+            sep(ui);
+            let pages = mips.mem.pages_in_use();
+            ui.label(RichText::new(format!("{pages} pages of 4 KB in use")).size(16.0).color(pal::TEXT));
+            sep(ui);
+            ui.label(RichText::new("4 GB address space").size(16.0).color(pal::TEXT));
+        } else if t.tab == Tab::Memory {
             sep(ui);
             let a = t.mem.selected.unwrap_or(linear(t.mem.seg.value(app), t.mem.mem_off));
             let seg = t.mem.seg.value(app);
@@ -339,8 +376,10 @@ pub(crate) fn status_bar(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         }
         let status = app.status.clone();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let size = app.session.x86().and_then(|m| m.loaded.as_ref()).map_or(0, |l| l.image_len);
-            badge(ui, &format!("{size:X}h bytes"));
+            if let Some(m) = app.session.x86() {
+                let size = m.loaded.as_ref().map_or(0, |l| l.image_len);
+                badge(ui, &format!("{size:X}h bytes"));
+            }
             let speed = t.speed;
             let s = if app.run == RunMode::Paused || speed == 0.0 {
                 "paused".to_string()
@@ -351,8 +390,12 @@ pub(crate) fn status_bar(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
             };
             badge(ui, &s);
             if ui.available_width() > 560.0 {
-                badge(ui, "REAL MODE");
-                badge(ui, "8086");
+                if mips.is_some() {
+                    badge(ui, "MIPS32");
+                } else {
+                    badge(ui, "REAL MODE");
+                    badge(ui, "8086");
+                }
             }
             // The last message (stepped back, not found, assembly failed...) in the space left.
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {

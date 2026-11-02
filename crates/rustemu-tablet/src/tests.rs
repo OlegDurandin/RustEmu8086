@@ -441,3 +441,48 @@ fn virtual_drive_is_in_the_menu() {
     }
     save(&mut h, "33_tablet_virtual_drive");
 }
+
+#[test]
+fn tablet_mips_workspace() {
+    use rustemu_session::Arch;
+    let mut app =
+        rustemu_ui::app::App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
+    app.switch_arch(Arch::Mips32);
+    app.load_mips_example(1);
+    app.emulate();
+    for _ in 0..5 {
+        app.single_step();
+    }
+    let mut h = tablet_harness(TabletApp::new(app), [1376.0, 1032.0]);
+    h.run_steps(4);
+    // The badge names the processor; the keyboard of a PC is not offered.
+    h.get_by_label("MIPS32  ▾");
+    for (tab, name) in [(Tab::Editor, "editor"), (Tab::Debugger, "debugger"), (Tab::Memory, "memory")] {
+        h.state_mut().state.tab = tab;
+        h.run_steps(4);
+        save(&mut h, &format!("33_tablet_mips_{name}"));
+    }
+    h.state_mut().state.tab = Tab::Debugger;
+    h.run_steps(2);
+    // The last step: `li $v0, 5` set $v0.
+    h.get_by_label_contains("$v0 0x4 → 0x5");
+    assert!(h.query_by_label("ALU").is_none() && h.query_by_label("Debug log").is_none());
+    // Run to the input: the output shows Run I/O and its input line; the keypad stays closed.
+    h.state_mut().app.start_run();
+    h.run_steps(8);
+    assert!(h.state().app.session.target.is_waiting_input());
+    assert!(!h.state().state.keypad.open);
+    assert!(h.state().state.output == crate::Output::Screen);
+    h.state_mut().app.mips.input = "10".into();
+    h.run_steps(2);
+    h.get_by_label("send").click();
+    h.run_steps(2);
+    h.state_mut().app.start_run();
+    h.run_steps(8);
+    assert!(h.state().app.session.mips().unwrap().console.text().contains("sum = 55"));
+    save(&mut h, "33_tablet_mips_finished");
+    // Back to the 8086: its keyboard and screen return.
+    h.state_mut().app.switch_arch(Arch::I8086);
+    h.run_steps(4);
+    h.get_by_label("8086 REAL MODE  ▾");
+}

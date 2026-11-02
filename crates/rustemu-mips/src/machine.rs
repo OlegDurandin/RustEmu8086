@@ -102,6 +102,8 @@ pub struct Machine {
     pub(crate) random: BTreeMap<i32, JavaRandom>,
     /// How the program ended, once it has.
     pub finished: Option<Finish>,
+    /// A program is loaded.
+    pub loaded: bool,
     /// Physical addresses where execution stops.
     pub breakpoints: HashSet<u32>,
     /// Steps are recorded for step back (off: faster).
@@ -144,6 +146,7 @@ impl Machine {
             files: Files::new(storage),
             random: BTreeMap::new(),
             finished: None,
+            loaded: false,
             breakpoints: HashSet::new(),
             history_enabled: true,
             history: VecDeque::new(),
@@ -167,6 +170,7 @@ impl Machine {
         self.files.reset();
         self.random.clear();
         self.finished = None;
+        self.loaded = false;
         self.clear_history();
         self.waiting = false;
         self.sleep_until = None;
@@ -195,6 +199,7 @@ impl Machine {
             }
         }
         self.cpu.pc = image.entry;
+        self.loaded = true;
         Ok(())
     }
 

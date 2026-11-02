@@ -73,6 +73,8 @@ pub enum Tool {
     Calculator,
     /// "My programs" saved in the browser.
     Programs,
+    /// The MIPS console (MARS's Run I/O): what the program prints, a line to type its input.
+    RunIo,
 }
 
 /// What a tool is, apart from its window and body.
@@ -91,7 +93,7 @@ struct Spec {
 
 impl Tool {
     /// Number of tools (the size of [`Windows`]).
-    pub const COUNT: usize = 29;
+    pub const COUNT: usize = 30;
 
     /// All tools; panels are placed in this order by the default layout, windows drawn in it.
     pub const ALL: [Tool; Tool::COUNT] = [
@@ -107,6 +109,7 @@ impl Tool {
         Tool::Alu,
         Tool::Fpu,
         Tool::Screen,
+        Tool::RunIo,
         Tool::Vars,
         Tool::Stack,
         Tool::Console,
@@ -143,6 +146,7 @@ impl Tool {
             Tool::Alu => (Some("alu"), "ALU", Some(Inspect), false, true),
             Tool::Fpu => (Some("fpu"), "FPU", Some(Inspect), false, true),
             Tool::Screen => (Some("screen"), "screen", Some(Screen), true, true),
+            Tool::RunIo => (Some("run_io"), "Run I/O", Some(Screen), false, true),
             Tool::Vars => (Some("vars"), "variables", Some(Aside), true, true),
             Tool::Stack => (Some("stack"), "stack", Some(Aside), true, true),
             Tool::Console => (Some("console"), "debug log", Some(Aside), true, true),
@@ -178,13 +182,15 @@ impl Tool {
         self.spec().scrolls
     }
 
-    /// The tool can be shown here: the drive C: in memory exists, the programs are in the browser.
-    fn available(self, app: &App) -> bool {
-        match self {
-            Tool::Drive => app.session.dos_memory_drive().is_some(),
-            Tool::Programs => app.front.browser,
-            _ => true,
-        }
+    /// The tool can be shown here: it is one of the processor's ([`App::has_tool`]), the drive C:
+    /// in memory exists, the programs are in the browser.
+    pub fn available(self, app: &App) -> bool {
+        app.has_tool(self)
+            && match self {
+                Tool::Drive => app.session.dos_memory_drive().is_some(),
+                Tool::Programs => app.front.browser,
+                _ => true,
+            }
     }
 
     /// The tool's request to be brought to the front (set when it shows an article or an entry).
@@ -210,6 +216,7 @@ impl Tool {
             Tool::Source => {
                 unique(at("original source code", 700.0, 540.0), "source_window").default_size([700.0, 300.0])
             }
+            Tool::RunIo => unique(at("Run I/O", 880.0, 64.0), "run_io_window").default_size([540.0, 360.0]),
             Tool::Memory => at("memory", 80.0, 420.0),
             Tool::Stack => at("stack", 680.0, 110.0),
             Tool::Vars => at("variables", 300.0, 300.0),
@@ -291,6 +298,7 @@ pub fn tool_ui(app: &mut App, ui: &mut Ui, tool: Tool, host: &mut dyn Host) {
         Tool::Library => crate::library_ui::library_ui(app, ui),
         Tool::Reference => crate::reference_ui::reference_ui(&mut app.reference, ui),
         Tool::Programs => crate::programs::programs_ui(app, ui),
+        Tool::RunIo => crate::mips_ui::console_ui(app, ui),
         Tool::Ascii => crate::utility::ascii_ui(ui),
         Tool::Converter => crate::utility::converter_ui(&mut app.converter_text, ui),
         Tool::Calculator => crate::calc::calc_ui(&mut app.calculator, ui),
@@ -385,7 +393,7 @@ impl Windows {
     }
 }
 
-const KEYS: [&str; 25] = [
+const KEYS: [&str; 26] = [
     "emulator",
     "screen",
     "source",
@@ -411,6 +419,7 @@ const KEYS: [&str; 25] = [
     "drive",
     "programs",
     "about",
+    "run_io",
 ];
 
 impl Serialize for Windows {

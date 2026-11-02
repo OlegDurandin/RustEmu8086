@@ -22,14 +22,33 @@ pub enum Arch {
     /// Intel 8086 (with the 80186 extensions Emu8086 programs use) and the 8087, running under
     /// emulated BIOS and DOS services.
     I8086,
+    /// MIPS32 as MARS simulates it: its integer instructions, memory layout and system services.
+    Mips32,
 }
 
 impl Arch {
+    /// Every architecture, in menu order.
+    pub const ALL: [Arch; 2] = [Arch::I8086, Arch::Mips32];
+
+    /// Full name for menus ("Intel 8086").
+    pub fn title(self) -> &'static str {
+        match self {
+            Arch::I8086 => "Intel 8086",
+            Arch::Mips32 => "MIPS32",
+        }
+    }
+
     /// Short name for the user ("8086").
     pub fn name(self) -> &'static str {
         match self {
             Arch::I8086 => "8086",
+            Arch::Mips32 => "MIPS32",
         }
+    }
+
+    /// The architecture of a [`Arch::name`] (any case).
+    pub fn from_name(name: &str) -> Option<Arch> {
+        Arch::ALL.into_iter().find(|a| a.name().eq_ignore_ascii_case(name))
     }
 }
 

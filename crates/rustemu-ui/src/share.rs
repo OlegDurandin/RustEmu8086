@@ -5,6 +5,8 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
+use rustemu_session::Arch;
+
 use crate::app::{App, PendingAction};
 
 /// Links longer than this may be cut by messengers and mail programs.
@@ -21,6 +23,8 @@ pub struct Shared {
     pub text: String,
     /// Run it after opening (`&run`).
     pub run: bool,
+    /// The processor it is for (`&arch=MIPS32`; none: the 8086).
+    pub arch: Arch,
 }
 
 /// The "share link" dialog.
@@ -29,10 +33,18 @@ pub struct ShareDialog {
     pub run: bool,
 }
 
-/// The part after `#` of a link to program `text` named `name`.
+/// The part after `#` of a link to 8086 program `text` named `name`.
 pub fn fragment(name: &str, text: &str, run: bool) -> String {
+    fragment_for(Arch::I8086, name, text, run)
+}
+
+/// The part after `#` of a link to program `text` named `name` for processor `arch`.
+pub fn fragment_for(arch: Arch, name: &str, text: &str, run: bool) -> String {
     let code = URL_SAFE_NO_PAD.encode(miniz_oxide::deflate::compress_to_vec(text.as_bytes(), 9));
     let mut f = format!("name={}&code={code}", percent_encode(name));
+    if arch != Arch::I8086 {
+        f.push_str(&format!("&arch={}", arch.name()));
+    }
     if run {
         f.push_str("&run");
     }
@@ -41,7 +53,7 @@ pub fn fragment(name: &str, text: &str, run: bool) -> String {
 
 /// The program of a link's `#…` part (with or without the `#`); None when it has none.
 pub fn parse(fragment: &str) -> Option<Shared> {
-    let mut shared = Shared { name: "shared.asm".into(), text: String::new(), run: false };
+    let mut shared = Shared { name: "shared.asm".into(), text: String::new(), run: false, arch: Arch::I8086 };
     let mut code = None;
     for part in fragment.trim_start_matches('#').split('&') {
         let (key, value) = part.split_once('=').unwrap_or((part, ""));
@@ -53,6 +65,7 @@ pub fn parse(fragment: &str) -> Option<Shared> {
             }
             "code" => code = Some(value),
             "run" => shared.run = true,
+            "arch" => shared.arch = Arch::from_name(value)?,
             _ => {}
         }
     }
@@ -94,6 +107,10 @@ impl App {
     }
 
     pub(crate) fn open_shared(&mut self, s: Shared) {
+        self.dialogs.open_in = Some(s.arch);
+        if !self.enter_workspace_for(&PendingAction::Shared(s.clone()), None, "") {
+            return;
+        }
         self.store_session();
         self.doc.path = None;
         self.doc.program = None;
@@ -134,7 +151,7 @@ impl App {
     /// Link to the program in the editor.
     pub fn share_link(&self, run: bool) -> String {
         let base = self.front.share_base.as_deref().unwrap_or(crate::app::WEB_URL);
-        format!("{base}#{}", fragment(&self.file_name(), &self.doc.text, run))
+        format!("{base}#{}", fragment_for(self.arch(), &self.file_name(), &self.doc.text, run))
     }
 }
 
@@ -211,8 +228,12 @@ mod tests {
         assert!(f.starts_with("name=my%20prog.asm&code="), "{f}");
         assert!(!f.contains(['+', '/', '#']) && f.matches('=').count() == 2, "{f}");
         let s = parse(&format!("#{f}")).unwrap();
-        assert_eq!(s, Shared { name: "my prog.asm".into(), text: text.into(), run: true });
+        assert_eq!(s, Shared { name: "my prog.asm".into(), text: text.into(), run: true, arch: Arch::I8086 });
         assert!(!parse(&fragment("a", "b", false)).unwrap().run);
+        let f = fragment_for(Arch::Mips32, "hello.s", "syscall\n", false);
+        assert!(f.ends_with("&arch=MIPS32"), "{f}");
+        assert_eq!(parse(&f).unwrap().arch, Arch::Mips32);
+        assert_eq!(parse(&f.replace("MIPS32", "Z80")), None, "an unknown processor");
     }
 
     #[test]

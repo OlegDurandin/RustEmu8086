@@ -86,8 +86,122 @@ impl App {
         }
     }
 
+    /// Messages of a MIPS assembly: errors (with their places in the editor) or warnings.
+    fn mips_messages(&mut self, list: &[rustemu_mips::asm::AsmError], error: bool) {
+        let file = self.file_name();
+        for e in list {
+            let span = (e.col > 0).then(|| {
+                let line = self.doc.text.split('\n').nth(e.line.saturating_sub(1)).unwrap_or("");
+                let col = e.col - 1;
+                // The token at the column.
+                let len = line.chars().skip(col).take_while(|c| !c.is_whitespace() && *c != ',').count();
+                (col, len.max(1))
+            });
+            let line = e.line as u32;
+            if error && line > 0 {
+                self.build.error_lines.push(line);
+                if let Some((col, len)) = span {
+                    self.build.error_spans.push((line, col, len));
+                }
+            }
+            let kind = if error { "" } else { "warning: " };
+            self.build.messages.push(Message {
+                text: match span {
+                    Some((col, _)) => format!("{file} ({line}:{}): {kind}{}", col + 1, e.message),
+                    None if line > 0 => format!("{file} ({line}): {kind}{}", e.message),
+                    None => format!("{kind}{}", e.message),
+                },
+                loc: (line > 0).then(|| (file.clone(), line)),
+                span,
+                error,
+            });
+        }
+    }
+
+    /// Assembles the editor text as a MIPS program (MARS's assembler).
+    fn assemble_mips(&mut self) -> Option<rustemu_mips::asm::Program> {
+        self.build.messages.clear();
+        self.clear_errors();
+        match rustemu_mips::asm::assemble(&self.doc.text) {
+            Ok(p) => {
+                let words: usize = p.statements.iter().map(|s| s.words.len()).sum();
+                let data: u32 = p.data.iter().map(|d| d.len).sum();
+                self.build.messages.push(Message {
+                    text: format!(
+                        "{}: assembled successfully - MIPS32, {words} instructions, {data} bytes of data",
+                        self.file_name()
+                    ),
+                    loc: None,
+                    span: None,
+                    error: false,
+                });
+                self.mips_messages(&p.warnings, false);
+                Some(p)
+            }
+            Err(e) => {
+                self.build.failed = true;
+                self.mips_messages(&e, true);
+                self.build.messages.push(Message {
+                    text: format!("{} error(s)", e.len()),
+                    loc: None,
+                    span: None,
+                    error: true,
+                });
+                if let Some(i) = self.build.messages.iter().position(|m| m.loc.is_some()) {
+                    self.jump_to_message(i);
+                }
+                self.status = "Assembly failed".into();
+                None
+            }
+        }
+    }
+
+    /// Assembles the MIPS program and loads it; its files are in drive C:'s folder (the desktop)
+    /// or in memory (the browser).
+    fn emulate_mips(&mut self) {
+        let Some(p) = self.assemble_mips() else { return };
+        let same_image = self.session.mips_program.as_ref().is_some_and(|old| old.image == p.image);
+        let storage = match self.vdrive(self.doc.path.as_deref()) {
+            Some(root) => rustemu_mips::files::Storage::Host(root),
+            None => match self.session.mips().map(|m| &m.files.storage) {
+                Some(s @ rustemu_mips::files::Storage::Memory(_)) => s.clone(),
+                _ => rustemu_mips::files::Storage::Memory(Default::default()),
+            },
+        };
+        if let Some(m) = self.session.mips_mut() {
+            m.files.storage = storage;
+        }
+        let name = self.file_name();
+        if let Err(e) = self.session.load_mips(p, &name) {
+            self.build.failed = true;
+            self.notice("Load", &e);
+            return;
+        }
+        self.program.files = vec![(name, self.doc.text.lines().map(str::to_string).collect())];
+        self.program.index = vec![Vec::new()];
+        self.program.text = Some(self.doc.text.clone());
+        if !same_image {
+            self.clear_address_breakpoints();
+        }
+        self.after_load();
+    }
+
     /// Compile and write the output file next to the source.
     pub fn compile(&mut self) {
+        if self.arch() == Arch::Mips32 {
+            // MARS has no executable format either: the program is assembled and checked.
+            if self.assemble_mips().is_some() {
+                self.build.messages.push(Message {
+                    text: "MIPS programs run in the emulator: there is no executable file to write (emulate - F9)"
+                        .into(),
+                    loc: None,
+                    span: None,
+                    error: false,
+                });
+                self.status = "Assembled".into();
+            }
+            return;
+        }
         let Some(p) = self.assemble() else { return };
         if self.front.browser {
             let stem = self.file_name();
@@ -139,6 +253,9 @@ impl App {
 
     /// Assemble and load into the emulator.
     pub fn emulate(&mut self) {
+        if self.arch() == Arch::Mips32 {
+            return self.emulate_mips();
+        }
         let Some(p) = self.assemble() else { return };
         let source_files: Vec<(String, Vec<String>)> = p
             .files
@@ -260,11 +377,19 @@ impl App {
             self.windows.open_also(&tools);
         }
         self.windows[Tool::Emulator] = true;
-        self.windows[Tool::Screen] = true;
+        if self.arch() == Arch::Mips32 {
+            self.windows[Tool::RunIo] = true;
+            self.mips.focus_request = true;
+        } else {
+            self.windows[Tool::Screen] = true;
+            self.screen.focus_request = true;
+        }
         self.windows[Tool::Source] = !self.program.files.is_empty();
-        self.screen.focus_request = true;
-        // The memory window starts at the data (8086: DS:0000).
-        self.view.mem_view_addr = self.session.target.data_address(None, 0);
+        // The memory window starts at the data (8086: DS:0000, MIPS: .data).
+        self.view.mem_view_addr = match self.arch() {
+            Arch::Mips32 => rustemu_mips::memory::DATA_BASE,
+            _ => self.session.target.data_address(None, 0),
+        };
         self.status = format!("Loaded - {}", self.pc_status());
     }
 
@@ -272,7 +397,7 @@ impl App {
     /// as Emu8086's `vdrive\C` ([`App::drive_dir`]), or the program's folder with
     /// [`Settings::drive_c_source_folder`]. None for the memory drive (the browser).
     fn vdrive(&self, program: Option<&Path>) -> Option<PathBuf> {
-        if self.session.x86().is_some_and(|m| m.dos_memory_drive().is_some()) {
+        if self.session.x86().is_some_and(|m| m.dos_memory_drive().is_some()) || self.front.browser {
             return None;
         }
         if self.settings.drive_c_source_folder

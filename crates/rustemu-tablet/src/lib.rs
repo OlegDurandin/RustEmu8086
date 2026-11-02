@@ -120,7 +120,8 @@ struct Tablet;
 impl rustemu_ui::tools::Host for Tablet {
     fn floats(&self, tool: Tool) -> bool {
         // The debug log is a tool of the Debugger tab.
-        !matches!(tool, Tool::Emulator | Tool::Screen | Tool::Source | Tool::Console)
+        // Run I/O is the output card of the MIPS workspace.
+        !matches!(tool, Tool::Emulator | Tool::Screen | Tool::Source | Tool::Console | Tool::RunIo)
     }
 }
 
@@ -128,7 +129,13 @@ fn tablet_ui(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     app.screen.focused = false;
     follow_errors(app, t);
-    keypad::follow_input(app, &mut t.keypad);
+    if app.session.mips().is_some() {
+        // MIPS reads lines typed in the Run I/O console, not the keys of a PC keyboard.
+        t.keypad.open = false;
+        follow_mips_input(app, t);
+    } else {
+        keypad::follow_input(app, &mut t.keypad);
+    }
     measure_speed(app, t, ui);
     egui::Panel::top("tablet_top")
         .frame(egui::Frame::new().fill(pal::BAR).inner_margin(egui::Margin::symmetric(16, 10)))
@@ -158,6 +165,18 @@ fn tablet_ui(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         },
     );
     rustemu_ui::windows(app, &ctx, &mut Tablet);
+}
+
+/// The MIPS program starts waiting for input: the output shows the Run I/O console.
+fn follow_mips_input(app: &App, t: &mut TabletState) {
+    let waiting = app.session.target.is_waiting_input();
+    if waiting && !t.keypad.was_waiting {
+        t.output = Output::Screen;
+        if t.tab == Tab::Memory {
+            t.tab = Tab::Editor;
+        }
+    }
+    t.keypad.was_waiting = waiting;
 }
 
 /// A new build error shows the messages.

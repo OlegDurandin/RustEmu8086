@@ -241,9 +241,12 @@ fn lex(s: &str) -> Result<Vec<Tok>, String> {
             let v = chars[i + 1..end].iter().rev().fold(0i64, |v, &ch| (v << 8) | (ch as i64 & 0xFF));
             out.push(Tok::Num(v));
             i = end + 1;
-        } else if c.is_ascii_alphanumeric() || matches!(c, '_' | '@' | '?' | '.') {
+        } else if c.is_ascii_alphanumeric() || matches!(c, '_' | '@' | '?' | '.' | '$') {
+            // `$` starts MIPS register names ($t0, $8).
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || matches!(chars[i], '_' | '@' | '?' | '.')) {
+            while i < chars.len()
+                && (chars[i].is_ascii_alphanumeric() || matches!(chars[i], '_' | '@' | '?' | '.' | '$'))
+            {
                 i += 1;
             }
             let word: String = chars[start..i].iter().collect();
