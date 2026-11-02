@@ -141,4 +141,7 @@ MIT — см. файл [LICENSE](LICENSE).
 - **библиотека `emu8086.inc`** (`crates/rustemu-asm/inc/`) повторяет библиотеку Emu8086: её макросы и процедуры,
   их имена, параметры и поведение принадлежат авторам Emu8086; текст файла написан для RustEmu8086.
 
+Таблицы инструкций MIPS (`crates/rustemu-mips/data/PseudoOps.txt` и `crates/rustemu-mips/src/asm/basic.rs`) взяты
+из [MARS](https://github.com/dpetersanderson/MARS) и распространяются по его лицензии MIT.
+
 Подробнее — в конце файла [LICENSE](LICENSE).
