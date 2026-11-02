@@ -308,6 +308,40 @@ dw 0xAA55                       ; boot signature
     ),
 ];
 
+macro_rules! mips_example {
+    ($caption:literal, $name:literal) => {
+        ($caption, $name, include_str!(concat!("../../../examples/mips/", $name)))
+    };
+}
+
+/// Our MIPS examples (MARS syntax, `examples/mips`): caption of the Examples menu, file name, text.
+pub const MIPS_EXAMPLES: &[(&str, &str, &str)] = &[
+    mips_example!("Hello, MIPS", "hello.s"),
+    mips_example!("sum of 1..n (read an integer)", "sum.s"),
+    mips_example!("Fibonacci (recursion, stack)", "fibonacci.s"),
+    mips_example!("strings (read a line)", "strings.s"),
+    mips_example!("bubble sort", "sort.s"),
+    mips_example!("random numbers and sbrk", "random.s"),
+    mips_example!("exception handler", "exception.s"),
+];
+
+/// File -> New in the MIPS workspace.
+pub const MIPS_TEMPLATE: &str = "\
+# MIPS32 program (MARS syntax): data in .data, code in .text from main.
+        .data
+msg:    .asciiz \"Hello!\\n\"
+
+        .text
+main:   li   $v0, 4          # print the string at $a0
+        la   $a0, msg
+        syscall
+
+        # add your code here
+
+        li   $v0, 10         # exit
+        syscall
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,6 +12,7 @@
 - [emu8086.inc library](Emu8086-inc-library)
 - [BIOS and DOS interrupts](BIOS-and-DOS-interrupts)
 - [Virtual devices](Virtual-devices)
+- [MIPS32](MIPS32)
 
 **The app**
 - [Editor](Editor)
@@ -42,6 +43,7 @@
 - [Библиотека emu8086.inc](Библиотека-emu8086)
 - [Прерывания BIOS и DOS](Прерывания-BIOS-и-DOS)
 - [Виртуальные устройства](Виртуальные-устройства)
+- [Процессор MIPS32](Процессор-MIPS32)
 
 **Приложение**
 - [Редактор](Редактор)

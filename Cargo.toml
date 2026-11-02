@@ -31,7 +31,8 @@ debug = 1
 
 # The web version (trunk, `data-cargo-profile` in crates/rustemu-web/index.html): the wasm is
 # downloaded on every first visit, so it is optimized for size, except the emulator core, which
-# runs millions of instructions per second (opt-level "z" there makes it ~40% slower).
+# runs millions of instructions per second (opt-level "z" there makes it ~40% slower); the MIPS
+# core likewise.
 [profile.web]
 inherits = "release"
 opt-level = "z"
@@ -40,4 +41,7 @@ codegen-units = 1
 debug = 0
 
 [profile.web.package.rustemu-core]
+opt-level = 3
+
+[profile.web.package.rustemu-mips]
 opt-level = 3

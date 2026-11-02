@@ -7,10 +7,22 @@ use std::collections::BTreeMap;
 use egui::{RichText, Ui};
 use serde::{Deserialize, Serialize};
 
+use rustemu_session::Arch;
+
 use crate::app::{App, PendingAction};
 
 pub(crate) const PROGRAMS_KEY: &str = "programs";
 pub(crate) const DRAFT_KEY: &str = "draft";
+/// The draft of the MIPS workspace.
+pub(crate) const MIPS_DRAFT_KEY: &str = "draft_mips";
+
+/// The storage key of the draft of the workspace of `arch`.
+fn draft_key(arch: Arch) -> &'static str {
+    match arch {
+        Arch::I8086 => DRAFT_KEY,
+        Arch::Mips32 => MIPS_DRAFT_KEY,
+    }
+}
 
 /// A program saved in the browser.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -19,6 +31,21 @@ pub struct StoredProgram {
     pub text: String,
     /// Time of the last save, seconds since 1970.
     pub modified: f64,
+    /// The processor it is for ([`Arch::name`]; empty: the 8086).
+    #[serde(default)]
+    pub arch: String,
+}
+
+impl StoredProgram {
+    /// The processor the program is for.
+    pub fn arch(&self) -> Arch {
+        Arch::from_name(&self.arch).unwrap_or(Arch::I8086)
+    }
+}
+
+/// How a program record names `arch`.
+fn arch_field(arch: Arch) -> String {
+    if arch == Arch::I8086 { String::new() } else { arch.name().to_string() }
 }
 
 /// Programs saved in the browser, by name.
@@ -63,7 +90,10 @@ pub fn program_name(name: &str) -> Option<String> {
 impl App {
     /// Saves the editor text as program `name` of "my programs" (replacing one of that name).
     pub fn save_program(&mut self, name: &str) {
-        self.web.programs.insert(name.to_string(), StoredProgram { text: self.doc.text.clone(), modified: now() });
+        let arch = arch_field(self.arch());
+        self.web
+            .programs
+            .insert(name.to_string(), StoredProgram { text: self.doc.text.clone(), modified: now(), arch });
         self.doc.program = Some(name.to_string());
         self.doc.name = Some(name.to_string());
         self.doc.example_key = None;
@@ -73,7 +103,10 @@ impl App {
 
     /// Opens program `name` of "my programs" in the editor.
     pub fn open_program(&mut self, name: &str) {
-        let Some(text) = self.web.programs.get(name).map(|p| p.text.clone()) else { return };
+        let Some((text, arch)) = self.web.programs.get(name).map(|p| (p.text.clone(), p.arch())) else { return };
+        if !self.enter_workspace_for(&PendingAction::Program(name.to_string()), Some(arch), &text) {
+            return;
+        }
         self.store_session();
         self.doc.path = None;
         self.doc.example_key = None;
@@ -91,6 +124,18 @@ impl App {
     /// Opens a source uploaded from the computer and keeps it in "my programs" (as `name (2).asm`
     /// when a different program has its name).
     pub fn import_program(&mut self, name: &str, text: String) {
+        // The processor: the current one, unless the text clearly is the other's (then asked).
+        let arch = match self.dialogs.open_in {
+            Some(a) => a,
+            None => match crate::app::detect_arch(&text) {
+                Some(d) if d != self.arch() => {
+                    let action = PendingAction::Import(name.to_string(), text);
+                    self.dialogs.open_as = Some(crate::app::OpenAs { action, detected: d });
+                    return;
+                }
+                _ => self.arch(),
+            },
+        };
         let base = program_name(name).unwrap_or_else(|| "upload.asm".into());
         let mut name = base.clone();
         for n in 2.. {
@@ -102,7 +147,8 @@ impl App {
                 None => format!("{base} ({n})"),
             };
         }
-        self.web.programs.insert(name.clone(), StoredProgram { text, modified: now() });
+        self.dialogs.open_in = Some(arch);
+        self.web.programs.insert(name.clone(), StoredProgram { text, modified: now(), arch: arch_field(arch) });
         self.open_program(&name);
     }
 
@@ -126,6 +172,14 @@ impl App {
         if let Ok(programs) = ron::ser::to_string(&self.web.programs) {
             self.put(storage, PROGRAMS_KEY, programs);
         }
+        self.persist_draft(storage);
+        for arch in self.parked_archs() {
+            self.in_workspace(arch, |app| app.persist_draft(storage));
+        }
+    }
+
+    /// Writes the draft of the shown workspace.
+    fn persist_draft(&mut self, storage: &mut dyn eframe::Storage) {
         let draft = Draft {
             name: self.doc.name.clone(),
             program: self.doc.program.clone(),
@@ -135,7 +189,7 @@ impl App {
             from_link: self.from_link(),
         };
         if let Ok(draft) = ron::ser::to_string(&draft) {
-            self.put(storage, DRAFT_KEY, draft);
+            self.put(storage, draft_key(self.arch()), draft);
         }
     }
 
@@ -147,7 +201,18 @@ impl App {
         if let Some(programs) = eframe::get_value(storage, PROGRAMS_KEY) {
             self.web.programs = programs;
         }
-        let Some(d) = eframe::get_value::<Draft>(storage, DRAFT_KEY) else { return };
+        for arch in Arch::ALL {
+            if arch == self.arch() || storage.get_string(draft_key(arch)).is_none() {
+                continue;
+            }
+            self.in_workspace(arch, |app| app.restore_draft(storage));
+        }
+        self.restore_draft(storage);
+    }
+
+    /// Restores the draft of the shown workspace.
+    fn restore_draft(&mut self, storage: &dyn eframe::Storage) {
+        let Some(d) = eframe::get_value::<Draft>(storage, draft_key(self.arch())) else { return };
         self.doc.path = None;
         self.doc.program = d.program.filter(|p| self.web.programs.contains_key(p));
         self.doc.name = d.name;
@@ -216,7 +281,12 @@ pub(crate) fn programs_ui(app: &mut App, ui: &mut Ui) {
                 {
                     act = Some(Act::Open(name.clone()));
                 }
-                ui.weak(format!("{} lines, {}", p.text.lines().count(), ago(now - p.modified)));
+                // The processor, when it is not the 8086 (opening switches to its workspace).
+                let arch = match p.arch() {
+                    Arch::I8086 => String::new(),
+                    a => format!("{}, ", a.name()),
+                };
+                ui.weak(format!("{arch}{} lines, {}", p.text.lines().count(), ago(now - p.modified)));
                 if ui.small_button("download").clicked() {
                     act = Some(Act::Download(name.clone()));
                 }

@@ -39,7 +39,7 @@ impl JavaRandom {
         if bound <= 0 {
             return None;
         }
-        if bound & bound.wrapping_neg() == bound {
+        if (bound as u32).is_power_of_two() {
             return Some(((bound as i64 * self.next(31) as i64) >> 31) as i32);
         }
         loop {

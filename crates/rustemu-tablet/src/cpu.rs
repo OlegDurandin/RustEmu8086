@@ -309,6 +309,11 @@ pub(crate) fn full_height(w: f32, view: &CpuView) -> f32 {
         + 8.0
 }
 
+/// Height of the MIPS card: the tabs, the title and the 16 rows of the general purpose registers.
+pub(crate) fn mips_height() -> f32 {
+    HEAD_H + 12.0 + 2.0 * 36.0 + 16.0 * 24.0 + 8.0
+}
+
 /// Height of the preview card for a width.
 pub(crate) fn preview_height(w: f32, view: &CpuView) -> f32 {
     let inner = w - 24.0;
@@ -322,8 +327,28 @@ fn cpus(app: &App) -> Option<(Cpu, Cpu)> {
     Some((cpu, prev))
 }
 
+/// The MIPS registers by their use (PC, HI, LO first); the preview links to the debugger.
+/// Returns true when "Open debugger" was tapped.
+fn mips_card(app: &mut App, ui: &mut Ui, rect: Rect, preview: bool) -> bool {
+    let (mut head, mut b) = card(ui, rect, "CPU · MIPS32");
+    let open = preview
+        && head
+            .add(egui::Button::new(egui::RichText::new("Open debugger ›").color(pal::LINK)).frame(false))
+            .on_hover_text("the last step, the code and the tools")
+            .clicked();
+    egui::ScrollArea::vertical()
+        .id_salt(("t_mips_regs", preview))
+        .auto_shrink([false, false])
+        .show(&mut b, |ui| rustemu_ui::mips_ui::registers_ui(app, ui));
+    open
+}
+
 /// The full CPU panel (Debugger).
 pub(crate) fn cpu_card(app: &mut App, view: &mut CpuView, ui: &mut Ui, rect: Rect) {
+    if app.session.mips().is_some() {
+        mips_card(app, ui, rect, false);
+        return;
+    }
     let (_, b) = card(ui, rect, "CPU");
     let area = b.max_rect();
     let Some((cpu, prev)) = cpus(app) else { return };
@@ -346,6 +371,9 @@ pub(crate) fn cpu_card(app: &mut App, view: &mut CpuView, ui: &mut Ui, rect: Rec
 /// The CPU preview (Editor): AX..DX with their bytes, CF ZF SF OF, the segments as text, and a way
 /// to the debugger. Returns true when "Open debugger" was tapped.
 pub(crate) fn cpu_preview_card(app: &mut App, view: &mut CpuView, ui: &mut Ui, rect: Rect) -> bool {
+    if app.session.mips().is_some() {
+        return mips_card(app, ui, rect, true);
+    }
     let (mut head, b) = card(ui, rect, "CPU");
     let open = head
         .add(egui::Button::new(egui::RichText::new("Open debugger ›").color(pal::LINK)).frame(false))

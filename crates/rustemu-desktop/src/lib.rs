@@ -5,6 +5,7 @@
 #![warn(missing_docs)]
 
 mod emulator;
+mod mips;
 mod ui;
 #[cfg(test)]
 mod ui_tests;

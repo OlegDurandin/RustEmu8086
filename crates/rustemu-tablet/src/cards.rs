@@ -25,7 +25,14 @@ pub(crate) fn editor_card(app: &mut App, ui: &mut Ui, rect: Rect) {
 pub(crate) fn output_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
     let (mut head, mut b) = card(ui, rect, "OUTPUT");
     let tab = t.output;
-    if small_icon(&mut head, Icon::Trash, if tab == Output::Screen { "clear the screen" } else { "clear the messages" })
+    // MIPS: the screen is the Run I/O console, with a line to type the input.
+    let mips = app.session.mips().is_some();
+    if !(mips && tab == Output::Screen)
+        && small_icon(
+            &mut head,
+            Icon::Trash,
+            if tab == Output::Screen { "clear the screen" } else { "clear the messages" },
+        )
         .clicked()
     {
         match tab {
@@ -41,12 +48,13 @@ pub(crate) fn output_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect:
     }
     let errors = app.build.messages.iter().filter(|m| m.error).count();
     let msg = if errors > 0 { format!("messages ({errors})") } else { "messages".into() };
-    for (o, name) in [(Output::Messages, msg.as_str()), (Output::Screen, "screen")] {
+    for (o, name) in [(Output::Messages, msg.as_str()), (Output::Screen, if mips { "Run I/O" } else { "screen" })] {
         if head.selectable_label(t.output == o, name).clicked() {
             t.output = o;
         }
     }
     match tab {
+        Output::Screen if mips => rustemu_ui::mips_ui::console_ui(app, &mut b),
         Output::Screen => {
             let waiting = app.session.target.is_waiting_input();
             let avail = b.available_size() - vec2(0.0, if waiting { 48.0 } else { 26.0 });
@@ -140,7 +148,7 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
     let mut remove_addr = None;
     let mut goto = None;
     egui::ScrollArea::vertical().id_salt("t_bps").auto_shrink([false, false]).show(&mut b, |ui| {
-        let cs = app.session.x86().map_or(0, |m| m.cpu.cs());
+        let cs = app.session.x86().map(|m| m.cpu.cs());
         let keys: Vec<(usize, u32)> = app.debugger.bp_lines.keys().copied().collect();
         if keys.is_empty() && app.session.target.breakpoints().is_empty() {
             ui.label(
@@ -236,7 +244,9 @@ pub(crate) fn breakpoints_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, 
 }
 
 /// Offset of linear address `a` in segment `cs`, or the linear address when it is outside.
-fn offset_text(cs: u16, a: u32) -> String {
+fn offset_text(cs: Option<u16>, a: u32) -> String {
+    // A flat address space (MIPS): the address itself.
+    let Some(cs) = cs else { return format!("{a:08x}") };
     match a.checked_sub((cs as u32) << 4) {
         Some(off) if off <= 0xFFFF => format!("{off:04X}"),
         _ => format!("{a:05X}"),

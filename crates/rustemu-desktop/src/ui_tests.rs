@@ -888,7 +888,12 @@ secret db 'secret.txt', 0
 seen   db 'seen.txt', 0
 out    db 'out.txt', 0
 ";
-    app.open_link(rustemu_ui::share::Shared { name: "link.asm".into(), text: text.into(), run: true });
+    app.open_link(rustemu_ui::share::Shared {
+        name: "link.asm".into(),
+        text: text.into(),
+        run: true,
+        arch: rustemu_session::Arch::I8086,
+    });
     run_until_paused(&mut app);
     let temporary = app.session.dos_memory_drive().unwrap();
     assert_eq!(temporary.files().map(|f| f.0).collect::<Vec<_>>(), ["OUT.TXT"], "{}", app.status);
@@ -1420,4 +1425,113 @@ fn fpu_window_shows_the_8087() {
     save(&mut h, "54_fpu_window");
     h.get_by_label("control register:");
     h.get_by_label("35 C2 68 21 A2 DA 0F C9 00 40");
+}
+
+/// Runs the program until it stops (at most `frames` frames).
+fn run_frames(h: &mut Harness<'static, App>, frames: usize) {
+    for _ in 0..frames {
+        let ctx = h.ctx.clone();
+        h.state_mut().tick(&ctx);
+        h.run();
+        if h.state().run == rustemu_ui::app::RunMode::Paused {
+            break;
+        }
+    }
+}
+
+#[test]
+fn mips_workspace() {
+    use rustemu_session::Arch;
+    let mut h = harness(App::with_settings(Settings { last_file: None, ..Default::default() }));
+    h.run();
+    let x86_text = h.state().doc.text.clone();
+    // The MIPS workspace opens with its first example.
+    h.state_mut().switch_arch(Arch::Mips32);
+    h.run();
+    assert_eq!(h.state().arch(), Arch::Mips32);
+    assert_eq!(h.state().file_name(), "hello.s");
+    save(&mut h, "40_mips_editor");
+    // The 8086's tools are not offered.
+    assert!(h.query_by_label("❓ help").is_none());
+    h.get_by_label("▶ emulate").click();
+    h.run();
+    assert!(h.state().loaded(), "{:?}", h.state().build.messages.iter().map(|m| &m.text).collect::<Vec<_>>());
+    assert!(h.state().windows[Tool::RunIo] && !h.state().windows[Tool::Screen]);
+    // Registers in groups: all 32 general purpose ones, then Special, CP0 and FPU.
+    h.get_by_label("$v0");
+    h.get_by_label("$ra");
+    h.get_by_label("General purpose registers");
+    save(&mut h, "41_mips_loaded");
+    h.get_by_label("Special").click();
+    h.run();
+    h.get_by_label("PC");
+    h.get_by_label("00400000");
+    h.get_by_label("CP0").click();
+    h.run();
+    h.get_by_label("Status");
+    h.get_by_label("0000FF11");
+    h.get_by_label("FPU").click();
+    h.run();
+    h.get_by_label_contains("not emulated yet");
+    h.get_by_label("DEC").click();
+    h.get_by_label("GPR").click();
+    h.run();
+    h.get_by_label("2147479548");
+    save(&mut h, "41_mips_registers_dec");
+    h.get_by_label("HEX").click();
+    h.run();
+    h.state_mut().single_step();
+    h.run();
+    assert_eq!(h.state().session.mips().unwrap().cpu.regs[2], 4, "li $v0, 4");
+    h.state_mut().start_run();
+    run_frames(&mut h, 20);
+    assert!(h.state().session.mips().unwrap().console.text().contains("Hello, MIPS!"));
+    h.get_by_label_contains("program is finished running");
+    save(&mut h, "42_mips_finished");
+
+    // Input through the Run I/O line.
+    h.state_mut().load_mips_example(1);
+    h.state_mut().emulate();
+    h.state_mut().start_run();
+    run_frames(&mut h, 20);
+    assert!(h.state().session.target.is_waiting_input());
+    h.state_mut().mips.input = "100".into();
+    h.run();
+    h.get_by_label("send").click();
+    h.run();
+    h.state_mut().start_run();
+    run_frames(&mut h, 20);
+    let out = h.state().session.mips().unwrap().console.text();
+    assert!(out.contains("sum = 5050"), "{out:?} {}", h.state().status);
+
+    // Memory: unmapped addresses are marked, the data segment has the string.
+    h.state_mut().windows[Tool::Memory] = true;
+    h.state_mut().view.mem_view_addr = rustemu_mips::memory::DATA_BASE;
+    h.run();
+    h.get_by_label_contains("10010000  203d206e");
+    save(&mut h, "43_mips_memory");
+
+    // Back to the 8086: its document and windows are as they were.
+    h.state_mut().switch_arch(Arch::I8086);
+    h.run();
+    assert_eq!(h.state().doc.text, x86_text);
+    assert!(!h.state().windows[Tool::RunIo]);
+    assert_eq!(h.state().settings.arch, "8086");
+}
+
+#[test]
+fn mips_panels() {
+    use rustemu_session::Arch;
+    let mut app = App::with_settings(Settings { last_file: None, ..Default::default() });
+    app.settings.layout = rustemu_ui::workspace::Layout::Panels;
+    app.switch_arch(Arch::Mips32);
+    // Fonts are installed with the harness: the emulator opens after that.
+    let mut h = harness(app);
+    h.state_mut().emulate();
+    h.state_mut().windows[Tool::Memory] = true;
+    h.run_steps(6);
+    // Run I/O takes the screen's place; the 8086's tools are not tabs.
+    assert!(h.query_all_by_label("Run I/O").next().is_some());
+    assert!(h.query_by_label("screen").is_none());
+    save(&mut h, "44_mips_panels");
 }

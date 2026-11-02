@@ -50,6 +50,9 @@ pub fn parse_addr(app: &App, s: &str) -> Option<u32> {
 }
 
 pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
+    if app.session.mips().is_some() {
+        return crate::mips_ui::memory_ui(app, ui);
+    }
     ui.horizontal(|ui| {
         ui.label("address:");
         let r = ui.add(
@@ -333,8 +336,11 @@ pub(crate) fn listing_ui(app: &mut App, ui: &mut Ui) {
         ui.weak("no program");
         return;
     };
-    if app.view.listing_cache.as_ref().map(|(n, _)| *n) != Some(prog.listing.len()) {
-        app.view.listing_cache = Some((prog.listing.len(), prog.listing_text()));
+    // The MIPS listing is made per load (`generation`), the 8086's when its lines change.
+    let key = if app.session.mips().is_some() { app.program.generation as usize } else { prog.listing.len() };
+    if app.view.listing_cache.as_ref().map(|(n, _)| *n) != Some(key) {
+        let text = crate::mips_ui::listing_text(app).unwrap_or_else(|| prog.listing_text());
+        app.view.listing_cache = Some((key, text));
     }
     let text = &app.view.listing_cache.as_ref().unwrap().1;
     egui::ScrollArea::both().max_height(420.0).show(ui, |ui| {

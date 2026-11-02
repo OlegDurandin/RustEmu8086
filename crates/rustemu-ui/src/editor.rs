@@ -27,6 +27,7 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
     // Line of the current instruction (strong) or of the statement that called the macro (soft).
     let exec_line = exec_line(app);
 
+    app.editor.highlighter.set_mips(app.session.mips().is_some());
     egui::ScrollArea::both().id_salt("editor_scroll").auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -348,6 +349,33 @@ fn context_menu(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput, t
     });
 }
 
+/// MIPS: the value of a register or label, or the forms of an instruction with MARS's
+/// descriptions.
+fn mips_hover(app: &App, word: &str, out: &egui::text_edit::TextEditOutput) {
+    if let Some(text) = value_hover(app, word) {
+        out.response.response.clone().on_hover_ui_at_pointer(|ui| {
+            ui.label(RichText::new(text).monospace());
+        });
+        return;
+    }
+    let Some(forms) = rustemu_mips::asm::Table::get().forms(word) else { return };
+    out.response.response.clone().on_hover_ui_at_pointer(|ui| {
+        for f in forms.iter().take(6) {
+            let help = match &f.def {
+                rustemu_mips::asm::Def::Basic(b) => b.help,
+                rustemu_mips::asm::Def::Pseudo { help, .. } => help.as_str(),
+            };
+            ui.label(RichText::new(&f.example).monospace().strong());
+            if !help.is_empty() {
+                ui.label(help);
+            }
+        }
+        if forms.len() > 6 {
+            ui.weak(format!("and {} more forms", forms.len() - 6));
+        }
+    });
+}
+
 /// Value of a register or program variable under the mouse while a program is loaded.
 fn value_hover(app: &App, word: &str) -> Option<String> {
     if !app.loaded()
@@ -362,7 +390,8 @@ fn value_hover(app: &App, word: &str) -> Option<String> {
     let bits = e.bits();
     let hex = format!("{:0w$X}h", v as u64 & ((1u64 << bits) - 1), w = (bits / 4) as usize);
     let at = e.address(&*app.session.target).map(|a| format!("   at {a:05X}h")).unwrap_or_default();
-    let name = word.to_ascii_uppercase();
+    // MIPS names are written in lower case.
+    let name = if app.session.mips().is_some() { word.to_string() } else { word.to_ascii_uppercase() };
     // NASM: a data label is an address; its value is [name].
     if let Some(rustemu_session::expr::SymbolRef::Address { size, .. }) = app.session.lookup_symbol(word) {
         let m = app.session.compile(&format!("[{word}]")).ok()?.eval(&*app.session.target);
@@ -414,6 +443,9 @@ fn hover_help(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput) {
     let upper = word.to_ascii_uppercase();
     let line_text = app.doc.text.lines().nth(line - 1).unwrap_or("").to_ascii_lowercase();
     let cmd_click = out.response.clicked() && ui.input(|i| i.modifiers.command);
+    if app.session.mips().is_some() {
+        return mips_hover(app, &word, out);
+    }
     if line_text.contains("include") && line_text.contains("emu8086") {
         out.response.response.clone().on_hover_ui_at_pointer(|ui| {
             ui.label("Library of macros (PRINT, PUTC, GOTOXY, ...) and procedures (SCAN_NUM, PRINT_NUM, ...).");

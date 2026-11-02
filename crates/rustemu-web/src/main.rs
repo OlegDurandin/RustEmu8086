@@ -156,9 +156,16 @@ mod web {
             Some("tablet") => true,
             _ => auto_tablet(&window),
         };
-        // ?example=hello.asm opens a built-in example, &run also runs it.
+        // ?example=hello.asm opens a built-in example (?example=mips/hello.s a MIPS one), &run
+        // also runs it.
         let example_name = param("example");
-        let example = example_name.as_deref().and_then(rustemu_ui::examples::index);
+        let example = example_name.as_deref().and_then(|name| match name.strip_prefix("mips/") {
+            Some(file) => rustemu_ui::examples::MIPS_EXAMPLES
+                .iter()
+                .position(|e| e.1.eq_ignore_ascii_case(file))
+                .map(PendingAction::MipsExample),
+            None => rustemu_ui::examples::index(name).map(PendingAction::Example),
+        });
         let run = param("run").is_some();
         let link = take_link(&window);
         let location = window.location();
@@ -180,12 +187,12 @@ mod web {
                         if let Some(shared) = link {
                             // A share link (asks first about unsaved changes of the last visit).
                             app.open_link(shared);
-                        } else if let Some(i) = example {
+                        } else if let Some(action) = example {
                             if app.dirty() {
                                 // Unsaved changes of the last visit: ask before replacing them.
-                                app.guarded(PendingAction::Example(i));
+                                app.guarded(action);
                             } else {
-                                app.load_example(i);
+                                app.perform(action);
                                 if run {
                                     app.emulate();
                                     app.start_run();

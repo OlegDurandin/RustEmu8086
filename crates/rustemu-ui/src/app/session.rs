@@ -38,6 +38,10 @@ impl App {
             stop_enabled: sc.enabled,
             stop_on_change: sc.on_change,
             cursor_line: self.editor.cursor_line,
+            arch: match self.arch() {
+                rustemu_session::Arch::I8086 => String::new(),
+                a => a.name().to_string(),
+            },
         }
     }
 
@@ -110,14 +114,16 @@ impl App {
         }
     }
 
-    /// Copies the window and debugging state into the settings (before they are saved).
+    /// Copies the window and debugging state into the settings (before they are saved). The
+    /// parked workspaces stored theirs when they were left.
     pub fn store_settings(&mut self) {
         self.store_session();
-        self.settings.windows = self.windows.clone();
+        let (windows, panels) = self.settings.layout_mut(self.session.target.arch());
+        *windows = self.windows.clone();
         if let Some(tools) = &self.deferred_tools {
-            self.settings.windows.open_also(tools);
+            windows.open_also(tools);
         }
-        self.settings.panels = self.panels.as_ref().and_then(|t| ron::to_string(t).ok());
+        *panels = self.panels.as_ref().and_then(|t| ron::to_string(t).ok());
         self.settings.reference_lang = self.reference.lang;
     }
 }

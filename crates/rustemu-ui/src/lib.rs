@@ -26,6 +26,7 @@ pub mod help;
 pub mod highlight;
 pub mod inspect;
 pub mod library_ui;
+pub mod mips_ui;
 pub mod platform;
 pub mod programs;
 pub mod reference;
