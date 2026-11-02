@@ -9,6 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 rustemu-target = { path = "crates/rustemu-target" }
+rustemu-mips = { path = "crates/rustemu-mips" }
 rustemu-core = { path = "crates/rustemu-core" }
 rustemu-asm = { path = "crates/rustemu-asm" }
 rustemu-session = { path = "crates/rustemu-session" }

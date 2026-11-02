@@ -42,6 +42,7 @@ browser.
 |---|---|
 | `rustemu-target` | the boundary between a processor and the rest: the `Target` trait (steps, step back, breakpoints, memory, disassembly, registers by name). No dependencies |
 | `rustemu-core` | the 8086 processor (+ 80186 extensions), 1 MB of memory, `Machine` (loading, steps, step back, breakpoints), BIOS, DOS, video, devices, disassembler, 8087; `Machine` implements `Target`. No GUI dependencies |
+| `rustemu-mips` | the MIPS32 core (in progress): the integer instruction set, memory and exceptions of MARS |
 | `rustemu-asm` | the Emu8086 / MASM and NASM assembler: preprocessor, multi-pass assembly, encoding, listing; the built-in `emu8086.inc` |
 | `rustemu-session` | glue between the assembler and the emulator through `Target`: source line ↔ address, debugger expressions, call stack, Step Over / Out; the 8086 part (program formats, floppies) in `x86.rs` |
 | `rustemu-cli` | the `rustemu` program |
@@ -78,6 +79,9 @@ cargo test -p rustemu-desktop -p rustemu-tablet   # UI tests, PNG snapshots in t
 - **Emu8086 examples** (the `examples` folder, files from the Emu8086 distribution, unchanged):
   `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` assembles and runs all 84 examples. Our own
   test programs are in `tests/programs`.
+- **MARS** (the MIPS core): random programs run on the core and on the real MARS and are compared — registers,
+  HI/LO, memory, exceptions: `MARS=<Mars.jar or a folder with Mars.class> cargo test -p rustemu-mips --test
+  mars_compare -- --nocapture`.
 - **SingleStepTests 8088**: ~2.9 million tests recorded on a real processor. Download `v2/*.json.gz` and
   `v2/metadata.json` from [SingleStepTests/8088](https://github.com/SingleStepTests/8088) into `testdata/8088/`,
   then `cargo test -p rustemu-core --release --test singlestep -- --ignored`. Every processor change is checked

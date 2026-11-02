@@ -11,6 +11,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 |---|---|
 | `crates/rustemu-target` | Граница архитектуры, без зависимостей: трейт `Target` (шаг/run/шаг назад, точки останова, память по физическим адресам, дизассемблер, `flow_at`, `call_stack`, `system_caller`, таблица регистров `registers()` для выражений, `data_address`, `code_segment`, снимки `State`), `Arch`, `Event`, `Flow`, `Frame`. Через него session и общий UI работают с любой машиной; специфичное — downcast `as_any`. |
 | `crates/rustemu-core` | Эмулятор: CPU 8086 (`cpu.rs`), шина/память 1 MiB с журналом (`bus.rs`), `Machine` (загрузчики, шаг/run/шаг назад, точки останова — `machine.rs`), BIOS (`bios.rs`: INT 10h/13h/15h/16h/1Ah/33h), DOS (`dos.rs`: INT 21h, файлы в песочнице), видео (`video.rs`), порты и виртуальные устройства (`devices.rs`), шрифт/CP437 (`font.rs`), скан-коды (`keyboard.rs`), дизассемблер (`disasm.rs`), сопроцессор 8087 (`fpu.rs`). `target.rs` — `impl Target for Machine` (+ `bios_caller`, `call_frames`, `flow_at`, `Checkpoint`, `AsMachine::x86()`). Без зависимостей от GUI. |
+| `crates/rustemu-mips` | Ядро MIPS32 по эталону MARS (этап 7): `memory.rs` — разреженная память страницами 4 КБ, сегменты и проверки доступа MARS по умолчанию (text 0x00400000, data 0x10000000, стек до 0x7ffffffc, ktext/kdata, MMIO; по 4 МБ, как таблицы MARS), сообщения ошибок MARS, журнал для шага назад, `fetch` (нет кода — `Step::DroppedOff`, как «dropped off bottom»); `cpu.rs` — 77 целочисленных инструкций MARS без слотов задержки, HI/LO, CP0 (8/12/13/14), исключения как в MARS (Cause/EPC/BadVAddr/EXL; обработчик 0x80000180, если там есть код), `syscall` → `Step::Syscall`. FPU (COP1) — пока reserved instruction. Пока без `Target` и syscall-сервисов. |
 | `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
 | `crates/rustemu-session` | Связка ассемблер ↔ эмулятор через `pub target: Box<dyn Target>` (8086-машина — `Session::x86()`/`x86_mut()`; зависящее от процессора — `match target.arch()`; 8086-часть — `x86.rs`: форматы COM/EXE/BIN/BOOT, дискеты, символы seg:off, диск C: в памяти): загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT), строки дизассемблера (`code.rs`: `Session::code_row` — данные программы как `DB`/`DW`/`DD` по `LineInfo::is_code`/`data_size`, нули вне кода — `DB n DUP (0)`; инструкция на CS:IP — всегда код). |
 | `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
@@ -80,6 +81,11 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 - **Курс** (`course/` — только локально, в .gitignore, на GitHub не отправлять; без папки тест пропускается; уроки по-русски, программы `course/programs/*.asm` со строками проверки `;! input/output/screen/endless`):
   `cargo test -p rustemu-ui --test course` запускает программы и сверяет ссылки «▶ Открыть в эмуляторе» (`share::fragment`)
   и тексты программ в уроках (после `<!-- program: имя -->`); `COURSE_UPDATE_LINKS=1` — обновить их.
+- **Сверка MIPS с MARS** (`rustemu-mips/tests/mars_compare.rs`): случайные программы (арифметика с переполнением,
+  HI/LO, сдвиги, загрузки/сохранения с невыровненными адресами, `lwl/lwr/swl/swr`, переходы вперёд, ловушки) на ядре
+  и в настоящем MARS — регистры, HI/LO, 256 байт `.data`, сообщение об исключении. Запуск:
+  `MARS=<Mars.jar или папка со скомпилированным Mars.class> cargo test -p rustemu-mips --test mars_compare -- --nocapture`
+  (`MARS_PROGRAMS`, `MARS_SEED`); без `MARS` тест пропускается. Сейчас совпадают все 500. Любое изменение ядра MIPS — прогонять.
 - **SingleStepTests 8088** (эталон с реального железа, ~2.9 млн тестов): данные в `testdata/8088/`
   (в .gitignore; скачать `v2/*.json.gz` + `metadata.json` из github.com/SingleStepTests/8088), запуск:
   `cargo test -p rustemu-core --release --test singlestep -- --ignored` (`SST_FILTER=F6` — подмножество).
@@ -273,7 +279,11 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
 - [x] 7.0 Граница архитектуры: `rustemu-target` (`Target`), `impl Target for Machine`, session и общий UI через
       трейт, окна 8086 через `x86()`. Поведение не менялось: все тесты, корпус Emu8086 и 68 UI-снимков побайтно
       совпадают с прежними
-- [ ] 7.1 Ядро MIPS32 (MARS): крейт `rustemu-mips`, разреженная память с журналом, syscall MARS/SPIM, `impl Target`
+- [x] 7.1 Ядро MIPS32 (MARS): крейт `rustemu-mips` — 77 целочисленных инструкций, HI/LO, CP0, исключения
+      (переполнение, невыровненный доступ, адрес вне сегментов, ловушки, `break`, reserved), обработчик исключений,
+      разреженная память с сегментами MARS и журналом; сверка с MARS — 500 случайных программ совпадают
+- [ ] 7.1b Машина MIPS: syscall MARS/SPIM (консоль, ввод, `sbrk`, выход, файлы), загрузка программы, история шага
+      назад (`Cpu` + журнал), `impl Target`; FPU (COP1) — позже
 - [ ] 7.2 Ассемблер MARS (`.text/.data`, псевдоинструкции), сверка с binutils / QEMU
 - [ ] 7.3 Окна MIPS (регистры $0..$31, HI/LO, PC; консоль), справочник, примеры
 
