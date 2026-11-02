@@ -2,6 +2,8 @@
 
 use egui::{Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 
+use rustemu_core::Machine;
+
 use crate::app::App;
 
 /// Tabs of the virtual devices window.
@@ -76,44 +78,47 @@ pub(crate) fn devices_ui(app: &mut App, ui: &mut Ui) {
         }
     });
     ui.separator();
-    match app.view.device_tab {
+    // The devices of Emu8086 are attached to the 8086's I/O ports.
+    let tab = app.view.device_tab;
+    let Some(m) = app.session.x86_mut() else { return };
+    match tab {
         Device::TrafficLights => {
             ui.label(RichText::new("Traffic lights — port 4 (word)").strong());
-            traffic_lights(app, ui);
+            traffic_lights(m, ui);
         }
         Device::Stepper => {
             ui.label(RichText::new("Stepper motor — port 7").strong());
-            stepper(app, ui);
+            stepper(m, ui);
         }
         Device::Led => {
             ui.label(RichText::new("LED display — port 199").strong());
-            led(app, ui);
+            led(m, ui);
         }
         Device::Thermometer => {
             ui.label(RichText::new("Thermometer — port 125 (in), heater — port 127 (out)").strong());
-            thermometer(app, ui);
+            thermometer(m, ui);
         }
         Device::Printer => {
             ui.label(RichText::new("Printer — port 130").strong());
-            printer(app, ui);
+            printer(m, ui);
         }
         Device::Robot => {
             ui.label(RichText::new("Robot — ports 9 (command), 10 (data), 11 (status)").strong());
-            robot(app, ui);
+            robot(m, ui);
         }
         Device::SimpleIo => {
             ui.label(RichText::new("Simple I/O — port 110 (byte), port 112 (word)").strong());
-            simple_io(app, ui);
+            simple_io(m, ui);
         }
         Device::VgaState => {
             ui.label(RichText::new("VGA state — port 3DAh (vertical retrace), DAC palette 3C8h / 3C9h").strong());
-            vga_state(app, ui);
+            vga_state(m, ui);
         }
     }
 }
 
-fn traffic_lights(app: &App, ui: &mut Ui) {
-    let v = app.session.machine.sys.dev.traffic_lights;
+fn traffic_lights(m: &Machine, ui: &mut Ui) {
+    let v = m.sys.dev.traffic_lights;
     let (rect, _) = ui.allocate_exact_size(vec2(220.0, 220.0), Sense::hover());
     let p = ui.painter_at(rect);
     let c = rect.center();
@@ -149,8 +154,8 @@ fn traffic_lights(app: &App, ui: &mut Ui) {
     ui.label(RichText::new(format!("port 4 = {v:04X}h = {:012b}b", v & 0xFFF)).monospace().small());
 }
 
-fn stepper(app: &App, ui: &mut Ui) {
-    let d = &app.session.machine.sys.dev;
+fn stepper(m: &Machine, ui: &mut Ui) {
+    let d = &m.sys.dev;
     let (rect, _) = ui.allocate_exact_size(vec2(120.0, 120.0), Sense::hover());
     let p = ui.painter_at(rect);
     let c = rect.center();
@@ -180,8 +185,8 @@ fn stepper(app: &App, ui: &mut Ui) {
     );
 }
 
-fn led(app: &App, ui: &mut Ui) {
-    let v = app.session.machine.sys.dev.led;
+fn led(m: &Machine, ui: &mut Ui) {
+    let v = m.sys.dev.led;
     egui::Frame::new().fill(Color32::from_rgb(20, 0, 0)).inner_margin(6.0).corner_radius(4.0).show(ui, |ui| {
         ui.label(
             RichText::new(format!("{:>5}", v as i16))
@@ -192,8 +197,8 @@ fn led(app: &App, ui: &mut Ui) {
     ui.label(RichText::new(format!("{v:04X}h")).monospace().small());
 }
 
-fn thermometer(app: &mut App, ui: &mut Ui) {
-    let d = &mut app.session.machine.sys.dev;
+fn thermometer(m: &mut Machine, ui: &mut Ui) {
+    let d = &mut m.sys.dev;
     let t = d.temperature as f32;
     let (rect, _) = ui.allocate_exact_size(vec2(200.0, 26.0), Sense::hover());
     let p = ui.painter_at(rect);
@@ -220,12 +225,12 @@ fn thermometer(app: &mut App, ui: &mut Ui) {
         })
         .inner;
     if changed {
-        app.session.machine.clear_history();
+        m.clear_history();
     }
 }
 
-fn printer(app: &mut App, ui: &mut Ui) {
-    let d = &mut app.session.machine.sys.dev;
+fn printer(m: &mut Machine, ui: &mut Ui) {
+    let d = &mut m.sys.dev;
     let text: String = d
         .printer
         .iter()
@@ -251,13 +256,13 @@ fn printer(app: &mut App, ui: &mut Ui) {
         d.printer.clear();
     }
     if cleared {
-        app.session.machine.clear_history();
+        m.clear_history();
     }
 }
 
-fn robot(app: &mut App, ui: &mut Ui) {
+fn robot(m: &mut Machine, ui: &mut Ui) {
     use rustemu_core::robot::{Cell, STATUS_BUSY, STATUS_DATA, STATUS_ERROR};
-    let r = &mut app.session.machine.sys.dev.robot;
+    let r = &mut m.sys.dev.robot;
     let mut edited = false;
     let cell = 30.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(r.width as f32 * cell, r.height as f32 * cell), Sense::click());
@@ -320,14 +325,13 @@ fn robot(app: &mut App, ui: &mut Ui) {
         ui.weak("click: wall → lamp on → lamp off → empty, robot cell: turn; right-click: move robot");
     });
     if edited {
-        app.session.machine.clear_history();
+        m.clear_history();
     }
 }
 
 /// Emu8086's VGA_STATE.exe toggles bit 3 of port 3DAh for programs that wait for the vertical
 /// retrace; RustEmu8086 always does it. The tab shows that bit, the video mode and the palette.
-fn vga_state(app: &App, ui: &mut Ui) {
-    let m = &app.session.machine;
+fn vga_state(m: &Machine, ui: &mut Ui) {
     let mode = rustemu_core::video::Video::mode(&m.sys.mem);
     let retrace = m.sys.dev.retrace();
     ui.horizontal(|ui| {
@@ -357,8 +361,8 @@ fn vga_state(app: &App, ui: &mut Ui) {
     }
 }
 
-fn simple_io(app: &mut App, ui: &mut Ui) {
-    let latch = &mut app.session.machine.sys.dev.latch;
+fn simple_io(m: &mut Machine, ui: &mut Ui) {
+    let latch = &mut m.sys.dev.latch;
     let mut edited = false;
     let byte = |l: &std::collections::HashMap<u16, u16>, p: u16| l.get(&p).copied().unwrap_or(0) as u8;
     let mut b110 = byte(latch, 110);
@@ -382,6 +386,6 @@ fn simple_io(app: &mut App, ui: &mut Ui) {
     });
     ui.weak("values written with OUT appear here; edit them to change what IN reads");
     if edited {
-        app.session.machine.clear_history();
+        m.clear_history();
     }
 }

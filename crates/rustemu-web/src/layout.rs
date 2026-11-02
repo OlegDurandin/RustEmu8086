@@ -114,7 +114,7 @@ mod tests {
         h.run_steps(4);
         assert!(h.state().app().front.tablet_layout);
         assert!(h.query_by_label("Run").is_some(), "the tablet top bar is shown");
-        assert_eq!(h.state().app().session.machine.cpu.instr_count, 1, "the loaded program stays");
+        assert_eq!(h.state().app().session.target.instr_count(), 1, "the loaded program stays");
         save(&mut h, "32_web_switch_to_tablet");
         // Tablet -> desktop from the menu: the desktop gets its own style back.
         h.state_mut().app_mut().dialogs.options = false;

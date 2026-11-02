@@ -175,8 +175,10 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                 ui.vertical(|ui| {
                     ui.checkbox(&mut app.settings.show_macro_code, "step into macros (show emu8086.inc code)");
                     ui.checkbox(&mut app.settings.follow_source, "source window follows execution");
-                    if ui.checkbox(&mut app.settings.timer_irq, "timer IRQ (INT 08h / 1Ch)").changed() {
-                        app.session.machine.timer_irq = app.settings.timer_irq;
+                    if ui.checkbox(&mut app.settings.timer_irq, "timer IRQ (INT 08h / 1Ch)").changed()
+                        && let Some(m) = app.session.x86_mut()
+                    {
+                        m.timer_irq = app.settings.timer_irq;
                     }
                 });
                 ui.end_row();
@@ -217,7 +219,9 @@ fn small_dialogs(app: &mut App, ctx: &egui::Context) {
                     if ui.button("OK").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         app.session.command_line = text.trim().to_string();
                         let t = app.session.command_line.clone();
-                        app.session.machine.set_command_line(&t);
+                        if let Some(m) = app.session.x86_mut() {
+                            m.set_command_line(&t);
+                        }
                         keep = false;
                     }
                     if ui.button("Cancel").clicked() {

@@ -95,7 +95,12 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
     let mut s = Session::new();
     s.command_line = opt(args, "--args").unwrap_or("").to_string();
     s.load_path(&path)?;
-    s.machine.timer_irq = flag(args, "--timer-irq");
+    // The run loop goes through the generic target; screen, log, printer, timer and the trace
+    // format are the 8086's.
+    let timer_irq = flag(args, "--timer-irq");
+    if let Some(m) = s.x86_mut() {
+        m.timer_irq = timer_irq;
+    }
     let max: u64 = opt(args, "--max").and_then(|v| v.parse().ok()).unwrap_or(100_000_000);
     let screen = flag(args, "--screen");
     let trace = flag(args, "--trace");
@@ -105,10 +110,11 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
     let mut executed = 0u64;
     let code = loop {
         let ev = if trace {
-            let pc = s.machine.cpu.pc();
-            let bytes = s.machine.sys.mem.slice(pc, 8).to_vec();
-            let ins = disassemble(&bytes, s.machine.cpu.ip);
-            let c = &s.machine.cpu;
+            let m = s.x86().ok_or("--trace needs an 8086 program")?;
+            let pc = m.cpu.pc();
+            let bytes = m.sys.mem.slice(pc, 8).to_vec();
+            let ins = disassemble(&bytes, m.cpu.ip);
+            let c = &m.cpu;
             eprintln!(
                 "{:04X}:{:04X}  {:<28} AX={:04X} BX={:04X} CX={:04X} DX={:04X} SP={:04X} F={:04X}",
                 c.cs(),
@@ -122,15 +128,16 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
                 c.flags
             );
             executed += 1;
-            if executed > max { Event::Budget } else { s.machine.step() }
+            if executed > max { Event::Budget } else { s.target.step() }
         } else {
-            s.machine.history_enabled = false;
+            s.target.set_history(false);
             run_chunk(&mut s, &mut executed, max)
         };
-        if !screen && s.machine.output.len() > printed {
-            stdout.write_all(&to_host_text(&s.machine.output[printed..])).ok();
+        let out = s.target.output();
+        if !screen && out.len() > printed {
+            stdout.write_all(&to_host_text(&out[printed..])).ok();
             stdout.flush().ok();
-            printed = s.machine.output.len();
+            printed = out.len();
         }
         match ev {
             Event::Continue => {}
@@ -148,7 +155,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
                     }
                 };
                 match next {
-                    Some(c) => s.machine.push_char(c),
+                    Some(c) => s.target.push_char(c),
                     None => {
                         eprintln!("\n[input exhausted]");
                         break 3;
@@ -157,7 +164,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             }
             Event::Terminated(c) => break c,
             Event::Halted => {
-                eprintln!("\n[halted at {:04X}:{:04X}]", s.machine.cpu.cs(), s.machine.cpu.ip);
+                eprintln!("\n[halted at {}]", s.target.pc_text());
                 break 0;
             }
             Event::Breakpoint => {}
@@ -166,20 +173,22 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
                 break 4;
             }
             Event::Error(e) => {
-                eprintln!("\n[error at {:04X}:{:04X}: {e}]", s.machine.cpu.cs(), s.machine.cpu.ip);
+                eprintln!("\n[error at {}: {e}]", s.target.pc_text());
                 break 5;
             }
         }
     };
-    if screen {
-        print!("{}", s.machine.screen_text().trim_end_matches('\n'));
-        println!();
-    }
-    for l in &s.machine.log {
-        eprintln!("[log] {l}");
-    }
-    if !s.machine.sys.dev.printer.is_empty() {
-        eprintln!("[printer] {}", String::from_utf8_lossy(&s.machine.sys.dev.printer));
+    if let Some(m) = s.x86() {
+        if screen {
+            print!("{}", m.screen_text().trim_end_matches('\n'));
+            println!();
+        }
+        for l in &m.log {
+            eprintln!("[log] {l}");
+        }
+        if !m.sys.dev.printer.is_empty() {
+            eprintln!("[printer] {}", String::from_utf8_lossy(&m.sys.dev.printer));
+        }
     }
     Ok(code)
 }
@@ -188,7 +197,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
 /// consumed before an event such as input or a timed wait stopped execution.
 fn run_chunk(s: &mut Session, executed: &mut u64, max: u64) -> Event {
     let budget = max.saturating_sub(*executed).min(1_000_000);
-    let (event, done) = s.machine.run_counted(budget);
+    let (event, done) = s.target.run_counted(budget);
     *executed = executed.saturating_add(done);
     if event == Event::Budget && *executed < max { Event::Continue } else { event }
 }
@@ -251,7 +260,7 @@ mod tests {
         let src = "org 100h\nmov ah, 86h\nmov cx, 004Ch\nmov dx, 4B40h\nint 15h\nhlt\n";
         let mut session = Session::new();
         session.load_program(rustemu_asm::assemble_str(src).unwrap()).unwrap();
-        session.machine.history_enabled = false;
+        session.target.set_history(false);
         let mut executed = 0;
 
         assert_eq!(run_chunk(&mut session, &mut executed, 100_000_000), Event::Sleeping);

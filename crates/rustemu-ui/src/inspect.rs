@@ -25,13 +25,13 @@ pub enum NumFormat {
     Char,
 }
 
-/// Parses `seg:off` (hex) or a linear hex address; segment may be a register name.
+/// Parses `seg:off` (hex) or a linear hex address; segment may be a register name (8086).
 pub fn parse_addr(app: &App, s: &str) -> Option<u32> {
     let s = s.trim();
+    let c = &app.session.x86()?.cpu;
     let hex = |t: &str| -> Option<u32> {
         let t = t.trim().trim_end_matches(['h', 'H']);
         let u = t.to_ascii_uppercase();
-        let c = &app.session.machine.cpu;
         if let Some(i) = cpu::SREG_NAMES.iter().position(|r| *r == u) {
             return Some(c.sregs[i] as u32);
         }
@@ -63,8 +63,10 @@ pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
             }
         }
         for (label, seg) in [("DS", cpu::DS), ("ES", cpu::ES), ("SS:SP", cpu::SS), ("CS:IP", cpu::CS)] {
-            if ui.small_button(label).clicked() {
-                let c = &app.session.machine.cpu;
+            if ui.small_button(label).clicked()
+                && let Some(m) = app.session.x86()
+            {
+                let c = &m.cpu;
                 let off = match seg {
                     cpu::SS => c.regs[cpu::SP],
                     cpu::CS => c.ip,
@@ -80,8 +82,8 @@ pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
     let font = FontId::monospace(12.5);
     let row_h = ui.fonts_mut(|f| f.row_height(&font)) + 1.0;
     let base = app.view.mem_view_addr & !0xF;
-    let pc = app.session.machine.cpu.pc();
-    let sp = linear(app.session.machine.cpu.sregs[cpu::SS], app.session.machine.cpu.regs[cpu::SP]);
+    let pc = app.session.target.pc();
+    let sp = app.session.x86().map_or(u32::MAX, |m| linear(m.cpu.sregs[cpu::SS], m.cpu.regs[cpu::SP]));
     if base != app.view.mem_last_base {
         app.view.mem_last_base = base;
         app.view.mem_scroll_pending = true;
@@ -100,9 +102,9 @@ pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
             let txt = ui.visuals().text_color();
             let weak = ui.visuals().weak_text_color();
             job.append(&format!("{:05X}  ", a), 0.0, fmt(weak));
-            let mem = &app.session.machine.sys.mem;
+            let t = &*app.session.target;
             for i in 0..16 {
-                let b = mem.read8(a + i);
+                let b = t.read8(a + i);
                 let col = if a + i == pc {
                     crate::colors::info(ui)
                 } else if a + i == sp {
@@ -114,7 +116,7 @@ pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
             }
             let chars: String = (0..16)
                 .map(|i| {
-                    let b = mem.read8(a + i);
+                    let b = t.read8(a + i);
                     if b < 32 { '.' } else { cp437_to_char(b) }
                 })
                 .collect();
@@ -126,7 +128,8 @@ pub(crate) fn memory_ui(app: &mut App, ui: &mut Ui) {
 }
 
 pub(crate) fn stack_ui(app: &mut App, ui: &mut Ui) {
-    let c = &app.session.machine.cpu;
+    let Some(m) = app.session.x86() else { return };
+    let c = &m.cpu;
     let (ss, sp, bp) = (c.sregs[cpu::SS], c.regs[cpu::SP], c.regs[cpu::BP]);
     let font = FontId::monospace(12.5);
     let row_h = ui.fonts_mut(|f| f.row_height(&font));
@@ -146,7 +149,7 @@ pub(crate) fn stack_ui(app: &mut App, ui: &mut Ui) {
     sa.show_rows(ui, row_h, rows, |ui, range| {
         for i in range {
             let off = 0xFFFEu16.wrapping_sub(i as u16 * 2);
-            let v = app.session.machine.sys.mem.read16(linear(ss, off));
+            let v = m.sys.mem.read16(linear(ss, off));
             let mut text = format!("{ss:04X}:{off:04X}  {v:04X}");
             if i == sp_row {
                 text.push_str(" <");
@@ -174,8 +177,9 @@ pub const FLAG_ROWS: [(u16, &str, &str); 8] = [
 ];
 
 pub(crate) fn flags_ui(app: &mut App, ui: &mut Ui) {
-    let prev = app.exec.prev_cpu.flags;
-    let c = &mut app.session.machine.cpu;
+    let Some(m) = app.session.x86_mut() else { return };
+    let prev = app.exec.prev_x86().map_or(m.cpu.flags, |p| p.cpu.flags);
+    let c = &mut m.cpu;
     let font = FontId::monospace(14.0);
     egui::Grid::new("flags").num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
         for (bit, name, desc) in FLAG_ROWS {
@@ -225,7 +229,8 @@ pub fn flag_analysis(f: u16) -> String {
 }
 
 pub(crate) fn flag_analyser_ui(app: &mut App, ui: &mut Ui) {
-    let text = flag_analysis(app.session.machine.cpu.flags);
+    let Some(f) = app.session.x86().map(|m| m.cpu.flags) else { return };
+    let text = flag_analysis(f);
     ui.label(RichText::new(text.trim_end()).monospace().size(13.0));
 }
 
@@ -259,7 +264,9 @@ pub(crate) fn vars_ui(app: &mut App, ui: &mut Ui) {
         ui.weak("no program");
         return;
     };
-    let Some(base) = app.session.image_base() else { return };
+    if app.session.image_base().is_none() {
+        return;
+    }
     ui.horizontal(|ui| {
         for (f, n) in [
             (NumFormat::Hex, "hex"),
@@ -271,25 +278,18 @@ pub(crate) fn vars_ui(app: &mut App, ui: &mut Ui) {
             ui.selectable_value(&mut app.settings.vars_format, f, n);
         }
     });
-    let load_seg = app.session.machine.loaded.as_ref().map(|l| l.load_segment).unwrap_or(0);
-    let is_exe = app.session.machine.loaded.as_ref().is_some_and(|l| l.kind == rustemu_core::LoadKind::Exe);
     let font = FontId::monospace(12.5);
     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
         egui::Grid::new("vars").num_columns(3).striped(true).spacing([10.0, 1.0]).show(ui, |ui| {
             for s in prog.symbols.iter().filter(|s| s.kind == SymbolKind::Variable && !s.is_macro_local()) {
                 let size = s.size.unwrap_or(1).min(4);
-                // Physical address of the variable.
-                let addr = if is_exe {
-                    linear(load_seg.wrapping_add(s.segment.unwrap_or(0)), s.value as u16)
-                } else {
-                    base.wrapping_add((s.value as u32).wrapping_sub(prog.origin as u32))
-                };
-                let mem = &app.session.machine.sys.mem;
+                let Some(addr) = app.session.symbol_addr(s) else { continue };
+                let t = &*app.session.target;
                 let mut vals = Vec::new();
                 for k in 0..4u32 {
                     let mut v = 0u32;
                     for i in 0..size as u32 {
-                        v |= (mem.read8(addr + k * size as u32 + i) as u32) << (i * 8);
+                        v |= (t.read8(addr + k * size as u32 + i) as u32) << (i * 8);
                     }
                     vals.push(format_value(v, size, app.settings.vars_format));
                 }
@@ -343,11 +343,12 @@ pub(crate) fn listing_ui(app: &mut App, ui: &mut Ui) {
 }
 
 pub(crate) fn log_ui(app: &mut App, ui: &mut Ui) {
-    let m = &app.session.machine;
+    let t = &*app.session.target;
+    let log = app.session.x86().map_or(&[][..], |m| &m.log[..]);
     ui.label(RichText::new("console output").strong());
     egui::ScrollArea::vertical().id_salt("out").max_height(160.0).stick_to_bottom(true).show(ui, |ui| {
-        let text: String = m
-            .output
+        let text: String = t
+            .output()
             .iter()
             .filter(|&&b| b != b'\r')
             .map(|&b| if b == b'\n' { '\n' } else { cp437_to_char(b) })
@@ -357,10 +358,10 @@ pub(crate) fn log_ui(app: &mut App, ui: &mut Ui) {
     ui.separator();
     ui.label(RichText::new("emulator messages").strong());
     egui::ScrollArea::vertical().id_salt("log").max_height(120.0).stick_to_bottom(true).show(ui, |ui| {
-        if m.log.is_empty() {
+        if log.is_empty() {
             ui.weak("(none)");
         }
-        for l in &m.log {
+        for l in log {
             ui.label(RichText::new(l).monospace().color(crate::colors::warn(ui)));
         }
     });
@@ -380,10 +381,12 @@ pub fn disasm_start(app: &mut App, rows: usize) -> u32 {
     if app.view.code_view_pinned {
         return app.view.code_view_start;
     }
-    let m = &app.session.machine;
-    let pc = m.cpu.pc();
+    let t = &*app.session.target;
+    let pc = t.pc();
+    let (base, last) = t.code_segment();
     let mut a = app.view.code_view_start;
-    let mut ip = m.cpu.ip.wrapping_sub(pc.wrapping_sub(a) as u16);
+    // Offsets wrap within the code segment ([`Target::code_segment`]).
+    let mut ip = pc.wrapping_sub(base).wrapping_sub(pc.wrapping_sub(a)) & last;
     // Rows of the list, label rows included; CS:IP stays at least 3 rows above the bottom.
     let mut shown = 0;
     while shown + 3 < rows {
@@ -393,7 +396,7 @@ pub fn disasm_start(app: &mut App, rows: usize) -> u32 {
         }
         let len = app.session.code_row(a, ip, app.settings.disasm_data).len;
         a += len;
-        ip = ip.wrapping_add(len as u16);
+        ip = ip.wrapping_add(len) & last;
         if a > pc {
             break;
         }

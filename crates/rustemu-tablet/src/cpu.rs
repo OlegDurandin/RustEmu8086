@@ -315,12 +315,18 @@ pub(crate) fn preview_height(w: f32, view: &CpuView) -> f32 {
     HEAD_H + 12.0 + pairs_height(inner) + CELL_H + GAP + 24.0 + inspector_h(view, false) + 8.0
 }
 
+/// The 8086 registers now and before the last step / run (the panel shows the 8086).
+fn cpus(app: &App) -> Option<(Cpu, Cpu)> {
+    let cpu = app.session.x86()?.cpu.clone();
+    let prev = app.exec.prev_x86().map_or_else(|| cpu.clone(), |p| p.cpu.clone());
+    Some((cpu, prev))
+}
+
 /// The full CPU panel (Debugger).
 pub(crate) fn cpu_card(app: &mut App, view: &mut CpuView, ui: &mut Ui, rect: Rect) {
     let (_, b) = card(ui, rect, "CPU");
     let area = b.max_rect();
-    let cpu = app.session.machine.cpu.clone();
-    let prev = app.exec.prev_cpu.clone();
+    let Some((cpu, prev)) = cpus(app) else { return };
     let mut y = pairs(ui, area.top() + 4.0, area, &cpu, &prev, view);
     let words: Vec<(Sel, String, bool)> = WORDS
         .iter()
@@ -346,8 +352,7 @@ pub(crate) fn cpu_preview_card(app: &mut App, view: &mut CpuView, ui: &mut Ui, r
         .on_hover_text("all registers, flags and the last step")
         .clicked();
     let area = b.max_rect();
-    let cpu = app.session.machine.cpu.clone();
-    let prev = app.exec.prev_cpu.clone();
+    let Some((cpu, prev)) = cpus(app) else { return open };
     let mut y = pairs(ui, area.top() + 4.0, area, &cpu, &prev, view);
     y = flag_rows(ui, y, area, flag_items(&cpu, &prev, &["CF", "ZF", "SF", "OF"]), view, &cpu);
     let segs: Vec<String> = SEGMENTS.iter().map(|&(i, n)| format!("{n} {:04X}", cpu.sregs[i])).collect();
@@ -374,7 +379,7 @@ fn inspector(app: &mut App, view: &mut CpuView, ui: &mut Ui, rect: Rect, hint: b
         }
         return;
     };
-    let cpu = &app.session.machine.cpu;
+    let Some(cpu) = app.session.x86().map(|m| &m.cpu) else { return };
     let v = sel.get(cpu);
     let bits = sel.bits();
     let name = sel.name();
@@ -436,7 +441,7 @@ fn inspector(app: &mut App, view: &mut CpuView, ui: &mut Ui, rect: Rect, hint: b
 fn read_only_reason(app: &App) -> &'static str {
     if !app.loaded() {
         "Load the program (Run or Step) to change registers."
-    } else if app.session.machine.is_waiting_input() {
+    } else if app.session.target.is_waiting_input() {
         "Read-only while the program waits for a key."
     } else {
         "Read-only while the program runs: pause it to change values."
