@@ -306,7 +306,7 @@ impl Session {
     /// A step that began in the BIOS (it finished an `INT` that waited for a key) is shown as the
     /// program's `INT` that called it.
     pub fn last_step(&self, into_macros: bool) -> Option<StepView> {
-        let m = &self.machine;
+        let m = self.x86()?;
         let (before, undo) = m.last_step()?;
         let mut v = StepView::new(before, &m.cpu, undo, &m.sys.mem);
         if v.cs == ROM_SEG {
@@ -332,7 +332,7 @@ mod tests {
         let mut s = Session::new();
         s.load_program(p).unwrap();
         for _ in 0..steps {
-            s.machine.step();
+            s.target.step();
         }
         let v = s.last_step(true).unwrap();
         (s, v)

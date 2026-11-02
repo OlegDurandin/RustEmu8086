@@ -36,13 +36,15 @@ impl MemSeg {
     }
 
     pub(crate) fn value(self, app: &App) -> u16 {
-        let c = &app.session.machine.cpu;
+        let Some(c) = app.session.x86().map(|x| &x.cpu) else { return 0 };
         match self {
             MemSeg::Ds => c.sregs[cpu::DS],
             MemSeg::Cs => c.sregs[cpu::CS],
             MemSeg::Es => c.sregs[cpu::ES],
             MemSeg::Ss => c.sregs[cpu::SS],
-            MemSeg::Video if rustemu_core::video::Video::is_text(&app.session.machine.sys.mem) => 0xB800,
+            MemSeg::Video if app.session.x86().is_some_and(|x| rustemu_core::video::Video::is_text(&x.sys.mem)) => {
+                0xB800
+            }
             MemSeg::Video => 0xA000,
             MemSeg::Fixed(s) => s,
         }
@@ -50,7 +52,7 @@ impl MemSeg {
 
     /// Offset the views start at when the segment is chosen.
     fn start(self, app: &App) -> u16 {
-        let c = &app.session.machine.cpu;
+        let Some(c) = app.session.x86().map(|x| &x.cpu) else { return 0 };
         match self {
             MemSeg::Cs => c.ip & !0xF,
             MemSeg::Ss => c.regs[cpu::SP] & !0xF,
@@ -187,7 +189,7 @@ fn hex_row(app: &App, m: &MemoryView, ui: &mut Ui, font: &FontId, cols: &HexCols
     }
     let p = ui.painter();
     let y = r.center().y;
-    let mem = &app.session.machine.sys.mem;
+    let mem = &app.session.x86()?.sys.mem;
     let base = linear(seg, off);
     let selected = m.selected;
     let row_has_sel = selected.is_some_and(|s| s.wrapping_sub(base) < bpr as u32);
@@ -196,7 +198,7 @@ fn hex_row(app: &App, m: &MemoryView, ui: &mut Ui, font: &FontId, cols: &HexCols
     }
     let addr = if long_addr { format!("{seg:04X}:{off:04X}") } else { format!("{off:04X}:") };
     p.text(pos2(r.left(), y), Align2::LEFT_CENTER, addr, font.clone(), if long_addr { pal::LINK } else { pal::WEAK });
-    let pc = app.session.machine.cpu.pc();
+    let pc = app.session.target.pc();
     for i in 0..bpr {
         let a = linear(seg, off.wrapping_add(i));
         let v = mem.read8(a);
@@ -333,7 +335,7 @@ fn hex_typing(app: &mut App, m: &mut MemoryView, ui: &Ui, bpr: u16) {
         match ev {
             egui::Event::Text(t) => {
                 for ch in t.chars() {
-                    let mem = &mut app.session.machine.sys.mem;
+                    let Some(mem) = app.session.x86_mut().map(|x| &mut x.sys.mem) else { return };
                     if m.ascii_input {
                         mem.write8(a, rustemu_core::font::char_to_cp437(ch));
                         a = (a + 1) & 0xFFFFF;
@@ -403,7 +405,7 @@ fn find_next(app: &mut App, m: &mut MemoryView) {
     if pattern.is_empty() {
         return;
     }
-    let mem = app.session.machine.sys.mem.raw();
+    let Some(mem) = app.session.x86().map(|x| x.sys.mem.raw()) else { return };
     let size = mem.len();
     let from = m.selected.map_or(0, |s| s as usize + 1);
     let hit = (0..size)
@@ -427,7 +429,7 @@ pub(crate) fn inspector_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, rec
     let seg = m.seg.value(app);
     let off = a.wrapping_sub((seg as u32) << 4);
     let addr = if off <= 0xFFFF { format!("{seg:04X}:{off:04X}") } else { format!("{a:05X}h") };
-    let mem = &mut app.session.machine.sys.mem;
+    let Some(mem) = app.session.x86_mut().map(|x| &mut x.sys.mem) else { return };
     let v = mem.read8(a);
     let w = mem.read16(a);
     let field_w = (b.available_width() * 0.55).max(110.0);
@@ -460,7 +462,8 @@ pub(crate) fn inspector_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, rec
 
 pub(crate) fn segments_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, rect: Rect) {
     let (_, mut b) = card(ui, rect, "SEGMENTS");
-    let prev = app.exec.prev_cpu.sregs;
+    let now = app.session.x86().map(|x| x.cpu.sregs).unwrap_or_default();
+    let prev = app.exec.prev_x86().map_or(now, |p| p.cpu.sregs);
     let field_w = (b.available_width() * 0.55).max(90.0);
     let mut show = None;
     egui::Grid::new("t_segs").num_columns(2).spacing([10.0, 8.0]).show(&mut b, |ui| {
@@ -475,7 +478,8 @@ pub(crate) fn segments_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, rect
             if r.on_hover_text("show in the hex editor").clicked() {
                 show = Some(seg);
             }
-            let v = &mut app.session.machine.cpu.sregs[i];
+            let Some(x) = app.session.x86_mut() else { continue };
+            let v = &mut x.cpu.sregs[i];
             let accent = (*v != prev[i]).then_some(pal::AMBER);
             hex_box(ui, v, 4, accent, field_w, label);
             ui.end_row();
@@ -490,7 +494,8 @@ pub(crate) fn stack_card(app: &mut App, ui: &mut Ui, rect: Rect) {
     if rect.height() < HEAD_H + 40.0 {
         return;
     }
-    let c = &app.session.machine.cpu;
+    let Some(x) = app.session.x86() else { return };
+    let c = &x.cpu;
     let (ss, sp) = (c.sregs[cpu::SS], c.regs[cpu::SP]);
     let (_, mut b) = card(ui, rect, &format!("STACK (SS:{sp:04X})"));
     let field_w = (b.available_width() * 0.55).max(90.0);
@@ -498,7 +503,7 @@ pub(crate) fn stack_card(app: &mut App, ui: &mut Ui, rect: Rect) {
     egui::Grid::new("t_stack").num_columns(2).spacing([10.0, 8.0]).show(&mut b, |ui| {
         for i in 0..rows {
             let off = sp.wrapping_add(i * 2);
-            let v = app.session.machine.sys.mem.read16(linear(ss, off));
+            let v = x.sys.mem.read16(linear(ss, off));
             let name = if i == 0 { "[SP]:".to_string() } else { format!("SP + {:02X}:", i * 2) };
             ui.label(RichText::new(name).monospace().color(pal::TEXT));
             value_box(ui, &format!("{v:04X}"), (i == 0).then_some(pal::AMBER), field_w);
@@ -516,13 +521,14 @@ pub(crate) fn memory_map_card(app: &mut App, m: &mut MemoryView, ui: &mut Ui, re
     let p = b.painter();
     p.rect(bar, 3.0, pal::FIELD, Stroke::new(1.0, pal::BORDER), StrokeKind::Inside);
     let x = |a: u32| bar.left() + a as f32 / 0x100000 as f32 * bar.width();
-    let c = &app.session.machine.cpu;
+    let Some(mach) = app.session.x86() else { return };
+    let c = &mach.cpu;
     let mut regions: Vec<(u32, u32, &str, Color32)> = vec![
         (0x00000, 0x00500, "IVT/BDA", Color32::from_rgb(0x55, 0x66, 0x88)),
         (0xA0000, 0xC0000, "Video", Color32::from_rgb(0x8A, 0x5C, 0xD6)),
         (0xF0000, 0x100000, "BIOS", Color32::from_rgb(0x55, 0x66, 0x88)),
     ];
-    if let Some(l) = &app.session.machine.loaded {
+    if let Some(l) = &mach.loaded {
         regions.push((l.image_base, l.image_base + l.image_len.max(16), "Code", pal::BLUE));
     }
     let ds = (c.sregs[cpu::DS] as u32) << 4;

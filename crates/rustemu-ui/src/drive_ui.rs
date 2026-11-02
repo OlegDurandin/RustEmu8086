@@ -26,7 +26,7 @@ pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
         if ui.button("upload files…").on_hover_text("Files for a program to open, e.g. its input data").clicked() {
             app.web.pending_upload = Some(UploadFor::DriveFiles);
         }
-        let empty = app.session.machine.dos_memory_drive().is_none_or(|d| d.is_empty());
+        let empty = app.session.dos_memory_drive().is_none_or(|d| d.is_empty());
         if app.web.drive_confirm_clear {
             ui.label(RichText::new("Delete every file?").color(crate::colors::error(ui)));
             if ui.button("delete").clicked() {
@@ -40,13 +40,13 @@ pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
             app.web.drive_confirm_clear = true;
         }
     });
-    if clear && let Some(d) = app.session.machine.dos_memory_drive_mut() {
+    if clear && let Some(d) = app.session.dos_memory_drive_mut() {
         *d = rustemu_core::memdrive::MemDrive::new();
         app.web.drive_preview = None;
     }
     ui.separator();
 
-    let Some(drive) = app.session.machine.dos_memory_drive() else { return };
+    let Some(drive) = app.session.dos_memory_drive() else { return };
     let files: Vec<(String, usize)> = drive.files().map(|(k, v)| (k.to_string(), v.len())).collect();
     // Folders with no files in them (others show in the file names).
     let empty_dirs: Vec<String> = drive
@@ -122,7 +122,7 @@ pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
         crate::platform::download(name, data);
     }
     if let Some(key) = remove
-        && let Some(d) = app.session.machine.dos_memory_drive_mut()
+        && let Some(d) = app.session.dos_memory_drive_mut()
     {
         d.remove(&key);
         if app.web.drive_preview.as_deref() == Some(key.as_str()) {
@@ -138,11 +138,16 @@ pub(crate) fn open_drive_folder(app: &App) {
 }
 
 /// Virtual drive menu (main Emulator menu and the emulator window), as in Emu8086. There is one
-/// drive, FLOPPY_0, kept in memory; images are loaded and saved explicitly.
+/// drive, FLOPPY_0, kept in memory; images are loaded and saved explicitly. The drives are the
+/// 8086's (DOS drive C:, INT 13h floppies): the menu is empty for another processor.
 pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
     use rustemu_core::machine::{FLOPPY_SIZE, MAX_FLOPPIES};
     ui.set_min_width(330.0);
-    if app.session.machine.dos_memory_drive().is_some() {
+    if app.session.x86().is_none() {
+        ui.weak("no virtual drives for this processor");
+        return;
+    }
+    if app.session.dos_memory_drive().is_some() {
         if ui.button("drive C: files…").on_hover_text("Files DOS programs read and write (INT 21h)").clicked() {
             app.windows[Tool::Drive] = true;
             ui.close();
@@ -156,7 +161,7 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
         }
         ui.separator();
     }
-    let drives = app.session.machine.floppies.len();
+    let drives = floppy_count(app);
     ui.menu_button("boot from virtual floppy", |ui| {
         for d in 0..drives {
             if ui.button(format!("FLOPPY_{d}")).clicked() {
@@ -185,7 +190,7 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
         .on_hover_text("Adds FLOPPY_1..FLOPPY_3 with an empty 1.44 MB disk (INT 13h DL = 1..3, INT 11h counts them)")
         .on_disabled_hover_text("Emu8086 supports up to four floppy drives")
         .clicked()
-        && let Some(d) = app.session.machine.add_floppy()
+        && let Some(d) = app.session.x86_mut().and_then(|m| m.add_floppy())
     {
         app.status = format!("FLOPPY_{d} created: an empty 1.44 MB disk, INT 13h drive DL = {d}");
     }
@@ -198,7 +203,9 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
                 match std::fs::read(&p) {
                     Ok(mut b) => {
                         b.resize(b.len().max(FLOPPY_SIZE), 0);
-                        app.session.machine.floppies[d] = b;
+                        if let Some(m) = app.session.x86_mut() {
+                            m.floppies[d] = b;
+                        }
                         app.status = format!("FLOPPY_{d} loaded from {}", p.display());
                     }
                     Err(e) => app.notice("Virtual drive", &e.to_string()),
@@ -210,12 +217,18 @@ pub fn virtual_drive_menu(app: &mut App, ui: &mut Ui) {
         for d in 0..drives {
             if ui.button(format!("FLOPPY_{d}…")).clicked()
                 && let Some(p) = crate::platform::save_file(&[], None, &format!("FLOPPY_{d}"))
-                && let Err(e) = std::fs::write(&p, &app.session.machine.floppies[d])
+                && let Some(m) = app.session.x86()
+                && let Err(e) = std::fs::write(&p, &m.floppies[d])
             {
                 app.notice("Virtual drive", &e.to_string());
             }
         }
     });
+}
+
+/// Number of floppy drives (FLOPPY_0..) of the 8086.
+fn floppy_count(app: &App) -> usize {
+    app.session.x86().map_or(0, |m| m.floppies.len())
 }
 
 /// "write '.bin' file to floppy": file, then cylinder / head / sector to start at.
@@ -250,7 +263,7 @@ pub(crate) fn bin_to_floppy_dialog(app: &mut App, ctx: &egui::Context) {
                 });
             }
             ui.horizontal(|ui| {
-                let drives = app.session.machine.floppies.len();
+                let drives = floppy_count(app);
                 egui::ComboBox::from_label("drive").selected_text(format!("FLOPPY_{}", d.drive)).show_ui(ui, |ui| {
                     for i in 0..drives {
                         ui.selectable_value(&mut d.drive, i, format!("FLOPPY_{i}"));

@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 rustemu-core.workspace = true
+rustemu-target.workspace = true
 rustemu-asm.workspace = true

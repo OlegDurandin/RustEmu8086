@@ -38,7 +38,7 @@ impl App {
     /// storage).
     pub fn restore_drive(&mut self, storage: &dyn eframe::Storage) {
         use base64::Engine;
-        if self.session.machine.dos_memory_drive().is_none() {
+        if self.session.dos_memory_drive().is_none() {
             return;
         }
         let saved = storage
@@ -46,7 +46,7 @@ impl App {
             .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
             .and_then(|b| rustemu_core::memdrive::MemDrive::from_bytes(&b));
         if let Some(drive) = saved {
-            self.session.machine.set_dos_memory_drive(drive);
+            self.session.set_dos_memory_drive(drive);
         }
     }
 
@@ -58,7 +58,7 @@ impl App {
         self.store_settings();
         let settings = ron::ser::to_string(&self.settings).unwrap_or_default();
         self.put(storage, eframe::APP_KEY, settings);
-        if let Some(drive) = self.web.own_drive.as_ref().or(self.session.machine.dos_memory_drive()) {
+        if let Some(drive) = self.web.own_drive.as_ref().or(self.session.dos_memory_drive()) {
             let drive = base64::engine::general_purpose::STANDARD.encode(drive.to_bytes());
             self.put(storage, DRIVE_KEY, drive);
         }

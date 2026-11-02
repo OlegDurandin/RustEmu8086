@@ -5,32 +5,33 @@ use super::*;
 use crate::tools::Tool;
 
 impl App {
-    /// Linear address of the instruction selected in the disassembly.
+    /// Physical address of the instruction selected in the disassembly (the selection is an
+    /// 8086 `segment:offset`).
     pub fn selected_addr(&self) -> Option<u32> {
         self.view.code_selected.map(|(s, o)| rustemu_core::linear(s, o))
     }
 
     /// The program waits for a key and none is typed yet (a step would only wait again).
     pub fn waiting_for_key(&self) -> bool {
-        let m = &self.session.machine;
-        m.is_waiting_input() && m.sys.keys.is_empty()
+        let t = &*self.session.target;
+        t.is_waiting_input() && !t.has_pending_input()
     }
 
     /// Registers and flags may be changed by hand: a program is loaded and paused, and it is not
     /// in the middle of waiting for a key.
     pub fn cpu_editable(&self) -> bool {
-        self.loaded() && self.run == RunMode::Paused && !self.session.machine.is_waiting_input()
+        self.loaded() && self.run == RunMode::Paused && !self.session.target.is_waiting_input()
     }
 
-    /// Changes the CPU by hand when [`App::cpu_editable`]. The step-back history stays: stepping
-    /// back returns to the state before the previous instruction, before this change too.
+    /// Changes the 8086 CPU by hand when [`App::cpu_editable`]. The step-back history stays:
+    /// stepping back returns to the state before the previous instruction, before this change too.
     pub fn edit_cpu(&mut self, f: impl FnOnce(&mut Cpu)) -> bool {
         if !self.cpu_editable() {
             return false;
         }
-        f(&mut self.session.machine.cpu);
-        let c = &self.session.machine.cpu;
-        self.status = format!("Changed by hand at {:04X}:{:04X}", c.cs(), c.ip);
+        let Some(m) = self.session.x86_mut() else { return false };
+        f(&mut m.cpu);
+        self.status = format!("Changed by hand at {}", self.session.target.pc_text());
         true
     }
 
@@ -40,7 +41,7 @@ impl App {
         if !self.ensure_current_build() {
             return;
         }
-        if self.session.machine.terminated.is_some() {
+        if self.session.target.terminated().is_some() {
             self.status = "Program has terminated - press Reload to run again".into();
             return;
         }
@@ -53,7 +54,8 @@ impl App {
     pub fn set_cs_ip_to_selected(&mut self) {
         let Some((seg, off)) = self.view.code_selected else { return };
         self.stop();
-        let c = &mut self.session.machine.cpu;
+        let Some(m) = self.session.x86_mut() else { return };
+        let c = &mut m.cpu;
         c.sregs[rustemu_core::cpu::CS] = seg;
         c.ip = off;
         c.halted = false;
@@ -64,30 +66,27 @@ impl App {
     /// Debug -> show current instruction: the disassembly follows CS:IP again.
     pub fn show_current_instruction(&mut self) {
         self.view.code_view_pinned = false;
-        self.view.code_view_start = self.session.machine.cpu.pc();
+        self.view.code_view_start = self.session.target.pc();
     }
 
-    /// Offset of the first row of the disassembly in the code segment (None: it shows another segment).
-    pub fn disasm_offset(&self) -> Option<u16> {
-        let base = rustemu_core::linear(self.session.machine.cpu.cs(), 0);
-        self.view.code_view_start.checked_sub(base).filter(|&o| o <= 0xFFFF).map(|o| o as u16)
+    /// Offset of the first row of the disassembly in the code segment ([`Target::code_segment`];
+    /// None: it shows another segment).
+    pub fn disasm_offset(&self) -> Option<u32> {
+        let (base, last) = self.session.target.code_segment();
+        self.view.code_view_start.checked_sub(base).filter(|&o| o <= last)
     }
 
     /// Shows the disassembly from `off` in the code segment, from the row the byte belongs to.
     /// Decoding from a little earlier falls in step with the instructions.
-    pub fn show_disasm_at(&mut self, off: u16) {
-        let cs = self.session.machine.cpu.cs();
-        let mut o = off.saturating_sub(256) as u32;
+    pub fn show_disasm_at(&mut self, off: u32) {
+        let (base, _) = self.session.target.code_segment();
+        let mut o = off.saturating_sub(256);
         let mut row = o;
-        while o <= off as u32 {
+        while o <= off {
             row = o;
-            o += self
-                .session
-                .code_row(rustemu_core::linear(cs, o as u16), o as u16, self.settings.disasm_data)
-                .len
-                .max(1);
+            o += self.session.code_row(base + o, o, self.settings.disasm_data).len.max(1);
         }
-        self.view.code_view_start = rustemu_core::linear(cs, row as u16);
+        self.view.code_view_start = base + row;
         self.view.code_view_pinned = true;
     }
 
@@ -95,32 +94,32 @@ impl App {
     /// stays there until the next execution command or "show current instruction".
     pub fn scroll_disasm(&mut self, rows: i32) {
         let Some(mut off) = self.disasm_offset() else { return };
-        let cs = self.session.machine.cpu.cs();
+        let (base, last) = self.session.target.code_segment();
         for _ in 0..rows.unsigned_abs() {
             if rows > 0 {
-                let len = self.session.code_row(rustemu_core::linear(cs, off), off, self.settings.disasm_data).len;
-                if off as u32 + len > 0xFFFF {
+                let len = self.session.code_row(base + off, off, self.settings.disasm_data).len;
+                if off as u64 + len as u64 > last as u64 {
                     break;
                 }
-                off += len as u16;
+                off += len;
             } else if off > 0 {
                 self.show_disasm_at(off - 1);
                 off = self.disasm_offset().unwrap_or(0);
             }
         }
-        self.view.code_view_start = rustemu_core::linear(cs, off);
+        self.view.code_view_start = base + off;
         self.view.code_view_pinned = true;
     }
 
     /// Debug -> show current break point: shows the next breakpoint after the shown one.
     pub fn show_next_breakpoint(&mut self) {
-        let mut bps: Vec<u32> = self.session.machine.breakpoints.iter().copied().collect();
+        let mut bps: Vec<u32> = self.session.target.breakpoints().iter().copied().collect();
         bps.sort_unstable();
         let from = if self.view.code_view_pinned { self.view.code_view_start + 1 } else { 0 };
         let Some(&a) = bps.iter().find(|&&a| a >= from).or(bps.first()) else { return };
         self.view.code_view_start = a;
         self.view.code_view_pinned = true;
-        let cs = self.session.machine.cpu.cs();
+        let Some(cs) = self.session.x86().map(|m| m.cpu.cs()) else { return };
         let off = a.wrapping_sub(rustemu_core::linear(cs, 0));
         self.view.code_selected =
             Some(if off <= 0xFFFF { (cs, off as u16) } else { ((a >> 4) as u16, (a & 15) as u16) });
@@ -134,8 +133,7 @@ impl App {
             source_index: self.program.index.clone(),
             loaded_text: self.program.text.clone(),
         });
-        let c = &self.session.machine.cpu;
-        self.status = format!("Emulator state saved at {:04X}:{:04X}", c.cs(), c.ip);
+        self.status = format!("Emulator state saved at {}", self.session.target.pc_text());
     }
 
     /// File -> load from previous state.
@@ -154,11 +152,9 @@ impl App {
         }
         self.debugger.stop_condition.compiled = None;
         self.sync_breakpoints();
-        self.exec.prev_cpu = self.session.machine.cpu.clone();
-        self.exec.prev_fpu = self.session.machine.sys.fpu.clone();
+        self.exec.remember(&*self.session.target);
         self.view.code_view_pinned = false;
-        let c = &self.session.machine.cpu;
-        self.status = format!("Emulator state restored - CS:IP = {:04X}:{:04X}", c.cs(), c.ip);
+        self.status = format!("Emulator state restored - {}", self.pc_status());
     }
 
     /// File -> reset emulator and RAM: nothing loaded, memory cleared.
@@ -169,8 +165,7 @@ impl App {
         self.program.index.clear();
         self.program.text = None;
         self.debugger.bp_addr.clear();
-        self.exec.prev_cpu = self.session.machine.cpu.clone();
-        self.exec.prev_fpu = self.session.machine.sys.fpu.clone();
+        self.exec.remember(&*self.session.target);
         self.view.code_selected = None;
         self.view.code_view_pinned = false;
         self.status = "Emulator and RAM reset".into();
@@ -216,8 +211,8 @@ impl App {
         if self.is_stale() {
             return;
         }
-        let bps = &mut self.session.machine.breakpoints;
-        bps.retain(|a| !self.debugger.bp_addr.contains_key(a));
+        let bp_addr = &self.debugger.bp_addr;
+        self.session.target.breakpoints_mut().retain(|a| !bp_addr.contains_key(a));
         self.debugger.bp_addr.clear();
         for (&(f, l), bp) in &mut self.debugger.bp_lines {
             bp.compiled = None;
@@ -226,7 +221,7 @@ impl App {
             }
             for a in self.session.addrs_of_line(f, l) {
                 self.debugger.bp_addr.insert(a, (f, l));
-                self.session.machine.breakpoints.insert(a);
+                self.session.target.breakpoints_mut().insert(a);
             }
         }
     }

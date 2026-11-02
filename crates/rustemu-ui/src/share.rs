@@ -122,13 +122,12 @@ impl App {
     /// Puts an empty temporary drive C: (for a program from a link) or the user's own one back
     /// into the machine. Only the memory drive of the browser is swapped.
     pub(crate) fn use_temporary_drive(&mut self, temporary: bool) {
-        let m = &mut self.session.machine;
         if temporary && self.web.own_drive.is_none() {
-            let Some(own) = m.dos_memory_drive().cloned() else { return };
+            let Some(own) = self.session.dos_memory_drive().cloned() else { return };
             self.web.own_drive = Some(own);
-            m.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+            self.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
         } else if !temporary && let Some(own) = self.web.own_drive.take() {
-            m.set_dos_memory_drive(own);
+            self.session.set_dos_memory_drive(own);
         }
     }
 

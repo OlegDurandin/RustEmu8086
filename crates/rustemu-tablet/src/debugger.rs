@@ -95,7 +95,7 @@ pub(crate) fn step_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: R
         b.label(RichText::new("What each instruction changes is shown here.").color(pal::WEAK));
         return;
     }
-    let waiting = app.session.machine.is_waiting_input();
+    let waiting = app.session.target.is_waiting_input();
     let Some(step) = app.session.last_step(into_macros(app)) else {
         b.label(RichText::new("Nothing executed yet.").size(17.0).color(pal::TEXT));
         b.label(RichText::new("Step (F8) runs one instruction; what it changed is shown here.").color(pal::WEAK));
@@ -188,8 +188,7 @@ struct Marks {
 }
 
 fn marks(app: &App, t: &TabletState) -> Marks {
-    let m = &app.session.machine;
-    let next = if !t.debug.bios { app.session.effective_pc() } else { m.cpu.pc() };
+    let next = if !t.debug.bios { app.session.effective_pc() } else { app.session.target.pc() };
     // As the last step card shows it: a step that began in the BIOS is the INT that called it.
     let last = app.session.last_step(into_macros(app)).map(|v| linear(v.cs, v.ip)).filter(|&a| a != next);
     Marks { next: Some(next), last }
@@ -211,7 +210,7 @@ pub(crate) fn code_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: R
         b.label(RichText::new("Press Run or Step to assemble and load the program.").color(pal::WEAK));
         return;
     }
-    if let Some(code) = app.session.machine.terminated {
+    if let Some(code) = app.session.target.terminated() {
         b.label(RichText::new(format!("The program has terminated (exit code {code}).")).color(pal::TEXT).strong());
         b.label(RichText::new("Step back to see its last instructions, or Reset to run it again.").color(pal::WEAK));
         return;
@@ -219,7 +218,7 @@ pub(crate) fn code_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: R
     if in_bios {
         let int = app.session.bios_caller().map(|(cs, ip)| {
             let a = linear(cs, ip);
-            rustemu_core::disasm::disassemble(app.session.machine.sys.mem.slice(a, 4), ip).text
+            app.session.target.disassemble(a, ip as u32).text
         });
         let text = match (&int, t.debug.bios) {
             (Some(i), false) => format!("The BIOS is serving {i}: the code shows the calling instruction."),
@@ -274,7 +273,7 @@ fn source_rows(app: &mut App, t: &mut TabletState, b: &mut Ui, mk: &Marks) {
         }
         t.debug.followed = mk.next;
     }
-    let waiting = app.session.machine.is_waiting_input();
+    let waiting = app.session.target.is_waiting_input();
     let mut toggle = None;
     // Rows touch each other: show_rows places them by the spacing of `b`, so it must be zero there
     // too (with the theme's 6 points it counted 32-point rows and showed lines far above).
@@ -352,7 +351,7 @@ fn asm_rows(app: &mut App, b: &mut Ui, mk: &Marks, mixed: bool, bios: bool) {
         (Some((cs, ip)), false) => (linear(cs, ip), ip, cs),
         _ => {
             let start = rustemu_ui::inspect::disasm_start(app, if mixed { rows / 2 } else { rows });
-            let c = &app.session.machine.cpu;
+            let Some(c) = app.session.x86().map(|m| &m.cpu) else { return };
             (start, c.ip.wrapping_sub(c.pc().wrapping_sub(start) as u16), c.cs())
         }
     };
@@ -382,9 +381,9 @@ fn asm_rows(app: &mut App, b: &mut Ui, mk: &Marks, mixed: bool, bios: bool) {
                 break;
             }
         }
-        let m = &app.session.machine;
-        let bytes = m.sys.mem.slice(a, 8).to_vec();
-        let ins = app.session.code_row(a, ip, app.settings.disasm_data);
+        let m = &*app.session.target;
+        let bytes = m.read_bytes(a, 8);
+        let ins = app.session.code_row(a, ip as u32, app.settings.disasm_data);
         let (r, resp) = b.allocate_exact_size(vec2(width, ROW_H), Sense::click());
         let p = b.painter();
         let y = r.center().y;
@@ -394,7 +393,7 @@ fn asm_rows(app: &mut App, b: &mut Ui, mk: &Marks, mixed: bool, bios: bool) {
             p.rect_filled(r, 2.0, pal::LINK.gamma_multiply(0.12));
             p.rect_filled(Rect::from_min_size(r.min, vec2(4.0, r.height())), 1.0, pal::LINK);
         }
-        if m.breakpoints.contains(&a) {
+        if m.breakpoints().contains(&a) {
             p.circle_filled(pos2(r.left() + 12.0, y), 6.0, pal::RED);
         }
         if a == next {
