@@ -142,4 +142,7 @@ site and the company no longer exist):
   procedures, their names, parameters and behaviour belong to the authors of Emu8086; the text of the file was
   written for RustEmu8086.
 
+The tables of MIPS instructions (`crates/rustemu-mips/data/PseudoOps.txt` and `crates/rustemu-mips/src/asm/basic.rs`)
+come from [MARS](https://github.com/dpetersanderson/MARS) and are distributed under its MIT license.
+
 More at the end of [LICENSE](LICENSE).

@@ -2629,6 +2629,10 @@ dependencies = [
 [[package]]
 name = "rustemu-mips"
 version = "0.2.0"
+dependencies = [
+ "rustemu-target",
+ "web-time",
+]
 
 [[package]]
 name = "rustemu-session"

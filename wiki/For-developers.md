@@ -42,7 +42,7 @@ browser.
 |---|---|
 | `rustemu-target` | the boundary between a processor and the rest: the `Target` trait (steps, step back, breakpoints, memory, disassembly, registers by name). No dependencies |
 | `rustemu-core` | the 8086 processor (+ 80186 extensions), 1 MB of memory, `Machine` (loading, steps, step back, breakpoints), BIOS, DOS, video, devices, disassembler, 8087; `Machine` implements `Target`. No GUI dependencies |
-| `rustemu-mips` | the MIPS32 core (in progress): the integer instruction set, memory and exceptions of MARS |
+| `rustemu-mips` | MIPS32 (in progress): the integer instruction set, memory and exceptions of MARS, its system services (`syscall`), a text console, files in a sandbox, step back; the assembler of MARS's dialect |
 | `rustemu-asm` | the Emu8086 / MASM and NASM assembler: preprocessor, multi-pass assembly, encoding, listing; the built-in `emu8086.inc` |
 | `rustemu-session` | glue between the assembler and the emulator through `Target`: source line ↔ address, debugger expressions, call stack, Step Over / Out; the 8086 part (program formats, floppies) in `x86.rs` |
 | `rustemu-cli` | the `rustemu` program |
@@ -80,8 +80,12 @@ cargo test -p rustemu-desktop -p rustemu-tablet   # UI tests, PNG snapshots in t
   `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` assembles and runs all 84 examples. Our own
   test programs are in `tests/programs`.
 - **MARS** (the MIPS core): random programs run on the core and on the real MARS and are compared — registers,
-  HI/LO, memory, exceptions: `MARS=<Mars.jar or a folder with Mars.class> cargo test -p rustemu-mips --test
-  mars_compare -- --nocapture`.
+  HI/LO, memory, exceptions; the assembler's machine code and data against MARS's for every form of every
+  instruction: `MARS=<Mars.jar or a folder with Mars.class> cargo test -p rustemu-mips --test mars_compare --
+  --nocapture`.
+- **binutils** (the MIPS assembler): every basic instruction form with random operands, assembled by RustEmu8086 and
+  by `mipsel-linux-gnu-as`, word by word, when the binutils are installed (`brew install
+  mipsel-linux-gnu-binutils`).
 - **SingleStepTests 8088**: ~2.9 million tests recorded on a real processor. Download `v2/*.json.gz` and
   `v2/metadata.json` from [SingleStepTests/8088](https://github.com/SingleStepTests/8088) into `testdata/8088/`,
   then `cargo test -p rustemu-core --release --test singlestep -- --ignored`. Every processor change is checked
