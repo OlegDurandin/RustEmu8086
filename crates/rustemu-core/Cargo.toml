@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+rustemu-target.workspace = true
 rustc_apfloat = "0.2"
 # std::time::Instant panics in the browser (wasm32-unknown-unknown); web-time is std::time natively.
 web-time = "1"

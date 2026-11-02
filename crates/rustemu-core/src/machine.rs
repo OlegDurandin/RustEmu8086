@@ -78,26 +78,7 @@ impl Bus for System {
     }
 }
 
-/// Result of [`Machine::step`] / [`Machine::run`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Event {
-    /// Instruction executed, nothing special.
-    Continue,
-    /// Execution is blocked until a key is pressed.
-    WaitingInput,
-    /// A timed BIOS wait (INT 15h/86h) is in progress; run again later.
-    Sleeping,
-    /// HLT executed (waiting for an interrupt).
-    Halted,
-    /// Program terminated with an exit code.
-    Terminated(u8),
-    /// Breakpoint reached (or INT 3 executed).
-    Breakpoint,
-    /// Instruction budget of [`Machine::run`] used up.
-    Budget,
-    /// Fatal error (divide error, unsupported service...); execution stops.
-    Error(String),
-}
+pub use rustemu_target::Event;
 
 /// Kind of the loaded program, which decides where and how it is loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

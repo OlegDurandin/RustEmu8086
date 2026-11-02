@@ -52,7 +52,7 @@ fn tags<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
 
 /// Text of the 80x25 screen.
 fn screen(s: &Session) -> String {
-    (0..80 * 25u32).map(|i| s.machine.sys.mem.read8(0xB8000 + i * 2) as char).collect()
+    (0..80 * 25u32).map(|i| s.x86().unwrap().sys.mem.read8(0xB8000 + i * 2) as char).collect()
 }
 
 fn check(path: &Path) -> Vec<String> {
@@ -64,18 +64,18 @@ fn check(path: &Path) -> Vec<String> {
     if let Err(e) = s.load_path(path) {
         return vec![format!("{name}: {e}")];
     }
-    s.machine.set_dos_root(sandbox.clone());
-    s.machine.instant_waits = true;
-    s.machine.history_enabled = false;
-    s.machine.instructions_per_tick = Some(2000);
+    s.x86_mut().unwrap().set_dos_root(sandbox.clone());
+    s.x86_mut().unwrap().instant_waits = true;
+    s.x86_mut().unwrap().history_enabled = false;
+    s.x86_mut().unwrap().instructions_per_tick = Some(2000);
     let input: String = tags(&text, "input").concat().replace("\\n", "\r");
     let mut keys: Vec<u8> = input.into_bytes();
     let endless = !tags(&text, "endless").is_empty();
     let mut ev = Event::Budget;
     for _ in 0..100 {
-        ev = s.machine.run(1_000_000);
+        ev = s.x86_mut().unwrap().run(1_000_000);
         match ev {
-            Event::WaitingInput if !keys.is_empty() => s.machine.push_char(keys.remove(0)),
+            Event::WaitingInput if !keys.is_empty() => s.x86_mut().unwrap().push_char(keys.remove(0)),
             Event::Sleeping | Event::Continue => {}
             Event::Budget if !endless => {}
             _ => break,
@@ -91,8 +91,8 @@ fn check(path: &Path) -> Vec<String> {
     if !keys.is_empty() {
         problems.push(format!("{name}: input not read: {:?}", String::from_utf8_lossy(&keys)));
     }
-    problems.extend(s.machine.log.iter().map(|l| format!("{name}: {l}")));
-    let output = String::from_utf8_lossy(&s.machine.output).into_owned();
+    problems.extend(s.x86().unwrap().log.iter().map(|l| format!("{name}: {l}")));
+    let output = String::from_utf8_lossy(&s.x86().unwrap().output).into_owned();
     for want in tags(&text, "output") {
         if !output.contains(want) {
             problems.push(format!("{name}: no {want:?} in the output {output:?}"));
@@ -234,8 +234,8 @@ fn lesson_19_boots_from_the_floppy() {
     s.write_boot_sector(0).unwrap();
     s.boot_from_floppy(0).unwrap();
     assert!(s.program.is_some(), "the loader keeps its source after booting from the floppy");
-    s.machine.run(1_000_000);
+    s.x86_mut().unwrap().run(1_000_000);
     let screen = screen(&s);
     assert!(screen.contains("Loading kernel...") && screen.contains("Kernel started from the floppy!"), "{screen}");
-    assert_eq!(s.machine.cpu.cs(), 0x0800);
+    assert_eq!(s.x86().unwrap().cpu.cs(), 0x0800);
 }

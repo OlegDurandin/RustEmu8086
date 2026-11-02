@@ -11,6 +11,7 @@ license.workspace = true
 # ---- all platforms --------------------------------------------------------------------------------
 [dependencies]
 rustemu-core.workspace = true
+rustemu-target.workspace = true
 rustemu-asm.workspace = true
 rustemu-session.workspace = true
 # wgpu renderer: Metal on macOS, WebGPU (or WebGL 2) in the browser.

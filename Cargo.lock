@@ -2607,6 +2607,7 @@ dependencies = [
  "flate2",
  "js-sys",
  "rustc_apfloat",
+ "rustemu-target",
  "serde_json",
  "web-time",
 ]
@@ -2621,6 +2622,7 @@ dependencies = [
  "rustemu-asm",
  "rustemu-core",
  "rustemu-session",
+ "rustemu-target",
  "rustemu-ui",
 ]
 
@@ -2630,6 +2632,7 @@ version = "0.2.0"
 dependencies = [
  "rustemu-asm",
  "rustemu-core",
+ "rustemu-target",
 ]
 
 [[package]]
@@ -2641,8 +2644,13 @@ dependencies = [
  "egui_kittest",
  "rustemu-core",
  "rustemu-session",
+ "rustemu-target",
  "rustemu-ui",
 ]
+
+[[package]]
+name = "rustemu-target"
+version = "0.2.0"
 
 [[package]]
 name = "rustemu-ui"
@@ -2661,6 +2669,7 @@ dependencies = [
  "rustemu-asm",
  "rustemu-core",
  "rustemu-session",
+ "rustemu-target",
  "serde",
  "wasm-bindgen",
  "wasm-bindgen-futures",

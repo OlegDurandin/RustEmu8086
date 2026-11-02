@@ -68,10 +68,10 @@ fn all_examples_run() {
         let mut loader = rustemu_asm::FsLoader { include_dirs: vec![inc_dir()] };
         let Ok(prog) = rustemu_asm::assemble(&f.to_string_lossy(), &text, &mut loader) else { continue };
         let mut s = Session::new();
-        s.machine.instant_waits = true;
-        s.machine.instructions_per_tick = Some(2000);
-        s.machine.history_enabled = false;
-        s.machine.set_dos_root(sandbox.clone());
+        s.x86_mut().unwrap().instant_waits = true;
+        s.x86_mut().unwrap().instructions_per_tick = Some(2000);
+        s.x86_mut().unwrap().history_enabled = false;
+        s.x86_mut().unwrap().set_dos_root(sandbox.clone());
         if let Err(e) = s.load_program(prog) {
             problems.push(format!("{name}: load error {e}"));
             continue;
@@ -82,8 +82,8 @@ fn all_examples_run() {
         keys.push(0x1b);
         let mut outcome = String::new();
         for _ in 0..200 {
-            match s.machine.run(2_000_000) {
-                Event::WaitingInput if !keys.is_empty() => s.machine.push_char(keys.remove(0)),
+            match s.x86_mut().unwrap().run(2_000_000) {
+                Event::WaitingInput if !keys.is_empty() => s.x86_mut().unwrap().push_char(keys.remove(0)),
                 Event::WaitingInput => {
                     outcome = "waits for input".into();
                     break;
@@ -104,17 +104,21 @@ fn all_examples_run() {
                 Event::Breakpoint => {}
                 Event::Error(e) => {
                     outcome = format!("ERROR: {e}");
-                    problems.push(format!("{name}: {e} at {:04X}:{:04X}", s.machine.cpu.cs(), s.machine.cpu.ip));
+                    problems.push(format!(
+                        "{name}: {e} at {:04X}:{:04X}",
+                        s.x86().unwrap().cpu.cs(),
+                        s.x86().unwrap().cpu.ip
+                    ));
                     break;
                 }
                 Event::Continue => {}
             }
         }
-        for l in &s.machine.log {
+        for l in &s.x86().unwrap().log {
             problems.push(format!("{name}: {l}"));
         }
         let out: String =
-            String::from_utf8_lossy(&s.machine.output).chars().filter(|c| !c.is_control()).take(50).collect();
+            String::from_utf8_lossy(&s.x86().unwrap().output).chars().filter(|c| !c.is_control()).take(50).collect();
         println!("{name:<36} {outcome:<18} {out}");
     }
     std::fs::remove_dir_all(&sandbox).ok();
@@ -139,16 +143,16 @@ fn micro_os_boots_from_floppy() {
     let boot = build("micro-os_loader.asm");
     let kernel = build("micro-os_kernel.asm");
     let mut s = Session::new();
-    s.machine.floppies[0] = vec![0; 1_474_560];
-    s.machine.floppies[0][..boot.image.len()].copy_from_slice(&boot.image);
-    s.machine.floppies[0][512..512 + kernel.image.len()].copy_from_slice(&kernel.image);
+    s.x86_mut().unwrap().floppies[0] = vec![0; 1_474_560];
+    s.x86_mut().unwrap().floppies[0][..boot.image.len()].copy_from_slice(&boot.image);
+    s.x86_mut().unwrap().floppies[0][512..512 + kernel.image.len()].copy_from_slice(&kernel.image);
     s.boot_from_floppy(0).unwrap();
-    assert_eq!(s.machine.run(5_000_000), Event::WaitingInput);
-    let screen = s.machine.screen_text();
+    assert_eq!(s.x86_mut().unwrap().run(5_000_000), Event::WaitingInput);
+    let screen = s.x86().unwrap().screen_text();
     assert!(screen.contains("Welcome to micro-os!"), "{screen}");
     for c in b"help\r" {
-        s.machine.push_char(*c);
-        s.machine.run(1_000_000);
+        s.x86_mut().unwrap().push_char(*c);
+        s.x86_mut().unwrap().run(1_000_000);
     }
-    assert!(s.machine.screen_text().contains("short list of supported commands"));
+    assert!(s.x86().unwrap().screen_text().contains("short list of supported commands"));
 }

@@ -95,7 +95,7 @@ const GAP: f32 = 6.0;
 
 /// Opens the keyboard when the program starts waiting for input.
 pub fn follow_input(app: &App, k: &mut KeypadState) {
-    let waiting = app.session.machine.is_waiting_input();
+    let waiting = app.session.target.is_waiting_input();
     if waiting && !k.was_waiting {
         k.open = true;
     }
@@ -247,7 +247,7 @@ fn label(s: &KeypadState, key: Key) -> String {
 
 /// Types `key` into the emulated machine (scan code + ASCII, as the BIOS stores them).
 fn press(app: &mut App, s: &mut KeypadState, key: Key) {
-    let m = &mut app.session.machine;
+    let Some(m) = app.session.x86_mut() else { return };
     match key {
         Key::Shift => {
             s.shift = !s.shift;
@@ -285,7 +285,7 @@ fn press(app: &mut App, s: &mut KeypadState, key: Key) {
     s.shift = false;
     s.ctrl = false;
     // Paused in a step that waits for a key (Step into INT 16h): the key completes that step.
-    if app.run == RunMode::Paused && app.session.machine.is_waiting_input() {
+    if app.run == RunMode::Paused && app.session.target.is_waiting_input() {
         app.single_step();
     }
 }
@@ -300,7 +300,7 @@ fn key_height(window_h: f32) -> f32 {
 /// Keys go to the emulated machine, never to the editor. `with_screen` adds a small preview of
 /// the screen beside the keys, for tabs that do not show the output.
 pub(crate) fn keyboard_sheet(app: &mut App, k: &mut KeypadState, ui: &mut Ui, window_h: f32, with_screen: bool) {
-    let waiting = app.session.machine.is_waiting_input();
+    let waiting = app.session.target.is_waiting_input();
     ui.horizontal(|ui| {
         ui.set_min_height(36.0);
         ui.label(RichText::new("PC Keyboard").size(17.0).strong().color(pal::TEXT));
@@ -364,7 +364,7 @@ mod tests {
     fn keys_reach_the_bios_buffer() {
         let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
         let mut k = KeypadState::default();
-        let keys = |app: &App| app.session.machine.sys.keys.iter().copied().collect::<Vec<u16>>();
+        let keys = |app: &App| app.session.x86().unwrap().sys.keys.iter().copied().collect::<Vec<u16>>();
         press(&mut app, &mut k, Key::Ch('a', 'A'));
         press(&mut app, &mut k, Key::Shift);
         press(&mut app, &mut k, Key::Ch('1', '!'));

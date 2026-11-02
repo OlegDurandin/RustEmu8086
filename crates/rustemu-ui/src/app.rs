@@ -5,8 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use egui::{Key, KeyboardShortcut, Modifiers};
+use rustemu_core::Event;
 use rustemu_core::cpu::Cpu;
-use rustemu_core::{Event, disasm};
+use rustemu_session::Target;
 use rustemu_session::expr::Expr;
 use rustemu_session::{Session, StepGoal, StepKind};
 use serde::{Deserialize, Serialize};
@@ -366,12 +367,23 @@ pub struct Exec {
     pub last_step: f64,
     /// Instructions per frame while running freely (adapted to keep the frame rate).
     pub instr_per_frame: u64,
-    /// CPU state before the last step (to highlight changed registers).
-    pub prev_cpu: Cpu,
-    /// The 8087 before the last step / run (its changes are red in the FPU window).
-    pub prev_fpu: rustemu_core::fpu::Fpu,
+    /// The machine before the last step / run ([`Target::checkpoint`]): changed registers, flags
+    /// and 8087 registers are highlighted against it.
+    pub prev: rustemu_target::State,
     /// Why execution last stopped or what it is doing (`None`: nothing ran since the load).
     pub last_event: Option<Event>,
+}
+
+impl Exec {
+    /// The 8086 before the last step / run, when the machine is an 8086.
+    pub fn prev_x86(&self) -> Option<&rustemu_core::Checkpoint> {
+        self.prev.get()
+    }
+
+    /// Remembers `target` as the state before the next step / run.
+    pub fn remember(&mut self, target: &dyn Target) {
+        self.prev = target.checkpoint();
+    }
 }
 
 impl Default for Exec {
@@ -379,8 +391,7 @@ impl Default for Exec {
         Exec {
             last_step: 0.0,
             instr_per_frame: 50_000,
-            prev_cpu: Cpu::new(),
-            prev_fpu: Default::default(),
+            prev: rustemu_target::State::new(rustemu_core::Checkpoint { cpu: Cpu::new(), fpu: Default::default() }),
             last_event: None,
         }
     }
@@ -691,7 +702,7 @@ impl App {
         }
         // The browser has no file system: DOS programs get a drive in memory.
         if app.front.browser {
-            app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+            app.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
         }
         app
     }

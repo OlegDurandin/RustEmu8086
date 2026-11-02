@@ -63,7 +63,7 @@ fn run_does_not_start_after_assembly_failure() {
     app.load_example_text(rustemu_ui::testing::PROGRAMS[0].0, rustemu_ui::testing::PROGRAMS[0].1);
     app.emulate();
     assert!(app.loaded());
-    let cpu = app.session.machine.cpu.clone();
+    let cpu = app.session.x86().unwrap().cpu.clone();
     app.doc.text = "org 100h\nnot_an_instruction\n".into();
     app.emulate();
     assert_eq!(app.status, "Assembly failed");
@@ -73,7 +73,7 @@ fn run_does_not_start_after_assembly_failure() {
     assert_eq!(app.run, rustemu_ui::app::RunMode::Paused);
     assert!(app.loaded());
     assert_eq!(app.status, "Assembly failed");
-    assert_eq!(app.session.machine.cpu, cpu);
+    assert_eq!(app.session.x86().unwrap().cpu, cpu);
 
     // A successful Compile writes files but does not load the resulting image.
     // F5 must therefore still rebuild/load it instead of running the old image.
@@ -111,9 +111,9 @@ fn editor_and_emulate_hello() {
         h.step();
     }
     h.run_steps(2);
-    let out = String::from_utf8_lossy(&h.state().session.machine.output).into_owned();
+    let out = String::from_utf8_lossy(h.state().session.target.output()).into_owned();
     assert_eq!(out, "Hello, World!\r\n");
-    assert!(h.state().session.machine.screen_text().starts_with("Hello, World!"));
+    assert!(h.state().session.x86().unwrap().screen_text().starts_with("Hello, World!"));
     // CS:IP is in the PSP now: the disassembler says the program has ended instead.
     h.get_by_label("The program has terminated (exit code 0).");
     save(&mut h, "02_emulator_hello");
@@ -150,7 +150,7 @@ fn stepping_and_debug_windows() {
         h.state_mut().single_step();
     }
     h.run();
-    assert!(h.state().session.machine.cpu.instr_count >= 12);
+    assert!(h.state().session.target.instr_count() >= 12);
     save(&mut h, "04_debug_windows");
 }
 
@@ -159,7 +159,7 @@ fn graphics_and_devices() {
     let mut h = harness(app_with_example(8)); // graphics
     h.run();
     h.state_mut().emulate();
-    let ev = h.state_mut().session.machine.run(5_000_000);
+    let ev = h.state_mut().session.target.run(5_000_000);
     assert_eq!(ev, rustemu_core::Event::WaitingInput);
     h.run();
     save(&mut h, "05_graphics");
@@ -168,7 +168,7 @@ fn graphics_and_devices() {
     let mut h = harness(app_with_example(robot));
     h.run();
     h.state_mut().emulate();
-    h.state_mut().session.machine.run(3_000_000);
+    h.state_mut().session.target.run(3_000_000);
     h.state_mut().windows[Tool::Devices] = true;
     h.run();
     save(&mut h, "06_devices");
@@ -179,16 +179,16 @@ fn editing_a_device_clears_step_back_history() {
     let mut h = harness(app_with_example(0));
     h.state_mut().emulate();
     h.state_mut().single_step();
-    assert!(h.state().session.machine.history_len() > 0);
-    h.state_mut().session.machine.sys.dev.printer.extend_from_slice(b"AB");
+    assert!(h.state().session.target.history_len() > 0);
+    h.state_mut().session.x86_mut().unwrap().sys.dev.printer.extend_from_slice(b"AB");
     h.state_mut().view.device_tab = rustemu_ui::devices_ui::Device::Printer;
     h.state_mut().windows[Tool::Devices] = true;
     h.run();
     h.get_by_label("clear paper").click();
     h.run();
 
-    assert!(h.state().session.machine.sys.dev.printer.is_empty());
-    assert_eq!(h.state().session.machine.history_len(), 0);
+    assert!(h.state().session.x86().unwrap().sys.dev.printer.is_empty());
+    assert_eq!(h.state().session.target.history_len(), 0);
 }
 
 #[test]
@@ -203,9 +203,9 @@ fn stepping_into_library_macros() {
     assert!(loc.origin.is_some());
     save(&mut h, "07_inside_print_macro");
     // Run until SCAN_NUM waits for a key: we are inside the library procedure.
-    let ev = h.state_mut().session.machine.run(10_000);
+    let ev = h.state_mut().session.target.run(10_000);
     assert_eq!(ev, rustemu_core::Event::WaitingInput);
-    h.state_mut().session.machine.push_char(b'7');
+    h.state_mut().session.target.push_char(b'7');
     for _ in 0..6 {
         h.state_mut().single_step();
     }
@@ -217,7 +217,7 @@ fn stepping_into_library_macros() {
 
     // Step out of SCAN_NUM back to the program (it still needs Enter).
     h.state_mut().step_out();
-    h.state_mut().session.machine.push_char(b'\r');
+    h.state_mut().session.target.push_char(b'\r');
     for _ in 0..10 {
         let ctx = h.ctx.clone();
         h.state_mut().tick(&ctx);
@@ -335,15 +335,15 @@ fn conditional_breakpoint_run_to_cursor_and_stop_condition() {
     app.debugger.bp_lines.get_mut(&(0, 4)).unwrap().condition = "ax == 5".into();
     app.start_run();
     run_until_paused(&mut app);
-    assert_eq!(app.session.machine.cpu.regs[AX], 5, "{}", app.status);
+    assert_eq!(app.session.x86().unwrap().cpu.regs[AX], 5, "{}", app.status);
     assert_eq!(app.debugger.bp_lines[&(0, 4)].hits, 1);
     // Run to line 6: the condition is not true again on the way.
     app.run_to_line(0, 6);
     run_until_paused(&mut app);
     assert_eq!(app.session.current_line(), Some((0, 6)));
-    assert_eq!(app.session.machine.cpu.regs[CX], 0);
+    assert_eq!(app.session.x86().unwrap().cpu.regs[CX], 0);
     // ALU window data: the last operation was the final INC AX.
-    assert_eq!(app.session.machine.cpu.alu_trace.op, rustemu_core::AluOp::Inc);
+    assert_eq!(app.session.x86().unwrap().cpu.alu_trace.op, rustemu_core::AluOp::Inc);
 
     // Stop on condition: stops right after CX becomes 7.
     app.reload();
@@ -353,7 +353,7 @@ fn conditional_breakpoint_run_to_cursor_and_stop_condition() {
     app.debugger.stop_condition.enabled = true;
     app.start_run();
     run_until_paused(&mut app);
-    assert_eq!(app.session.machine.cpu.regs[CX], 7, "{}", app.status);
+    assert_eq!(app.session.x86().unwrap().cpu.regs[CX], 7, "{}", app.status);
     assert!(app.status.contains("is true"));
     // "changes" mode on BX.
     app.debugger.stop_condition.text = "bx".into();
@@ -361,7 +361,7 @@ fn conditional_breakpoint_run_to_cursor_and_stop_condition() {
     app.debugger.stop_condition.on_change = true;
     app.start_run();
     run_until_paused(&mut app);
-    assert_eq!(app.session.machine.cpu.regs[BX], 1, "{}", app.status);
+    assert_eq!(app.session.x86().unwrap().cpu.regs[BX], 1, "{}", app.status);
 
     // Editing the source makes the loaded program outdated.
     assert!(!app.is_stale());
@@ -471,7 +471,7 @@ fn emulator_bottom_buttons_and_aux_menu() {
     save(&mut h, "17_emulator_aux_menu");
     h.get_by_label("reset").click();
     h.run_steps(2);
-    assert_eq!(h.state().session.machine.cpu.ip, 0x100);
+    assert_eq!(h.state().session.x86().unwrap().cpu.ip, 0x100);
 }
 
 #[test]
@@ -541,7 +541,7 @@ fn screen_paste_and_copy() {
     let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     app.load_example_text(rustemu_ui::testing::PROGRAMS[0].0, rustemu_ui::testing::PROGRAMS[0].1);
     app.emulate();
-    let m = &mut app.session.machine;
+    let m = app.session.x86_mut().unwrap();
     let before = m.sys.keys.len();
     rustemu_ui::screen::paste_keys(m, "12\r\n3\tx");
     let keys: Vec<u16> = m.sys.keys.iter().skip(before).copied().collect();
@@ -552,7 +552,7 @@ fn screen_paste_and_copy() {
     // Copy: the text the program printed.
     app.start_run();
     run_until_paused(&mut app);
-    let text = rustemu_ui::screen::screen_text(&app.session.machine.sys.mem);
+    let text = rustemu_ui::screen::screen_text(&app.session.x86().unwrap().sys.mem);
     assert!(text.contains("Hello"), "{text}");
 }
 
@@ -561,7 +561,7 @@ fn no_execution_command_runs_the_old_image_after_a_failed_build() {
     let mut app = App::with_settings(rustemu_ui::app::Settings { last_file: None, ..Default::default() });
     app.doc.text = LOOP_SRC.into();
     app.emulate();
-    let cpu = app.session.machine.cpu.clone();
+    let cpu = app.session.x86().unwrap().cpu.clone();
     app.doc.text = "org 100h\nnot_an_instruction\n".into();
     app.emulate();
     assert_eq!(app.status, "Assembly failed");
@@ -570,11 +570,11 @@ fn no_execution_command_runs_the_old_image_after_a_failed_build() {
     app.step_out();
     app.run_to_line(0, 2);
     assert_eq!(app.run, rustemu_ui::app::RunMode::Paused);
-    assert_eq!(app.session.machine.cpu, cpu, "the old image must not execute");
+    assert_eq!(app.session.x86().unwrap().cpu, cpu, "the old image must not execute");
     // Fixing the code makes stepping work again (on the new build).
     app.doc.text = LOOP_SRC.into();
     app.single_step();
-    assert_eq!(app.session.machine.cpu.instr_count, 1);
+    assert_eq!(app.session.target.instr_count(), 1);
 }
 
 #[test]
@@ -585,16 +585,16 @@ fn address_breakpoints_belong_to_one_program() {
     app.toggle_breakpoint_at_line(0, 4);
     let line_bp = *app.debugger.bp_addr.keys().next().unwrap();
     let addr_bp = line_bp + 1; // as if set by double-clicking in the disassembly
-    app.session.machine.breakpoints.insert(addr_bp);
+    app.session.target.breakpoints_mut().insert(addr_bp);
     app.reload();
-    assert!(app.session.machine.breakpoints.contains(&addr_bp), "kept by Reload");
+    assert!(app.session.target.breakpoints().contains(&addr_bp), "kept by Reload");
     app.emulate();
-    assert!(app.session.machine.breakpoints.contains(&addr_bp), "kept when the same code is reassembled");
+    assert!(app.session.target.breakpoints().contains(&addr_bp), "kept when the same code is reassembled");
     app.doc.text = format!("{LOOP_SRC}\n    nop\n");
     app.doc.text = app.doc.text.replacen("mov cx, 10", "mov cx, 11", 1);
     app.emulate();
-    assert!(!app.session.machine.breakpoints.contains(&addr_bp), "dropped for a different program");
-    assert!(app.session.machine.breakpoints.contains(&line_bp), "line breakpoints stay");
+    assert!(!app.session.target.breakpoints().contains(&addr_bp), "dropped for a different program");
+    assert!(app.session.target.breakpoints().contains(&line_bp), "line breakpoints stay");
 }
 
 #[test]
@@ -609,8 +609,8 @@ fn emulator_window_debug_and_file_menus() {
     app.view.code_selected = Some(sel);
     app.run_until_selected();
     run_until_paused(&mut app);
-    assert_eq!(app.session.machine.cpu.pc(), a6);
-    assert_eq!(app.session.machine.cpu.regs[CX], 0);
+    assert_eq!(app.session.target.pc(), a6);
+    assert_eq!(app.session.x86().unwrap().cpu.regs[CX], 0);
 
     // set break point (selected) / show current break point / clear break point.
     let a4 = app.session.addr_of_line(0, 4).unwrap();
@@ -626,20 +626,20 @@ fn emulator_window_debug_and_file_menus() {
 
     // set CS:IP to selected position: back to `inc ax`.
     app.set_cs_ip_to_selected();
-    assert_eq!(app.session.machine.cpu.pc(), a4);
+    assert_eq!(app.session.target.pc(), a4);
 
     // save the emulator's state / load from previous state.
     app.save_emulator_state();
     app.single_step();
-    assert_ne!(app.session.machine.cpu.pc(), a4);
+    assert_ne!(app.session.target.pc(), a4);
     app.load_emulator_state();
-    assert_eq!(app.session.machine.cpu.pc(), a4);
+    assert_eq!(app.session.target.pc(), a4);
     assert_eq!(app.session.current_line(), Some((0, 4)));
 
     // reset emulator and ram.
     app.reset_emulator_and_ram();
     assert!(!app.loaded());
-    assert_eq!(app.session.machine.cpu.regs[BX], 0);
+    assert_eq!(app.session.x86().unwrap().cpu.regs[BX], 0);
     app.load_emulator_state();
     assert!(app.loaded(), "a saved state brings the program back");
     app.close_emulator();
@@ -704,16 +704,16 @@ fn value_viewer_sets_registers_and_memory() {
     app.emulate();
     view_register(&mut app, "BX");
     set_viewed_value(&mut app, "1010b").unwrap();
-    assert_eq!(app.session.machine.cpu.regs[rustemu_core::cpu::BX], 10);
+    assert_eq!(app.session.x86().unwrap().cpu.regs[rustemu_core::cpu::BX], 10);
     set_viewed_value(&mut app, "-2").unwrap();
-    assert_eq!(app.session.machine.cpu.regs[rustemu_core::cpu::BX], 0xFFFE);
+    assert_eq!(app.session.x86().unwrap().cpu.regs[rustemu_core::cpu::BX], 0xFFFE);
     view_register(&mut app, "FLAGS");
     set_viewed_value(&mut app, "1").unwrap();
-    assert!(app.session.machine.cpu.flags & rustemu_core::cpu::flags::CF != 0);
+    assert!(app.session.x86().unwrap().cpu.flags & rustemu_core::cpu::flags::CF != 0);
     app.debugger.value_viewer.reg = None;
     app.debugger.value_viewer.addr = "DS:0200".into();
     set_viewed_value(&mut app, "'AB'").unwrap();
-    assert_eq!(app.session.machine.sys.mem.read16(0x7200), 0x4241);
+    assert_eq!(app.session.x86().unwrap().sys.mem.read16(0x7200), 0x4241);
     assert!(set_viewed_value(&mut app, "70000").unwrap_err().contains("does not fit"));
 }
 
@@ -755,7 +755,7 @@ fn memory_drive_window_and_storage() {
     // The browser's drive C:: a program writes a file next to an uploaded one, the "drive C:"
     // window lists both and previews one, and the drive survives a restart through storage.
     let mut app = app_with_example(0);
-    app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    app.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     app.add_drive_file("data/in.txt", b"first line\r\nsecond line\r\n".to_vec());
     app.doc.text = "org 100h
     mov ah, 3Ch
@@ -777,15 +777,15 @@ text  db 'done'
     app.emulate();
     app.start_run();
     run_until_paused(&mut app);
-    let drive = app.session.machine.dos_memory_drive().unwrap().clone();
+    let drive = app.session.dos_memory_drive().unwrap().clone();
     assert_eq!(drive.read("out.txt"), Some(&b"done"[..]), "{}", app.status);
 
     let mut storage = MemStorage::default();
     app.persist(&mut storage);
     let mut restarted = app_with_example(0);
-    restarted.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    restarted.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     restarted.restore_drive(&storage);
-    assert_eq!(restarted.session.machine.dos_memory_drive(), Some(&drive));
+    assert_eq!(restarted.session.dos_memory_drive(), Some(&drive));
 
     app.windows = Default::default();
     app.windows[Tool::Drive] = true;
@@ -838,7 +838,7 @@ fn full_storage_is_reported_and_retried() {
     // The browser keeps the old value when its quota is full: the user is told once, the write is
     // tried again on the next save and goes through once there is room.
     let mut app = browser_app();
-    app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    app.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     let mut storage = MemStorage { quota: Some(64 * 1024), ..MemStorage::default() };
     app.persist(&mut storage);
     assert!(!app.storage_failed() && app.dialogs.notice.is_none());
@@ -858,9 +858,9 @@ fn full_storage_is_reported_and_retried() {
     app.persist(&mut storage);
     assert!(!app.storage_failed());
     let mut restarted = browser_app();
-    restarted.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    restarted.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     restarted.restore_drive(&storage);
-    assert!(restarted.session.machine.dos_memory_drive().unwrap().read("big.bin").is_some());
+    assert!(restarted.session.dos_memory_drive().unwrap().read("big.bin").is_some());
 }
 
 #[test]
@@ -868,7 +868,7 @@ fn programs_from_links_get_a_temporary_drive() {
     // A program from a link runs with an empty drive C: of its own: it doesn't see the user's
     // files and what it writes is not kept; saved, it runs with the user's drive.
     let mut app = app_with_example(0);
-    app.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    app.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     app.add_drive_file("secret.txt", b"mine".to_vec());
     let text = "org 100h
     mov ax, 3D00h
@@ -890,16 +890,16 @@ out    db 'out.txt', 0
 ";
     app.open_link(rustemu_ui::share::Shared { name: "link.asm".into(), text: text.into(), run: true });
     run_until_paused(&mut app);
-    let temporary = app.session.machine.dos_memory_drive().unwrap();
+    let temporary = app.session.dos_memory_drive().unwrap();
     assert_eq!(temporary.files().map(|f| f.0).collect::<Vec<_>>(), ["OUT.TXT"], "{}", app.status);
     assert_eq!(app.dialogs.notice.as_ref().map(|n| n.0.as_str()), Some("Program from a link"));
     // The user's drive is the one kept, untouched.
     let mut storage = MemStorage::default();
     app.persist(&mut storage);
     let mut restarted = app_with_example(0);
-    restarted.session.machine.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
+    restarted.session.set_dos_memory_drive(rustemu_core::memdrive::MemDrive::new());
     restarted.restore_drive(&storage);
-    let own = restarted.session.machine.dos_memory_drive().unwrap();
+    let own = restarted.session.dos_memory_drive().unwrap();
     assert_eq!(own.files().map(|f| f.0).collect::<Vec<_>>(), ["SECRET.TXT"]);
 
     app.dialogs.notice = None;
@@ -915,7 +915,7 @@ out    db 'out.txt', 0
     app.emulate();
     app.start_run();
     run_until_paused(&mut app);
-    let own = app.session.machine.dos_memory_drive().unwrap();
+    let own = app.session.dos_memory_drive().unwrap();
     assert_eq!(own.files().map(|f| f.0).collect::<Vec<_>>(), ["SECRET.TXT", "SEEN.TXT"]);
     assert!(app.dialogs.notice.is_none());
 }
@@ -962,7 +962,7 @@ fn screen_draws_every_cp437_glyph() {
     app.windows[Tool::Screen] = true;
     app.start_run();
     run_until_paused(app);
-    let mem = &app.session.machine.sys.mem;
+    let mem = &app.session.x86().unwrap().sys.mem;
     assert_eq!(rustemu_core::video::Video::read_cell(mem, 0, 2, 0), (2, 7), "☻ in row 0");
     h.run_steps(3);
     save(&mut h, "24_screen_cp437");
@@ -1069,7 +1069,7 @@ fn share_links_open_the_program() {
     assert_eq!(clean.file_name(), "hello.asm");
     assert!(!clean.dirty() && clean.loaded());
     run_until_paused(&mut clean);
-    assert_eq!(String::from_utf8_lossy(&clean.session.machine.output), "Hello, World!\r\n");
+    assert_eq!(String::from_utf8_lossy(clean.session.target.output()), "Hello, World!\r\n");
 }
 
 /// Test program `name` in the panels layout (the default is classic windows).
@@ -1182,7 +1182,7 @@ fn disassembly_scrolls_and_tools_go_under_the_screen() {
     h.run();
     h.state_mut().emulate();
     h.run_steps(8);
-    let pc = h.state().session.machine.cpu.pc();
+    let pc = h.state().session.target.pc();
     let wheel = |h: &mut Harness<'static, App>, dy: f32| {
         h.event(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
@@ -1368,7 +1368,7 @@ fn kernel_to_floppy_and_boot_with_the_loader_source() {
     assert!(h.state().status.starts_with("Booted from FLOPPY_0"), "{}", h.state().status);
     assert!(!h.state().program.files.is_empty() && h.state().session.program.is_some());
     // Run: the loader reads the kernel and jumps to it.
-    let m = &mut h.state_mut().session.machine;
+    let m = h.state_mut().session.x86_mut().unwrap();
     m.run(10_000);
     assert_eq!((m.cpu.cs(), m.cpu.regs[0]), (0x0800, 0x1234));
 }
@@ -1409,7 +1409,7 @@ fn fpu_window_shows_the_8087() {
     }
     h.run_steps(8);
     save(&mut h, "54_fpu_window");
-    let f = &h.state().session.machine.sys.fpu;
+    let f = &h.state().session.x86().unwrap().sys.fpu;
     assert_eq!((f.top(), rustemu_core::fpu::to_f64(f.st(1))), (6, 2f64.sqrt()));
     h.get_by_label("3.141592653589793");
     h.get_by_label("1.4142135623730951");

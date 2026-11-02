@@ -181,7 +181,7 @@ impl Tool {
     /// The tool can be shown here: the drive C: in memory exists, the programs are in the browser.
     fn available(self, app: &App) -> bool {
         match self {
-            Tool::Drive => app.session.machine.dos_memory_drive().is_some(),
+            Tool::Drive => app.session.dos_memory_drive().is_some(),
             Tool::Programs => app.front.browser,
             _ => true,
         }

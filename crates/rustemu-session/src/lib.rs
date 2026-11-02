@@ -1,22 +1,28 @@
 //! Glue between the assembler and the emulator: loading programs, source-level debugging info.
+//!
+//! The session works with the emulated computer through [`Target`]: mapping addresses to source
+//! lines, macro expansions, symbols, Step Over / Step Out and debugger expressions are the same
+//! for every processor. What depends on the processor is chosen by [`Target::arch`]; the 8086
+//! part (program formats, floppies, `segment:offset` symbols) is in [`x86`].
 
 #![warn(missing_docs)]
 
 pub mod code;
 pub mod expr;
 pub mod step;
+pub mod x86;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
-use rustemu_asm::{Format, LineInfo, Program, SymbolKind};
-use rustemu_core::machine::{FLOPPY_SIZE, PROGRAM_SEG, ROM_SEG};
-use rustemu_core::{Event, Machine, cpu, linear};
+use rustemu_asm::{LineInfo, Program, SymbolKind};
+use rustemu_core::Machine;
+use rustemu_core::machine::PROGRAM_SEG;
+pub use rustemu_target::{Arch, Event, Flow, Frame, FrameKind, Target};
 
 /// A loaded program together with its debug information.
 pub struct Session {
-    /// The emulator.
-    pub machine: Machine,
+    /// The emulated computer (the 8086 [`Machine`]; see [`Session::x86`]).
+    pub target: Box<dyn Target>,
     /// The assembled program with its debug information (`None` for a binary loaded as is).
     pub program: Option<Program>,
     /// Raw executable bytes that were loaded (for Reload).
@@ -86,7 +92,7 @@ impl Session {
     /// A powered-on machine with nothing loaded.
     pub fn new() -> Self {
         Session {
-            machine: Machine::new(),
+            target: Box::new(Machine::new()),
             program: None,
             loaded: None,
             command_line: String::new(),
@@ -98,22 +104,13 @@ impl Session {
 
     /// Loads an assembled program (with source mapping).
     pub fn load_program(&mut self, prog: Program) -> Result<(), String> {
-        let bytes = prog.file_bytes();
-        let kind = match prog.format {
-            Format::Com => Loadable::Com,
-            Format::Exe => Loadable::Exe,
-            Format::Boot => Loadable::Boot,
-            Format::Bin => {
-                // Emu8086: without LOAD_SEGMENT/LOAD_OFFSET the program is loaded at CS:IP,
-                // without anything at 0100:0000.
-                let reg = |n: &str| prog.emu.regs.iter().find(|(r, _)| r == n).map(|(_, v)| *v);
-                Loadable::Bin {
-                    seg: prog.emu.load_segment.or(reg("CS")).unwrap_or(0x0100),
-                    off: prog.emu.load_offset.or(reg("IP")).unwrap_or(prog.origin),
-                }
+        let (kind, bytes) = match self.target.arch() {
+            Arch::I8086 => {
+                let bytes =
+                    if prog.format == rustemu_asm::Format::Boot { prog.image.clone() } else { prog.file_bytes() };
+                (Self::x86_loadable(&prog), bytes)
             }
         };
-        let bytes = if prog.format == Format::Boot { prog.image.clone() } else { bytes };
         self.load_bytes_with_program(kind, bytes, Some(prog))
     }
 
@@ -130,115 +127,13 @@ impl Session {
         bytes: Vec<u8>,
         program: Option<Program>,
     ) -> Result<(), String> {
-        match kind {
-            Loadable::Com => self.machine.load_com(&bytes)?,
-            Loadable::Exe => self.machine.load_exe(&bytes)?,
-            Loadable::Bin { seg, off } => self.machine.load_bin(&bytes, seg, off)?,
-            Loadable::Boot => self.machine.load_boot(&bytes)?,
+        match self.target.arch() {
+            Arch::I8086 => self.x86_load(kind, &bytes, program.as_ref())?,
         }
         self.program = program;
-        if let Some(p) = &self.program {
-            let info = self.machine.loaded.clone().unwrap();
-            // Segment fixups of flat programs (COM/BIN/BOOT) refer to the load segment.
-            if p.format != Format::Exe {
-                let seg = match kind {
-                    Loadable::Bin { seg, .. } => seg,
-                    _ => info.load_segment,
-                };
-                for &r in &p.relocs {
-                    let a = info.image_base + r;
-                    let v = self.machine.sys.mem.read16(a).wrapping_add(seg);
-                    self.machine.sys.mem.write16(a, v);
-                }
-            }
-            for (r, v) in &p.emu.regs {
-                self.machine.set_register(r, *v);
-            }
-            let mut mem = p.emu.mem.clone();
-            if p.format == Format::Bin && p.emu.regs.is_empty() && p.emu.load_segment.is_none() && mem.is_empty() {
-                // Like Emu8086's default.binf: RET from the program lands on a HLT.
-                mem = vec![(0x10FFE, vec![0x00, 0xFF]), (0x10F00, vec![0xF4])];
-            }
-            for (a, bytes) in mem {
-                self.machine.sys.mem.load(a, &bytes);
-            }
-        }
-        let args = self.command_line.clone();
-        self.machine.set_command_line(&args);
         self.loaded = Some((kind, bytes));
         self.index_symbols();
         self.index_lines();
-        Ok(())
-    }
-
-    /// Assembles (for `.asm`) or reads an executable file and loads it; DOS file functions then
-    /// see the file's folder as drive C:.
-    pub fn load_path(&mut self, path: &Path) -> Result<(), String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.load_named(&path.to_string_lossy(), bytes)?;
-        let root =
-            path.parent().map(|dir| if dir.as_os_str().is_empty() { PathBuf::from(".") } else { dir.to_path_buf() });
-        if let Some(root) = root {
-            self.machine.set_dos_root(root);
-        }
-        Ok(())
-    }
-
-    /// Loads the contents of file `name` (an executable by its extension, otherwise assembly source),
-    /// e.g. a file opened in the browser.
-    pub fn load_named(&mut self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
-        let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        let mut floppy = None;
-        let result = match ext.as_str() {
-            "com" => self.load_bytes(Loadable::Com, bytes),
-            "exe" => self.load_bytes(Loadable::Exe, bytes),
-            "bin" => self.load_bytes(Loadable::Bin { seg: 0x0100, off: 0 }, bytes),
-            "boot" | "img" => {
-                let n = bytes.len().min(512);
-                if bytes.len() > 512 {
-                    floppy = Some(bytes.clone());
-                }
-                self.load_bytes(Loadable::Boot, bytes[..n].to_vec())
-            }
-            _ => {
-                let text = String::from_utf8_lossy(&bytes).into_owned();
-                let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
-                let prog = rustemu_asm::assemble(name, &text, &mut loader).map_err(|e| e.to_string())?;
-                self.load_program(prog)
-            }
-        };
-        if result.is_ok()
-            && let Some(floppy) = floppy
-        {
-            self.machine.floppies[0] = floppy;
-        }
-        result
-    }
-
-    /// Image of floppy drive `drive` (FLOPPY_n), resized to a full 1.44 MB disk.
-    fn floppy_mut(&mut self, drive: usize) -> Result<&mut Vec<u8>, String> {
-        let fl = self.machine.floppies.get_mut(drive).ok_or(format!("there is no FLOPPY_{drive}"))?;
-        if fl.len() < FLOPPY_SIZE {
-            fl.resize(FLOPPY_SIZE, 0);
-        }
-        Ok(fl)
-    }
-
-    /// Boots from a virtual floppy: its sector 1 is loaded at 0000:7C00 (like the BIOS does) and
-    /// DL holds the drive number. When the sector is the boot program assembled last, its source
-    /// stays: the boot code is debugged line by line.
-    pub fn boot_from_floppy(&mut self, drive: usize) -> Result<(), String> {
-        let fl = self.machine.floppies.get(drive).ok_or(format!("there is no FLOPPY_{drive}"))?;
-        if fl.len() < 512 {
-            return Err(format!("FLOPPY_{drive} is empty"));
-        }
-        let sector = fl[..512].to_vec();
-        let program = self.program.clone().filter(|p| {
-            let image = p.file_bytes();
-            p.format == Format::Boot && sector.get(..image.len()) == Some(&image[..])
-        });
-        self.load_bytes_with_program(Loadable::Boot, sector, program)?;
-        self.machine.cpu.regs[rustemu_core::cpu::DX] = drive as u16;
         Ok(())
     }
 
@@ -247,52 +142,24 @@ impl Session {
         self.loaded.as_ref().map(|(_, b)| &b[..])
     }
 
-    /// Copies the 512 bytes at 0000:7C00 to the boot sector of a virtual floppy.
-    pub fn write_boot_sector(&mut self, drive: usize) -> Result<(), String> {
-        let data = self.machine.sys.mem.slice(0x7C00, 512).to_vec();
-        self.floppy_mut(drive)?[..512].copy_from_slice(&data);
-        Ok(())
-    }
-
-    /// Writes `data` to a virtual floppy from cylinder / head / sector (sector numbers start at
-    /// 1; 80 cylinders, 2 heads, 18 sectors). Returns the number of sectors written.
-    pub fn write_floppy(
-        &mut self,
-        drive: usize,
-        cyl: usize,
-        head: usize,
-        sector: usize,
-        data: &[u8],
-    ) -> Result<usize, String> {
-        if cyl >= 80 || head >= 2 || !(1..=18).contains(&sector) {
-            return Err("cylinder 0..79, head 0..1, sector 1..18".into());
-        }
-        let start = ((cyl * 2 + head) * 18 + sector - 1) * 512;
-        if start + data.len() > FLOPPY_SIZE {
-            return Err(format!("{} bytes do not fit on the floppy from this sector", data.len()));
-        }
-        self.floppy_mut(drive)?[start..start + data.len()].copy_from_slice(data);
-        Ok(data.len().div_ceil(512))
-    }
-
     /// Reloads the last program (fresh machine state, same breakpoints).
     pub fn reload(&mut self) -> Result<(), String> {
-        let bps = self.machine.breakpoints.clone();
+        let bps = self.target.breakpoints().clone();
         let (kind, bytes) = self.loaded.clone().ok_or("nothing loaded")?;
         let program = self.program.clone();
         self.load_bytes_with_program(kind, bytes, program)?;
-        self.machine.breakpoints = bps;
+        *self.target.breakpoints_mut() = bps;
         Ok(())
     }
 
     /// Saves the machine together with the program and its debug information.
     pub fn save_state(&self) -> SessionState {
-        SessionState { machine: self.machine.save_state(), program: self.program.clone(), loaded: self.loaded.clone() }
+        SessionState { machine: self.target.save_state(), program: self.program.clone(), loaded: self.loaded.clone() }
     }
 
     /// Returns to a state saved with [`Session::save_state`] (breakpoints are kept).
     pub fn restore_state(&mut self, s: SessionState) {
-        self.machine.restore_state(s.machine);
+        self.target.restore_state(&s.machine);
         self.program = s.program;
         self.loaded = s.loaded;
         self.index_symbols();
@@ -301,7 +168,7 @@ impl Session {
 
     /// "Reset emulator and RAM": a powered-on machine with nothing loaded.
     pub fn unload(&mut self) {
-        self.machine.reset();
+        self.target.reset();
         self.program = None;
         self.loaded = None;
         self.index_symbols();
@@ -310,7 +177,7 @@ impl Session {
 
     /// Physical address of the first byte of the load image.
     pub fn image_base(&self) -> Option<u32> {
-        self.machine.loaded.as_ref().map(|l| l.image_base)
+        self.target.image_base()
     }
 
     fn index_lines(&mut self) {
@@ -365,11 +232,11 @@ impl Session {
 
     fn index_symbols(&mut self) {
         self.symbols_by_addr.clear();
-        let (Some(p), Some(info)) = (&self.program, &self.machine.loaded) else { return };
-        let exe = info.kind == rustemu_core::LoadKind::Exe;
+        let Some(p) = &self.program else { return };
         // Several names at one address: procedures win over labels, labels over variables,
         // global names over macro locals.
         let mut ranks: HashMap<u32, u8> = HashMap::new();
+        let mut names = HashMap::new();
         for s in &p.symbols {
             let rank = match s.kind {
                 SymbolKind::Proc => 3,
@@ -378,15 +245,19 @@ impl Session {
                 _ => continue,
             } * 2
                 + !s.is_macro_local() as u8;
-            let addr = if exe {
-                linear(info.load_segment.wrapping_add(s.segment.unwrap_or(0)), s.value as u16)
-            } else {
-                info.image_base.wrapping_add((s.value as u32).wrapping_sub(p.origin as u32))
-            };
+            let Some(addr) = self.symbol_addr(s) else { return };
             if ranks.get(&addr).is_none_or(|&r| rank > r) {
                 ranks.insert(addr, rank);
-                self.symbols_by_addr.insert(addr, s.name.clone());
+                names.insert(addr, s.name.clone());
             }
+        }
+        self.symbols_by_addr = names;
+    }
+
+    /// Physical address of a program symbol (procedures, labels, variables).
+    pub fn symbol_addr(&self, s: &rustemu_asm::Symbol) -> Option<u32> {
+        match self.target.arch() {
+            Arch::I8086 => self.x86_symbol_addr(s),
         }
     }
 
@@ -410,32 +281,17 @@ impl Session {
         self.line_info_at(addr).map(|l| (l.file, l.line))
     }
 
-    /// Source location of CS:IP. Inside a BIOS/DOS service (e.g. while waiting for a key)
-    /// this is the line of the calling `INT` instruction.
+    /// Source location of the current instruction. Inside the emulator's system code (8086: a
+    /// BIOS/DOS service, e.g. while waiting for a key) this is the line of the calling instruction.
     pub fn current_line(&self) -> Option<(usize, u32)> {
         self.line_at_addr(self.effective_pc())
     }
 
-    /// CS:IP as a physical address, or the address of the calling `INT n` (2 bytes before
-    /// the return address) when execution is inside a ROM service stub.
+    /// Physical address of the current instruction, or of the program instruction that called the
+    /// emulator's system code running now ([`Target::system_caller`]; 8086: the `INT n` of a
+    /// BIOS/DOS service).
     pub fn effective_pc(&self) -> u32 {
-        match self.bios_caller() {
-            Some((cs, ip)) => linear(cs, ip),
-            None => self.machine.cpu.pc(),
-        }
-    }
-
-    /// While CS:IP is in the BIOS/DOS code: CS:IP of the `INT nn` that called it (the return
-    /// address on the stack, less the two bytes of the instruction).
-    pub fn bios_caller(&self) -> Option<(u16, u16)> {
-        let m = &self.machine;
-        if m.cpu.cs() != ROM_SEG {
-            return None;
-        }
-        let (ss, sp) = (m.cpu.sregs[cpu::SS], m.cpu.regs[cpu::SP]);
-        let ip = m.sys.mem.read16(linear(ss, sp));
-        let cs = m.sys.mem.read16(linear(ss, sp.wrapping_add(2)));
-        Some((cs, ip.wrapping_sub(2)))
+        self.target.system_caller().unwrap_or_else(|| self.target.pc())
     }
 
     /// Physical address of the first instruction generated for a source line.
@@ -462,28 +318,15 @@ impl Session {
         out
     }
 
-    /// Segment and offset where a program symbol lives (variables and labels).
-    fn symbol_seg_off(&self, s: &rustemu_asm::Symbol) -> Option<(u16, u16)> {
-        let (p, info) = (self.program.as_ref()?, self.machine.loaded.as_ref()?);
-        if info.kind == rustemu_core::LoadKind::Exe {
-            return Some((info.load_segment.wrapping_add(s.segment.unwrap_or(0)), s.value as u16));
-        }
-        let addr = info.image_base.wrapping_add((s.value as u32).wrapping_sub(p.origin as u32));
-        let base = addr.wrapping_sub(s.value as u16 as u32);
-        if base % 16 == 0 && base < 0x10_0000 {
-            Some(((base >> 4) as u16, s.value as u16))
-        } else {
-            Some(((addr >> 4) as u16, (addr & 15) as u16))
-        }
-    }
-
     /// Resolves a name of the loaded program for debugger expressions (case-insensitive).
     pub fn lookup_symbol(&self, name: &str) -> Option<expr::SymbolRef> {
         let p = self.program.as_ref()?;
         let s = p.symbols.iter().find(|s| s.name.eq_ignore_ascii_case(name))?;
         Some(match s.kind {
             SymbolKind::Variable => {
-                let (seg, off) = self.symbol_seg_off(s)?;
+                let (seg, off) = match self.target.arch() {
+                    Arch::I8086 => self.x86_symbol_seg_off(s)?,
+                };
                 let size = s.size.unwrap_or(1).clamp(1, 8);
                 // NASM: the name is the address, [name] the value.
                 if p.dialect == rustemu_asm::Dialect::Nasm {
@@ -493,7 +336,9 @@ impl Session {
                 }
             }
             SymbolKind::Segment => {
-                let base = self.machine.loaded.as_ref().map_or(0, |l| l.load_segment);
+                let base = match self.target.arch() {
+                    Arch::I8086 => self.x86_load_segment(),
+                };
                 expr::SymbolRef::Value(base as i64 + s.value)
             }
             _ => expr::SymbolRef::Value(s.value),
@@ -502,103 +347,25 @@ impl Session {
 
     /// Compiles a debugger expression against the loaded program's symbols.
     pub fn compile(&self, text: &str) -> Result<expr::Expr, String> {
-        expr::Expr::parse(text, &|n| self.lookup_symbol(n))
+        expr::Expr::parse(text, &|n| self.lookup_symbol(n), &*self.target)
     }
 
-    /// Return addresses on the stack, innermost first (a heuristic walk: a word counts as a return
-    /// address when the bytes before it are a CALL, or an `INT n` for an interrupt frame).
+    /// Return addresses on the stack, innermost first ([`Target::call_stack`]).
     pub fn call_stack(&self) -> Vec<Frame> {
-        let m = &self.machine;
-        let mem = &m.sys.mem;
-        let ss = m.cpu.sregs[cpu::SS];
-        let sp = m.cpu.regs[cpu::SP];
-        let (mut inner_cs, mut inner_ip, sp) = if m.cpu.cs() == ROM_SEG {
-            // Inside a BIOS/DOS service: the INT frame on top is the current position.
-            (mem.read16(linear(ss, sp.wrapping_add(2))), mem.read16(linear(ss, sp)).wrapping_sub(2), sp.wrapping_add(6))
-        } else {
-            (m.cpu.cs(), m.cpu.ip, sp)
-        };
-        let mut out = Vec::new();
-        let mut off = sp;
-        while off < 0xFFFE && out.len() < 64 {
-            let w = mem.read16(linear(ss, off));
-            let b = |cs: u16, ip: u16, back: u16| mem.read8(linear(cs, ip.wrapping_sub(back)));
-            let far_cs = mem.read16(linear(ss, off.wrapping_add(2)));
-            // Near CALL rel16: the target must be at or before the code that runs inside.
-            let frame = if b(inner_cs, w, 3) == 0xE8 && {
-                let target = w.wrapping_add(mem.read16(linear(inner_cs, w.wrapping_sub(2))));
-                target <= inner_ip && inner_ip - target < 0x4000
-            } {
-                let target = w.wrapping_add(mem.read16(linear(inner_cs, w.wrapping_sub(2))));
-                Some((FrameKind::Call, inner_cs, w, 3, Some(linear(inner_cs, target)), 2))
-            } else if b(inner_cs, w, 2) == 0xFF && (b(inner_cs, w, 1) & 0xF8) == 0xD0 {
-                // CALL reg16
-                Some((FrameKind::Call, inner_cs, w, 2, None, 2))
-            } else if off < 0xFFFA
-                && b(far_cs, w, 2) == 0xCD
-                && mem.read16(linear(ss, off.wrapping_add(4))) & 0x0002 != 0
-            {
-                Some((FrameKind::Interrupt(b(far_cs, w, 1)), far_cs, w, 2, None, 6))
-            } else if b(far_cs, w, 5) == 0x9A && mem.read16(linear(far_cs, w.wrapping_sub(2))) == inner_cs {
-                let t = mem.read16(linear(far_cs, w.wrapping_sub(4)));
-                Some((FrameKind::Call, far_cs, w, 5, Some(linear(inner_cs, t)), 4))
-            } else {
-                None
-            };
-            match frame {
-                Some((kind, cs, ret, len, target, size)) => {
-                    out.push(Frame {
-                        kind,
-                        return_addr: linear(cs, ret),
-                        call_addr: linear(cs, ret.wrapping_sub(len)),
-                        target,
-                        stack_offset: off,
-                    });
-                    inner_cs = cs;
-                    inner_ip = ret.wrapping_sub(len);
-                    off = off.wrapping_add(size);
-                }
-                None => off = off.wrapping_add(2),
-            }
-        }
-        out
+        self.target.call_stack()
     }
 
     /// Runs headless until the program ends, blocks for input with no keys queued, or `budget`
     /// instructions are executed.
     pub fn run_headless(&mut self, budget: u64) -> Event {
-        self.machine.run(budget)
+        self.target.run(budget)
     }
-}
-
-/// A return address found on the stack (see [`Session::call_stack`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Frame {
-    /// A CALL or an INT.
-    pub kind: FrameKind,
-    /// Where execution continues after the return.
-    pub return_addr: u32,
-    /// The CALL / INT instruction.
-    pub call_addr: u32,
-    /// The called address when it is known (direct calls).
-    pub target: Option<u32>,
-    /// SP offset of the frame in the stack segment.
-    pub stack_offset: u16,
-}
-
-/// How a [`Frame`] was entered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrameKind {
-    /// A CALL (near or far).
-    Call,
-    /// An INT `n` (its interrupt number).
-    Interrupt(u8),
 }
 
 /// A saved session (see [`Session::save_state`]).
 #[derive(Clone)]
 pub struct SessionState {
-    machine: rustemu_core::MachineState,
+    machine: rustemu_target::State,
     program: Option<Program>,
     loaded: Option<(Loadable, Vec<u8>)>,
 }
@@ -628,29 +395,8 @@ pub struct StepGoal {
     pub depth: i32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Flow {
-    Call,
-    Ret,
-    Other,
-}
-
-/// Classifies the instruction at `pc` (skipping prefixes) and returns its length.
-fn flow_at(m: &Machine, pc: u32) -> (Flow, u32) {
-    let bytes = m.sys.mem.slice(pc, 8);
-    let ins = rustemu_core::disasm::disassemble(bytes, m.cpu.ip);
-    let op = bytes.iter().copied().find(|b| !matches!(b, 0x26 | 0x2E | 0x36 | 0x3E | 0xF0 | 0xF2 | 0xF3)).unwrap_or(0);
-    let modrm_reg = bytes.iter().position(|&b| b == op).and_then(|i| bytes.get(i + 1)).map(|m| (m >> 3) & 7);
-    let flow = match op {
-        0xE8 | 0x9A | 0xCC | 0xCD | 0xCE => Flow::Call,
-        0xFF if matches!(modrm_reg, Some(2) | Some(3)) => Flow::Call,
-        0xC0..=0xC3 | 0xC8..=0xCB | 0xCF => Flow::Ret,
-        _ => Flow::Other,
-    };
-    (flow, ins.len as u32)
-}
-
 impl Session {
+    /// Prepares a source-levelimpl Session {
     /// Prepares a source-level Step Over / Step Out from the current position.
     pub fn step_goal(&self, kind: StepKind, into_macros: bool) -> StepGoal {
         StepGoal { kind, into_macros, start: self.current_view(into_macros), depth: 0 }
@@ -661,23 +407,23 @@ impl Session {
     /// or the event that interrupted execution (input wait, termination, breakpoint, ...).
     pub fn run_step_goal(&mut self, goal: &mut StepGoal, budget: u64) -> Option<Event> {
         for _ in 0..budget {
-            let pc = self.machine.cpu.pc();
-            let (flow, len) = flow_at(&self.machine, pc);
-            let ev = self.machine.step();
+            let pc = self.target.pc();
+            let (flow, len) = self.target.flow_at(pc);
+            let ev = self.target.step();
             if ev != Event::Continue {
                 return Some(ev);
             }
-            let new_pc = self.machine.cpu.pc();
+            let new_pc = self.target.pc();
             match flow {
                 // Entered a subroutine / user interrupt handler (BIOS services complete within the step).
                 Flow::Call if new_pc != pc + len => goal.depth += 1,
-                Flow::Ret => goal.depth -= 1,
+                Flow::Return => goal.depth -= 1,
                 _ => {}
             }
             if goal.depth < 0 {
                 return Some(Event::Continue);
             }
-            if self.machine.breakpoints.contains(&new_pc) {
+            if self.target.breakpoints().contains(&new_pc) {
                 return Some(Event::Breakpoint);
             }
             if goal.depth > 0 {

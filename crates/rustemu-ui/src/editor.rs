@@ -358,14 +358,14 @@ fn value_hover(app: &App, word: &str) -> Option<String> {
         return None;
     }
     let e = app.session.compile(word).ok()?;
-    let v = e.eval(&app.session.machine);
+    let v = e.eval(&*app.session.target);
     let bits = e.bits();
     let hex = format!("{:0w$X}h", v as u64 & ((1u64 << bits) - 1), w = (bits / 4) as usize);
-    let at = e.address(&app.session.machine).map(|a| format!("   at {a:05X}h")).unwrap_or_default();
+    let at = e.address(&*app.session.target).map(|a| format!("   at {a:05X}h")).unwrap_or_default();
     let name = word.to_ascii_uppercase();
     // NASM: a data label is an address; its value is [name].
     if let Some(rustemu_session::expr::SymbolRef::Address { size, .. }) = app.session.lookup_symbol(word) {
-        let m = app.session.compile(&format!("[{word}]")).ok()?.eval(&app.session.machine);
+        let m = app.session.compile(&format!("[{word}]")).ok()?.eval(&*app.session.target);
         let digits = (size.min(4) as usize) * 2;
         return Some(format!("{name} = {v:04X}h (address)   [{name}] = {m:0digits$X}h  ({m})"));
     }

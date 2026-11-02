@@ -72,7 +72,7 @@ fn emulator_ui(app: &mut App, ui: &mut Ui) {
             app.reload();
         }
         if ui
-            .add_enabled(loaded && app.session.machine.history_len() > 0, egui::Button::new("⏮ Step back"))
+            .add_enabled(loaded && app.session.target.history_len() > 0, egui::Button::new("⏮ Step back"))
             .on_hover_text("Undo the last instruction (Shift+F8)")
             .clicked()
         {
@@ -112,8 +112,9 @@ fn emulator_ui(app: &mut App, ui: &mut Ui) {
                 "Deliver IRQ0 18.2 times a second (INT 08h → INT 1Ch). The BIOS tick count advances either way.",
             )
             .changed()
+            && let Some(m) = app.session.x86_mut()
         {
-            app.session.machine.timer_irq = app.settings.timer_irq;
+            m.timer_irq = app.settings.timer_irq;
         }
     });
     ui.separator();
@@ -241,7 +242,7 @@ fn debug_menu(app: &mut App, ui: &mut Ui) {
     let running = app.run != RunMode::Paused;
     let sel = app.selected_addr();
     let at = sel.map_or("(no selection)".to_string(), |a| format!("({a:05X}h)"));
-    let has_bp = sel.is_some_and(|a| app.session.machine.breakpoints.contains(&a));
+    let has_bp = sel.is_some_and(|a| app.session.target.breakpoints().contains(&a));
     if item(ui, loaded, "single step", "F8") {
         app.single_step();
     }
@@ -252,7 +253,7 @@ fn debug_menu(app: &mut App, ui: &mut Ui) {
         app.step_out();
     }
     ui.separator();
-    if item(ui, loaded && app.session.machine.history_len() > 0, "step back", "⇧F8 / F6") {
+    if item(ui, loaded && app.session.target.history_len() > 0, "step back", "⇧F8 / F6") {
         app.step_back();
     }
     ui.separator();
@@ -276,7 +277,7 @@ fn debug_menu(app: &mut App, ui: &mut Ui) {
     if item(ui, has_bp, "clear break point", "") {
         app.toggle_breakpoint_at_addr(sel.unwrap());
     }
-    if item(ui, !app.session.machine.breakpoints.is_empty(), "show current break point", "") {
+    if item(ui, !app.session.target.breakpoints().is_empty(), "show current break point", "") {
         app.show_next_breakpoint();
     }
     ui.separator();
@@ -357,8 +358,9 @@ fn reg_row(ui: &mut Ui, name: &str, v: &mut u16, prev: u16, split: bool) -> bool
 }
 
 fn registers(app: &mut App, ui: &mut Ui) {
-    let prev = app.exec.prev_cpu.clone();
-    let c = &mut app.session.machine.cpu;
+    let Some(m) = app.session.x86_mut() else { return };
+    let prev = app.exec.prev_x86().map_or_else(|| m.cpu.clone(), |p| p.cpu.clone());
+    let c = &mut m.cpu;
     let mut view: Option<&str> = None;
     egui::Grid::new("regs").num_columns(4).spacing([6.0, 2.0]).striped(true).show(ui, |ui| {
         ui.label("");
@@ -418,7 +420,7 @@ fn code_view(app: &mut App, ui: &mut Ui) {
     let row_h = ui.fonts_mut(|f| f.row_height(&font)).max(ui.spacing().interact_size.y) + 1.0;
     // The window has 22 rows; a panel as many as fit above the buttons under the list.
     let rows = if app.panels() { ((ui.available_height() - 64.0) / row_h).clamp(6.0, 80.0) as usize } else { 22 };
-    if let Some(code) = app.session.machine.terminated
+    if let Some(code) = app.session.target.terminated()
         && !app.view.code_view_pinned
     {
         // CS:IP is left in the PSP or the DOS stub: nothing there is the program's code. The
@@ -433,7 +435,7 @@ fn code_view(app: &mut App, ui: &mut Ui) {
         return;
     }
     let start = rustemu_ui::inspect::disasm_start(app, rows);
-    let m = &app.session.machine;
+    let Some(m) = app.session.x86() else { return };
     let pc = m.cpu.pc();
     // Addresses are shown relative to CS, or to the segment of a shown breakpoint.
     let (cs, mut ip) = match app.view.code_selected {
@@ -472,7 +474,7 @@ fn code_view(app: &mut App, ui: &mut Ui) {
                     }
                     shown += 1;
                     let bytes = m.sys.mem.slice(a, 8).to_vec();
-                    let ins = session.code_row(a, ip, show_data);
+                    let ins = session.code_row(a, ip as u32, show_data);
                     let current = a == pc;
                     let bp = m.breakpoints.contains(&a);
                     let marker = if bp { "●" } else { " " };
@@ -532,7 +534,7 @@ fn code_view(app: &mut App, ui: &mut Ui) {
             });
             // A scroll bar over the code segment, as in Emu8086 (the top is offset 0).
             if let Some(off) = offset {
-                let mut top = 0xFFFF - off as u32;
+                let mut top = 0xFFFF - off;
                 ui.spacing_mut().slider_width = rows as f32 * row_h;
                 let r = ui
                     .add(egui::Slider::new(&mut top, 0..=0xFFFF).vertical().show_value(false))
@@ -558,7 +560,7 @@ fn code_view(app: &mut App, ui: &mut Ui) {
         app.scroll_disasm(-wheel_rows as i32);
     }
     if let Some(off) = scroll_to {
-        app.show_disasm_at(off);
+        app.show_disasm_at(off as u32);
     }
     ui.horizontal(|ui| {
         if app.view.code_view_pinned

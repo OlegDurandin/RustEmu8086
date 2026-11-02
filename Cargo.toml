@@ -8,6 +8,7 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
+rustemu-target = { path = "crates/rustemu-target" }
 rustemu-core = { path = "crates/rustemu-core" }
 rustemu-asm = { path = "crates/rustemu-asm" }
 rustemu-session = { path = "crates/rustemu-session" }

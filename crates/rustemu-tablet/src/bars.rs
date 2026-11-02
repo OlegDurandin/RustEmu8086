@@ -264,7 +264,7 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     // Drive C: (its files in the browser, its folder on the desktop) and the floppies, as in the
     // desktop layout.
     ui.menu_button("Virtual drive", |ui| rustemu_ui::drive_ui::virtual_drive_menu(app, ui));
-    let memory_drive = app.session.machine.dos_memory_drive().is_some();
+    let memory_drive = app.session.dos_memory_drive().is_some();
     let w = &mut app.windows;
     if memory_drive {
         ui.checkbox(&mut w[Tool::Drive], "Drive C: files");
@@ -308,10 +308,10 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
 pub(crate) fn status_bar(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.set_min_height(30.0);
-        let m = &app.session.machine;
+        let m = &*app.session.target;
         let (state, color) = if !app.loaded() {
             ("Not loaded", pal::WEAK)
-        } else if m.terminated.is_some() {
+        } else if m.terminated().is_some() {
             ("Terminated", pal::WEAK)
         } else if m.is_waiting_input() {
             ("Waiting for input", pal::AMBER)
@@ -332,14 +332,14 @@ pub(crate) fn status_bar(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
             ui.label(RichText::new("1 MB address space").size(16.0).color(pal::TEXT));
         } else if app.loaded() {
             sep(ui);
-            let c = &m.cpu;
-            ui.label(RichText::new(format!("CS:IP {:04X}:{:04X}", c.cs(), c.ip)).size(16.0).color(pal::TEXT));
+            let at = format!("{} {}", m.pc_name(), m.pc_text());
+            ui.label(RichText::new(at).size(16.0).color(pal::TEXT));
             sep(ui);
-            ui.label(RichText::new(format!("{} instructions", c.instr_count)).size(16.0).color(pal::TEXT));
+            ui.label(RichText::new(format!("{} instructions", m.instr_count())).size(16.0).color(pal::TEXT));
         }
         let status = app.status.clone();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let size = app.session.machine.loaded.as_ref().map_or(0, |l| l.image_len);
+            let size = app.session.x86().and_then(|m| m.loaded.as_ref()).map_or(0, |l| l.image_len);
             badge(ui, &format!("{size:X}h bytes"));
             let speed = t.speed;
             let s = if app.run == RunMode::Paused || speed == 0.0 {

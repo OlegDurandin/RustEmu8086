@@ -2,7 +2,7 @@
 //! `DB`/`DW`/`DD` (`DB 'Hello', 0Dh, 0Ah, '$'`), and runs of zeros outside the code (the memory
 //! after the program) as one `DB n DUP (0)` row.
 
-use rustemu_core::disasm::{disassemble, hex8, hex16};
+use rustemu_core::disasm::{hex8, hex16};
 
 use crate::Session;
 
@@ -23,15 +23,16 @@ const MIN_DUP: usize = 8;
 const ROW_CHARS: usize = 40;
 
 impl Session {
-    /// The disassembly row at `addr`, whose offset is `ip` (for jump targets). With `data`, bytes
+    /// The disassembly row at `addr`, whose offset is `offset` (for jump targets; see
+    /// [`rustemu_target::Target::code_segment`]). With `data`, bytes
     /// the program declared as data are shown as data, and so are runs of zeros outside its code.
     /// The instruction at CS:IP is always decoded as code, even inside data.
-    pub fn code_row(&self, addr: u32, ip: u16, data: bool) -> CodeRow {
-        let pc = self.machine.cpu.pc();
+    pub fn code_row(&self, addr: u32, offset: u32, data: bool) -> CodeRow {
+        let t = &*self.target;
+        let pc = t.pc();
         if data && addr != pc {
             // A data row stops before CS:IP, so that the current instruction gets its own row.
             let limit = if pc > addr { pc - addr } else { u32::MAX };
-            let mem = &self.machine.sys.mem;
             match self.line_info_at(addr) {
                 Some(l) if !l.is_code => {
                     let start = self.image_base().unwrap_or(0) + l.image_offset;
@@ -39,26 +40,27 @@ impl Session {
                     let unit = l.data_size.max(1) as u32;
                     let unit = if (addr - start).is_multiple_of(unit) { unit } else { 1 };
                     if l.data_float && matches!(unit, 4 | 8 | 10) && len >= unit {
-                        let (len, text) = float_text(mem.slice(addr, len as usize), unit as usize);
+                        let (len, text) = float_text(&t.read_bytes(addr, len as usize), unit as usize);
                         return CodeRow { len: len as u32, text, data: true };
                     }
-                    let (len, text) = data_text(mem.slice(addr, len as usize), unit as usize);
+                    let (len, text) = data_text(&t.read_bytes(addr, len as usize), unit as usize);
                     return CodeRow { len: len as u32, text, data: true };
                 }
                 Some(_) => {}
                 None => {
                     // Up to the next line of the program or the end of the segment.
-                    let limit = limit.min(0x10000 - ip as u32);
+                    let (_, last) = t.code_segment();
+                    let limit = limit.min((last - offset.min(last)).saturating_add(1));
                     let limit = self.next_line_addr(addr).map_or(limit, |n| limit.min(n - addr));
-                    let zeros = mem.slice(addr, limit as usize).iter().take_while(|&&b| b == 0).count();
+                    let zeros = zeros_at(t, addr, limit as usize);
                     if zeros >= MIN_DUP {
                         return CodeRow { len: zeros as u32, text: format!("DB {zeros} DUP (0)"), data: true };
                     }
                 }
             }
         }
-        let ins = disassemble(self.machine.sys.mem.slice(addr, 8), ip);
-        CodeRow { len: ins.len as u32, text: ins.text, data: false }
+        let ins = t.disassemble(addr, offset);
+        CodeRow { len: ins.len, text: ins.text, data: false }
     }
 
     /// Address of the first program line that starts after `addr`.
@@ -69,6 +71,22 @@ impl Session {
         let i = self.lines_sorted.partition_point(|&i| p.lines[i].image_offset <= off);
         self.lines_sorted.get(i).map(|&i| base + p.lines[i].image_offset)
     }
+}
+
+/// Number of zero bytes from `addr`, at most `limit` (read in chunks: the run can be a whole segment).
+fn zeros_at(t: &dyn rustemu_target::Target, addr: u32, limit: usize) -> usize {
+    let mut n = 0;
+    while n < limit {
+        let want = (limit - n).min(4096);
+        let chunk = t.read_bytes(addr.wrapping_add(n as u32), want);
+        let z = chunk.iter().take_while(|&&b| b == 0).count();
+        n += z;
+        // A short chunk is the end of memory.
+        if z < want {
+            break;
+        }
+    }
+    n
 }
 
 fn printable(b: u8) -> bool {
