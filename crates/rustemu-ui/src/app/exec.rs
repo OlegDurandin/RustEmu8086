@@ -3,7 +3,39 @@
 use super::*;
 use crate::tools::Tool;
 
+/// The message of a caught panic.
+pub(crate) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown error".into())
+}
+
 impl App {
+    /// Runs `f`; a panic inside it (a bug of the emulator) stops the program with a notice instead
+    /// of closing the application. None after a panic. (In the browser a panic cannot be caught:
+    /// the web page shows it and keeps the text — `rustemu-web`.)
+    pub(crate) fn catching<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> Option<T> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(v) => Some(v),
+            Err(payload) => {
+                let text = panic_text(&*payload);
+                self.run = RunMode::Paused;
+                self.status = format!("Internal error of the emulator: {text}");
+                self.notice(
+                    "Internal error",
+                    &format!(
+                        "The emulator stopped the program because of an error of its own:\n\n{text}\n\n\
+                         The machine may be in a broken state: reload the program (Reload) to go on. \
+                         Please report it with the program that caused it."
+                    ),
+                );
+                None
+            }
+        }
+    }
+
     /// Execution commands run the current build: after a failed build they try to build again
     /// instead of running the old image (it stays loaded for inspection).
     pub(super) fn ensure_current_build(&mut self) -> bool {
@@ -22,7 +54,7 @@ impl App {
         }
         self.run = RunMode::Paused;
         self.begin_exec();
-        let ev = self.session.target.step();
+        let Some(ev) = self.catching(|app| app.session.target.step()) else { return };
         self.handle_event(ev);
     }
 
@@ -30,7 +62,7 @@ impl App {
     pub fn step_back(&mut self) {
         self.run = RunMode::Paused;
         self.begin_exec();
-        if self.session.target.step_back() {
+        if self.catching(|app| app.session.target.step_back()) == Some(true) {
             self.status = "Stepped back".into();
         } else {
             self.status = "No more history".into();
@@ -264,8 +296,12 @@ impl App {
         }
     }
 
-    /// Advances the emulation for this frame.
+    /// Advances the emulation for this frame (a panic of the emulator stops the program).
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.catching(|app| app.tick_inner(ctx));
+    }
+
+    fn tick_inner(&mut self, ctx: &egui::Context) {
         self.handle_uploads(ctx);
         if self.run == RunMode::Paused || !self.loaded() {
             return;
@@ -431,5 +467,30 @@ impl App {
                 bps.insert(addr);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panic of the emulator stops the program with a notice; the application goes on.
+    #[test]
+    fn a_panic_becomes_a_notice() {
+        let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+        app.emulate();
+        app.start_run();
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let r: Option<()> = app.catching(|_| panic!("index out of bounds"));
+        std::panic::set_hook(hook);
+        assert_eq!(r, None);
+        assert_eq!(app.run, RunMode::Paused);
+        let (title, text) = app.dialogs.notice.clone().unwrap();
+        assert_eq!(title, "Internal error");
+        assert!(text.contains("index out of bounds"), "{text}");
+        // And the application still works.
+        app.single_step();
+        assert!(app.session.target.instr_count() > 0);
     }
 }
