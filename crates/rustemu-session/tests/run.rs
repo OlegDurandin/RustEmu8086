@@ -1211,3 +1211,39 @@ again:
     assert_eq!(lines.len(), rustemu_core::log::MAX_ENTRIES + 1);
     assert_eq!(lines[0], format!("({} older messages not kept)", 10_000 - rustemu_core::log::MAX_ENTRIES));
 }
+
+#[test]
+fn history_is_limited_in_bytes() {
+    // Each REP STOSW with CX = FFFFh is one step that writes 128 KB: the history keeps the newest
+    // steps within HISTORY_BYTES instead of 2000 such steps (more than a gigabyte).
+    let src = "org 100h
+    mov ax, 2000h
+    mov es, ax
+    mov si, 300
+again:
+    xor di, di
+    mov cx, 0FFFFh
+    inc ax
+    rep stosw
+    dec si
+    jnz again
+    mov ax, 4C00h
+    int 21h
+";
+    let prog = rustemu_asm::assemble_str(src).unwrap();
+    let mut s = Session::new();
+    s.load_program(prog).unwrap();
+    let (mut s, ev) = finish(s, "");
+    assert_eq!(ev, Event::Terminated(0));
+    let m = s.x86_mut().unwrap();
+    // The byte limit is what stopped it (about 1 MB a REP step: some 60 of them, not 2000 steps).
+    let limit = rustemu_core::machine::HISTORY_BYTES;
+    assert!((limit - (2 << 20)..=limit).contains(&m.history_bytes()), "{} bytes", m.history_bytes());
+    assert!(m.history_len() < 600, "older steps were forgotten: {}", m.history_len());
+    // The newest steps still go back: before the exit, then through the last REP STOSW.
+    let ax_end = m.cpu.regs[0];
+    while m.cpu.regs[0] == ax_end || m.cpu.regs[0] == 0x4C00 {
+        assert!(m.step_back());
+    }
+    assert!(m.history_len() > 10);
+}
