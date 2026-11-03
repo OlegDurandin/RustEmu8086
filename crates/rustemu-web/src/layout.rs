@@ -15,12 +15,21 @@ pub struct WebApp {
     layout: Option<Layout>,
     /// Called with the new layout (`true`: tablet) after a switch, to remember it.
     on_switch: fn(bool),
+    /// The editor text [`CRASH_DRAFT`] was made from.
+    drafted: String,
+}
+
+thread_local! {
+    /// The draft of the editor as stored (key, value), kept up to date while the text changes:
+    /// a panic stops the application where it cannot be reached, and the page's panic hook
+    /// stores this so that nothing typed is lost (`main.rs`).
+    pub static CRASH_DRAFT: std::cell::RefCell<Option<(&'static str, String)>> = const { std::cell::RefCell::new(None) };
 }
 
 impl WebApp {
     pub fn new(mut app: App, tablet: bool, ctx: &egui::Context, on_switch: fn(bool)) -> Self {
         app.front.can_switch_layout = true;
-        WebApp { layout: Some(wrap(app, tablet, ctx)), on_switch }
+        WebApp { layout: Some(wrap(app, tablet, ctx)), on_switch, drafted: String::new() }
     }
 
     pub fn app(&self) -> &App {
@@ -74,6 +83,12 @@ impl eframe::App for WebApp {
         match self.layout.as_mut().expect("layout") {
             Layout::Desktop(d) => d.ui(ui, frame),
             Layout::Tablet(t) => t.ui(ui, frame),
+        }
+        // The copy for a crash, made again only when the text changed.
+        if self.app().doc.text != self.drafted {
+            self.drafted = self.app().doc.text.clone();
+            let record = self.app().draft_record();
+            CRASH_DRAFT.with(|d| *d.borrow_mut() = record);
         }
         if !std::mem::take(&mut self.app_mut().front.switch_layout) {
             return;

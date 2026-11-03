@@ -26,12 +26,37 @@ impl App {
         }
     }
 
+    /// A panic of the assembler (a bug of its own): an error message instead of closing the
+    /// application.
+    fn assembler_panicked<T>(&mut self, payload: &(dyn std::any::Any + Send)) -> Option<T> {
+        self.build.failed = true;
+        self.build.messages.push(Message {
+            text: format!(
+                "internal error of the assembler: {} — please report it with this program",
+                super::exec::panic_text(payload)
+            ),
+            loc: None,
+            span: None,
+            error: true,
+        });
+        self.status = "Assembler error".into();
+        None
+    }
+
     fn assemble(&mut self) -> Option<rustemu_asm::Program> {
         let name = self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
         let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
         self.build.messages.clear();
         self.clear_errors();
-        match rustemu_asm::assemble_dialect(&name, &self.doc.text, &mut loader, self.settings.syntax.dialect()) {
+        let dialect = self.settings.syntax.dialect();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rustemu_asm::assemble_dialect(&name, &self.doc.text, &mut loader, dialect)
+        }));
+        let result = match result {
+            Ok(r) => r,
+            Err(payload) => return self.assembler_panicked(&*payload),
+        };
+        match result {
             Ok(p) => {
                 self.build.messages.push(Message {
                     text: format!(
@@ -122,7 +147,12 @@ impl App {
     fn assemble_mips(&mut self) -> Option<rustemu_mips::asm::Program> {
         self.build.messages.clear();
         self.clear_errors();
-        match rustemu_mips::asm::assemble(&self.doc.text) {
+        let result = std::panic::catch_unwind(|| rustemu_mips::asm::assemble(&self.doc.text));
+        let result = match result {
+            Ok(r) => r,
+            Err(payload) => return self.assembler_panicked(&*payload),
+        };
+        match result {
             Ok(p) => {
                 let words: usize = p.statements.iter().map(|s| s.words.len()).sum();
                 let data: u32 = p.data.iter().map(|d| d.len).sum();
