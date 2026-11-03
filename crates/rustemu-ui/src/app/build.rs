@@ -191,15 +191,20 @@ impl App {
     fn emulate_mips(&mut self) {
         let Some(p) = self.assemble_mips() else { return };
         let same_image = self.session.mips_program.as_ref().is_some_and(|old| old.image == p.image);
+        // The browser: the files of drive C: (DOS's memory drive), copied back as the program
+        // writes them (`sync_mips_files`).
         let storage = match self.vdrive(self.doc.path.as_deref()) {
             Some(root) => rustemu_mips::files::Storage::Host(root),
-            None => match self.session.mips().map(|m| &m.files.storage) {
-                Some(s @ rustemu_mips::files::Storage::Memory(_)) => s.clone(),
-                _ => rustemu_mips::files::Storage::Memory(Default::default()),
-            },
+            None => rustemu_mips::files::Storage::Memory(
+                self.x86_session()
+                    .and_then(|s| s.dos_memory_drive())
+                    .map(|d| d.files().map(|(k, v)| (k.to_string(), v.to_vec())).collect())
+                    .unwrap_or_default(),
+            ),
         };
         if let Some(m) = self.session.mips_mut() {
             m.files.storage = storage;
+            self.web.mips_files_synced = m.files.generation;
         }
         let name = self.file_name();
         if let Err(e) = self.session.load_mips(p, &name) {

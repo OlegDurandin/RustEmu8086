@@ -62,7 +62,7 @@ The source column shows a line at its first instruction; the next ones of the sa
 | registers | in groups, one at a time, with **PC** always under their tabs: **GPR** — all 32 general purpose registers in pairs (`$zero $at`, `$v0 $v1`…; hover a name for its number and use), **Special** — PC, HI, LO, **CP0** — BadVAddr, Status, Cause, EPC (read only; the last exception's code is shown), **FPU** — not emulated yet. Changed ones are red; *HEX / DEC* switches the notation; a click changes a value while the program is paused (`$zero` is always 0) |
 | Run I/O | what the program prints, and a line to type its input: **Enter** (or *send*) gives the line to the program |
 | ALU | the last arithmetic, logic, comparison, shift, multiplication or division instruction: its operands and result (or HI and LO) in hex, binary, unsigned and signed, an overflow; loads, stores, branches and writes to `$zero` (`nop`) are not shown |
-| memory | words, 16 bytes a row; buttons *.text*, *.data*, *heap*, *$gp*, *$sp*, *PC*, *.kdata*; the address field takes hex (`0x10010000`) or an expression (`$sp`, `array + 8`). Addresses outside every segment are shown as `········` — reading them is an error, not a zero |
+| memory | words, 16 bytes a row; buttons *.text*, *.data*, *heap*, *$gp*, *$sp*, *PC*, *.kdata*; the address field takes hex (`0x10010000`) or an expression (`$sp`, `array + 8`). Addresses outside every segment are shown as `········` — reading them is an error, not a zero. While the program is paused a click on a word changes it (hex `0x…` or decimal, Enter) |
 | variables | the data labels, in the size of their data (`.byte` / `.asciiz` — bytes, `.half`, `.word`) |
 | source, listing, symbol table, watch, breakpoints, call stack, stop on condition | as for the 8086; the listing is MARS's text segment: address, code, basic instruction, source |
 
@@ -105,8 +105,8 @@ forces it. See [Command line](Command-line).
 
 - The integer instructions of MARS (77) and its pseudo-instructions, directives `.text .data .ktext .kdata .word
   .half .byte .ascii .asciiz .space .align .extern .globl .eqv .set`, `%hi` / `%lo`.
-- System calls 1, 4, 5, 8–17, 30–36, 40–42: printing, reading, `sbrk`, exit, files (in drive C:'s folder on the Mac,
-  in memory in the browser), time, `sleep`, random numbers.
+- System calls 1, 4, 5, 8–17, 30–36, 40–42: printing, reading, `sbrk`, exit, files (on drive C:, shared with DOS
+  programs: its folder on the Mac, the **drive C:** window in the browser, where they are kept and can be downloaded), time, `sleep`, random numbers.
 - Exceptions (overflow, unaligned access, addresses outside the segments, traps) and a handler at `0x80000180`.
 
 Not yet: floating point (coprocessor 1) and its system calls, dialogs (50–59), macros (`.macro`) and `.include`,

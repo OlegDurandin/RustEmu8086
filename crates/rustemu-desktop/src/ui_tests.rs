@@ -1565,8 +1565,20 @@ fn mips_workspace() {
     h.state_mut().windows[Tool::Memory] = true;
     h.state_mut().view.mem_view_addr = rustemu_mips::memory::DATA_BASE;
     h.run();
-    h.get_by_label_contains("10010000  203d206e");
+    h.get_by_label("10010000  ");
+    h.get_by_label("203d206e ");
     save(&mut h, "43_mips_memory");
+    // A click on a word while paused edits it; Enter writes it.
+    h.get_by_label("203d206e ").click();
+    h.run();
+    assert_eq!(h.state().mips.mem_edit.as_ref().map(|e| e.0), Some(rustemu_mips::memory::DATA_BASE));
+    h.state_mut().mips.mem_edit.as_mut().unwrap().1 = "0x41424344".into();
+    h.run();
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(h.state().mips.mem_edit, None);
+    assert_eq!(h.state().session.mips().unwrap().mem.peek32(rustemu_mips::memory::DATA_BASE), 0x4142_4344);
+    h.get_by_label("41424344 ");
 
     // Back to the 8086: its document and windows are as they were.
     h.state_mut().switch_arch(Arch::I8086);
