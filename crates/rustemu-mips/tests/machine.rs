@@ -192,14 +192,22 @@ fn files_in_the_sandbox() {
     // la (2), li, syscall 4 and the end.
     assert_eq!(m.history_len(), 6);
 
-    // A missing file stops the program, as in MARS.
+    // A missing file: -1 in $v0 and the program goes on, as in MARS (it checks $v0 itself); so do
+    // a read and a write with a descriptor that is not open.
     let mut p = la(A0, DATA_BASE).to_vec();
     p.extend([li(A1, 0)]);
     p.extend(sys(13));
+    p.extend([mv(S0, V0 as u32), li(A0, 7), li(A2, 4)]);
+    p.extend(la(A1, DATA_BASE));
+    p.extend(sys(14));
+    p.extend([mv(S0 + 1, V0 as u32), li(A0, 7)]);
+    p.extend(sys(15));
     let mut m = machine(&p, b"nope\0");
-    let Event::Error(e) = run(&mut m) else { panic!() };
-    assert!(e.ends_with("File nope not found, open for input. (syscall 13)"), "{e}");
-    assert_eq!(m.cpu.regs[V0], u32::MAX);
+    assert_eq!(run(&mut m), Event::Terminated(0));
+    assert_eq!(m.cpu.regs[S0 as usize], u32::MAX, "open");
+    assert_eq!(m.cpu.regs[S0 as usize + 1], u32::MAX, "read");
+    assert_eq!(m.cpu.regs[V0], u32::MAX, "write");
+    assert!(m.file_error.as_deref().is_some_and(|e| e.contains('7')), "{:?}", m.file_error);
 }
 
 #[test]

@@ -441,17 +441,31 @@ fn services_match_mars() {
     p.push(li(4, 1));
     p.extend(sys(41));
     p.extend(sys(1));
+    // File errors: -1 in $v0, the program goes on (a missing file, descriptors not open).
+    p.push(("lui $a0, 0x1001".into(), i(0x0F, 0, 4, 0x1001)));
+    p.push(("ori $a0, $a0, 7".into(), i(0x0D, 4, 4, 7)));
+    p.push(li(5, 0));
+    p.extend(sys(13));
+    p.push(mv(4, 2));
+    p.extend(sys(1));
+    for service in [14, 15] {
+        p.push(li(4, 9));
+        p.push(("lui $a1, 0x1001".into(), i(0x0F, 0, 5, 0x1001)));
+        p.push(li(6, 4));
+        p.extend(sys(service));
+        p.push(mv(4, 2));
+        p.extend(sys(1));
+    }
     p.push(li(4, 7));
     p.extend(sys(17));
     let src = format!(
-        ".data\n.asciiz \" text\\n\"\n.text\n{}",
+        ".data\n.asciiz \" text\\n\"\n.asciiz \"no_such_file\"\n.text\n{}",
         p.iter().map(|(t, _)| format!("    {t}\n")).collect::<String>()
     );
     let words: Vec<u32> = p.iter().map(|&(_, w)| w).collect();
 
     let mut m = rustemu_mips::Machine::new();
-    let mut data = b" text\n\0".to_vec();
-    data.resize(8, 0);
+    let data = b" text\n\0no_such_file\0".to_vec();
     m.load(&rustemu_mips::Image {
         chunks: vec![
             rustemu_mips::Chunk {
