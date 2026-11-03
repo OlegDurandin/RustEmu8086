@@ -212,7 +212,11 @@ impl Target for Machine {
     }
 
     fn output(&self) -> &[u8] {
-        &self.output
+        self.output.bytes()
+    }
+
+    fn output_dropped(&self) -> usize {
+        self.output.dropped()
     }
 
     fn is_waiting_input(&self) -> bool {

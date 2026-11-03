@@ -266,7 +266,7 @@ pub struct MachineState {
     dev: Devices,
     keys: VecDeque<u16>,
     irq: VecDeque<u8>,
-    output: Vec<u8>,
+    output: rustemu_target::OutputBuffer,
     log: crate::log::Log,
     terminated: Option<u8>,
     loaded: Option<LoadInfo>,
@@ -287,8 +287,9 @@ pub struct Machine {
     pub breakpoints: HashSet<u32>,
     /// The loaded program (`None` before a load).
     pub loaded: Option<LoadInfo>,
-    /// Text written by the program to the console (DOS output, BIOS teletype).
-    pub output: Vec<u8>,
+    /// Text written by the program to the console (DOS output, BIOS teletype): the last
+    /// megabyte or so (see [`rustemu_target::OutputBuffer`]).
+    pub output: rustemu_target::OutputBuffer,
     /// Messages for the emulator log (unsupported services and such); repeats are counted and
     /// the log is bounded (see [`crate::log`]).
     pub log: crate::log::Log,
@@ -349,7 +350,7 @@ impl Machine {
             },
             breakpoints: HashSet::new(),
             loaded: None,
-            output: Vec::new(),
+            output: Default::default(),
             log: Default::default(),
             terminated: None,
             history_enabled: true,

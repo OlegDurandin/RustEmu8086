@@ -37,7 +37,7 @@ fn run_example(name: &str, input: &str) -> (String, Event) {
     let mut s = Session::new();
     s.load_path(&examples().join(name)).unwrap();
     let (s, ev) = finish(s, input);
-    (String::from_utf8_lossy(&s.x86().unwrap().output).into_owned(), ev)
+    (String::from_utf8_lossy(s.x86().unwrap().output.bytes()).into_owned(), ev)
 }
 
 #[test]
@@ -498,7 +498,7 @@ fn devices_ports() {
     let src = "org 100h\nmov ax, 0249h\nout 4, ax\nmov al, 'P'\nout 130, al\nmov ax, 1234\nout 199, ax\nret\n";
     let (s, _) = run_src(src, "");
     assert_eq!(s.x86().unwrap().sys.dev.traffic_lights, 0x0249);
-    assert_eq!(s.x86().unwrap().sys.dev.printer, b"P");
+    assert_eq!(s.x86().unwrap().sys.dev.printer.bytes(), b"P");
     assert_eq!(s.x86().unwrap().sys.dev.led, 1234);
 }
 
@@ -679,7 +679,7 @@ end
         assert_eq!(step(&mut s, StepKind::Over, "42\r"), Event::Continue);
         assert_eq!((view(&s).level, view(&s).line), (0, 5));
         assert_eq!(s.x86().unwrap().cpu.regs[1], 42);
-        assert_eq!(String::from_utf8_lossy(&s.x86().unwrap().output), "Number: 42\r");
+        assert_eq!(String::from_utf8_lossy(s.x86().unwrap().output.bytes()), "Number: 42\r");
         // PUSH inside the line being stepped does not confuse step over.
         assert_eq!(step(&mut s, StepKind::Over, ""), Event::Continue);
         assert_eq!(step(&mut s, StepKind::Over, ""), Event::Continue);
@@ -969,7 +969,7 @@ count dw 0
     s.load_program(prog).unwrap();
     assert_eq!(s.current_line(), Some((0, 5)));
     assert_eq!(s.x86_mut().unwrap().run(10_000), Event::Breakpoint);
-    assert_eq!(String::from_utf8_lossy(&s.x86().unwrap().output), "ok\r\nok\r\nok\r\n");
+    assert_eq!(String::from_utf8_lossy(s.x86().unwrap().output.bytes()), "ok\r\nok\r\nok\r\n");
     assert_eq!(s.current_line(), Some((0, 13)));
     // NASM meaning of names in debugger expressions: `count` is the address, `[count]` the word.
     let ev = |e: &str| s.compile(e).map(|x| x.eval(&*s.target));
@@ -987,7 +987,7 @@ fn nasm_examples() {
     let mut s = Session::new();
     s.load_path(&nasm_examples_dir().join("hello_nasm.asm")).unwrap();
     let (s, ev) = finish(s, "");
-    let out = String::from_utf8_lossy(&s.x86().unwrap().output).into_owned();
+    let out = String::from_utf8_lossy(s.x86().unwrap().output.bytes()).into_owned();
     assert_eq!(out, "Hello from NASM!\r\n".repeat(3));
     assert_eq!(ev, Event::Terminated(0));
     let mut s = Session::new();
@@ -1246,4 +1246,32 @@ again:
         assert!(m.step_back());
     }
     assert!(m.history_len() > 10);
+}
+
+#[test]
+fn output_and_paper_stay_bounded() {
+    // Printing forever to the console and the printer: only the last megabyte or so is kept,
+    // while the length still counts everything (for step back and the command line).
+    let src = "org 100h
+again:
+    mov ah, 2
+    mov dl, 'x'
+    int 21h
+    mov al, 'p'
+    out 130, al
+    jmp again
+";
+    let prog = rustemu_asm::assemble_str(src).unwrap();
+    let mut s = Session::new();
+    s.load_program(prog).unwrap();
+    s.target.set_history(false);
+    let m = s.x86_mut().unwrap();
+    m.run(15_000_000);
+    let limit = rustemu_target::OUTPUT_LIMIT;
+    for (name, buf) in [("output", &m.output), ("printer", &m.sys.dev.printer)] {
+        assert!(buf.len() > 2 * limit, "{name}: {} written", buf.len());
+        assert!(buf.bytes().len() <= limit + limit / 4, "{name}: {} kept", buf.bytes().len());
+        assert_eq!(buf.dropped() + buf.bytes().len(), buf.len(), "{name}");
+    }
+    assert_eq!(s.target.output_dropped(), s.x86().unwrap().output.dropped());
 }

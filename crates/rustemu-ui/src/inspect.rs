@@ -348,29 +348,47 @@ pub(crate) fn listing_ui(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// The end of the console output a window lays out each frame (the machine keeps about 1 MB).
+pub const OUTPUT_SHOWN: usize = 64 * 1024;
+
+/// The last [`OUTPUT_SHOWN`] bytes of `bytes`, and whether earlier ones are not shown (also those
+/// the machine no longer keeps: `dropped`).
+pub fn output_tail(bytes: &[u8], dropped: usize) -> (&[u8], bool) {
+    let start = bytes.len().saturating_sub(OUTPUT_SHOWN);
+    (&bytes[start..], start > 0 || dropped > 0)
+}
+
 pub(crate) fn log_ui(app: &mut App, ui: &mut Ui) {
     let t = &*app.session.target;
     let log: Vec<String> = app.session.x86().map(|m| m.log.lines().collect()).unwrap_or_default();
     ui.label(RichText::new("console output").strong());
     egui::ScrollArea::vertical().id_salt("out").max_height(160.0).stick_to_bottom(true).show(ui, |ui| {
-        let text: String = t
-            .output()
-            .iter()
-            .filter(|&&b| b != b'\r')
-            .map(|&b| if b == b'\n' { '\n' } else { cp437_to_char(b) })
-            .collect();
+        let (tail, cut) = output_tail(t.output(), t.output_dropped());
+        if cut {
+            ui.weak("(earlier output not shown)");
+        }
+        let text: String =
+            tail.iter().filter(|&&b| b != b'\r').map(|&b| if b == b'\n' { '\n' } else { cp437_to_char(b) }).collect();
         ui.label(RichText::new(text).monospace());
     });
     ui.separator();
     ui.label(RichText::new("emulator messages").strong());
-    egui::ScrollArea::vertical().id_salt("log").max_height(120.0).stick_to_bottom(true).show(ui, |ui| {
-        if log.is_empty() {
-            ui.weak("(none)");
-        }
-        for l in &log {
-            ui.label(RichText::new(l).monospace().color(crate::colors::warn(ui)));
-        }
-    });
+    if log.is_empty() {
+        ui.weak("(none)");
+        return;
+    }
+    // Only the rows in view are laid out (the log keeps up to 1000 messages).
+    let row = ui.text_style_height(&egui::TextStyle::Monospace);
+    egui::ScrollArea::vertical().id_salt("log").max_height(120.0).stick_to_bottom(true).show_rows(
+        ui,
+        row,
+        log.len(),
+        |ui, rows| {
+            for l in &log[rows] {
+                ui.label(RichText::new(l).monospace().color(crate::colors::warn(ui)));
+            }
+        },
+    );
 }
 
 /// Near target offset of a disassembled `CALL`/`JMP`/`Jcc`/`LOOP`/`JCXZ` (`"CALL 0150h"` -> 0x150).
