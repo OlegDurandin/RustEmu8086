@@ -285,7 +285,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             print!("{}", m.screen_text().trim_end_matches('\n'));
             println!();
         }
-        for l in &m.log {
+        for l in m.log.lines() {
             eprintln!("[log] {l}");
         }
         if !m.sys.dev.printer.is_empty() {
