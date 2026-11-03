@@ -24,6 +24,10 @@ const INT08_OFF: u16 = 0xE000;
 /// Segment where programs are loaded (PSP for COM/EXE).
 pub const PROGRAM_SEG: u16 = 0x0700;
 const HISTORY_DEPTH: usize = 2000;
+/// Bytes of journals (memory and floppy) the step-back history keeps at most: one `REP STOSW`
+/// with CX = FFFFh is a single step that journals 128 K writes (about 1 MB), so a limit in steps
+/// alone could hold more than a gigabyte. Older steps are forgotten first.
+pub const HISTORY_BYTES: usize = 64 << 20;
 
 /// Everything on the bus except the CPU.
 pub struct System {
@@ -196,6 +200,48 @@ struct Snapshot {
     system: Option<Box<SystemSnapshot>>,
 }
 
+impl Snapshot {
+    /// Bytes its journals take (what [`HISTORY_BYTES`] limits).
+    fn journal_bytes(&self) -> usize {
+        self.undo.len() * std::mem::size_of::<(u32, u8)>()
+            + self.system.as_ref().map_or(0, |s| s.floppy_undo.len() * std::mem::size_of::<(u8, usize, u8)>())
+    }
+}
+
+/// The step-back history: at most [`HISTORY_DEPTH`] steps and [`HISTORY_BYTES`] of journals.
+#[derive(Default)]
+struct History {
+    steps: VecDeque<Snapshot>,
+    /// Journal bytes of `steps`.
+    bytes: usize,
+}
+
+impl History {
+    fn push(&mut self, s: Snapshot) {
+        self.bytes += s.journal_bytes();
+        self.steps.push_back(s);
+        while self.steps.len() > HISTORY_DEPTH || (self.bytes > HISTORY_BYTES && self.steps.len() > 1) {
+            let Some(old) = self.steps.pop_front() else { break };
+            self.bytes -= old.journal_bytes();
+        }
+    }
+
+    fn pop_back(&mut self) -> Option<Snapshot> {
+        let s = self.steps.pop_back()?;
+        self.bytes -= s.journal_bytes();
+        Some(s)
+    }
+
+    fn clear(&mut self) {
+        self.steps.clear();
+        self.bytes = 0;
+    }
+
+    fn len(&self) -> usize {
+        self.steps.len()
+    }
+}
+
 /// Devices, DOS, keyboard/IRQ queues, mouse and floppy before a step that can change them.
 struct SystemSnapshot {
     keys: VecDeque<u16>,
@@ -250,7 +296,7 @@ pub struct Machine {
     pub terminated: Option<u8>,
     /// Record history for step-back.
     pub history_enabled: bool,
-    history: VecDeque<Snapshot>,
+    history: History,
     history_barrier: bool,
     /// Bytes overwritten on the floppies during a step: (drive, offset, old value).
     pub(crate) floppy_journal: Option<Vec<(u8, usize, u8)>>,
@@ -307,7 +353,7 @@ impl Machine {
             log: Default::default(),
             terminated: None,
             history_enabled: true,
-            history: VecDeque::new(),
+            history: History::default(),
             history_barrier: false,
             floppy_journal: None,
             dos: DosState::default(),
@@ -742,10 +788,7 @@ impl Machine {
                 && self.terminated == snap_terminated
                 && snap_system.as_ref().is_none_or(|s| self.system_unchanged(s));
             if !idle {
-                if self.history.len() >= HISTORY_DEPTH {
-                    self.history.pop_front();
-                }
-                self.history.push_back(Snapshot {
+                self.history.push(Snapshot {
                     cpu: snap_cpu,
                     undo,
                     output_len: out_len,
@@ -906,16 +949,21 @@ impl Machine {
         self.history.len()
     }
 
+    /// Bytes of journals the step-back history holds (at most [`HISTORY_BYTES`]).
+    pub fn history_bytes(&self) -> usize {
+        self.history.bytes
+    }
+
     /// CPU state before each recorded step, oldest first (the step-back history; the execution
     /// trace of the GUI).
     pub fn history_cpus(&self) -> impl DoubleEndedIterator<Item = &Cpu> + ExactSizeIterator {
-        self.history.iter().map(|s| &s.cpu)
+        self.history.steps.iter().map(|s| &s.cpu)
     }
 
     /// The last recorded step: the CPU before it and the memory it wrote, as (address, byte
     /// before) in the order written (an address can repeat; its first entry is the old value).
     pub fn last_step(&self) -> Option<(&Cpu, &[(u32, u8)])> {
-        self.history.back().map(|s| (&s.cpu, s.undo.as_slice()))
+        self.history.steps.back().map(|s| (&s.cpu, s.undo.as_slice()))
     }
 
     /// Forgets the step-back history.
