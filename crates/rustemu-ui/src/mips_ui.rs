@@ -735,22 +735,7 @@ pub fn last_step(app: &App) -> Option<MipsStep> {
 /// source line it came from (MARS's text segment window), then the data lines.
 pub fn listing_text(app: &App) -> Option<String> {
     let prog = app.session.mips_program.as_ref()?;
-    let lines = &app.program.files.first()?.1;
-    let src = |l: usize| lines.get(l.wrapping_sub(1)).map_or("", |s| s.trim_end());
-    let mut out = String::from("address    code       basic                      source\n");
-    for s in &prog.statements {
-        for (k, (w, b)) in s.words.iter().zip(&s.basic).enumerate() {
-            let source = if k == 0 { format!("{:>4}: {}", s.line, src(s.line)) } else { String::new() };
-            out += &format!("{:08x}   {w:08x}   {b:<26} {source}\n", s.addr + 4 * k as u32);
-        }
-    }
-    if !prog.data.is_empty() {
-        out += "\ndata\n";
-        for d in prog.data.iter().filter(|d| d.len > 0) {
-            out += &format!("{:08x}   {:>5} bytes  {:>4}: {}\n", d.addr, d.len, d.line, src(d.line));
-        }
-    }
-    Some(out)
+    Some(prog.listing(app.program.text.as_deref()?))
 }
 
 #[cfg(test)]

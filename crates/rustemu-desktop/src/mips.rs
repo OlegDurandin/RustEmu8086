@@ -14,6 +14,18 @@ pub(crate) fn emulator_ui(app: &mut App, ui: &mut Ui) {
         ui.menu_button("debug", |ui| debug_menu(app, ui));
         ui.menu_button("view", |ui| view_menu(app, ui));
         ui.menu_button("help", |ui| {
+            use rustemu_ui::reference_ui::Tab;
+            for (tab, label) in [
+                (Tab::Instructions, "instructions"),
+                (Tab::Syscalls, "system calls"),
+                (Tab::Registers, "registers and memory"),
+            ] {
+                if item(ui, true, label, "") {
+                    app.reference.mips = true;
+                    app.reference.show_tab(tab);
+                }
+            }
+            ui.separator();
             if item(ui, true, "about…", "") {
                 app.windows[Tool::About] = true;
             }

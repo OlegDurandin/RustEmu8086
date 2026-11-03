@@ -162,6 +162,15 @@ pub fn highlight(text: &str, font: FontId, pal: &Palette) -> LayoutJob {
     job
 }
 
+/// Builds a coloured layout for MIPS `text` (MARS syntax).
+pub fn highlight_mips(text: &str, font: FontId, pal: &Palette) -> LayoutJob {
+    let mut job = LayoutJob::default();
+    for line in text.split_inclusive('\n') {
+        append_line(&mut job, line, &mips_line_spans(line), &font, pal);
+    }
+    job
+}
+
 /// Highlighting of the editor, kept between frames: unchanged text reuses the last layout, an
 /// edit highlights only the lines that were not there before.
 #[derive(Default)]
