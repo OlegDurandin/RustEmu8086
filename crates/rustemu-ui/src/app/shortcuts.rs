@@ -6,13 +6,14 @@ use crate::tools::Tool;
 impl App {
     /// F1: opens the reference at the instruction / directive / interrupt under the text cursor.
     pub fn help_at_cursor(&mut self) {
-        // The reference describes the 8086.
-        if self.session.mips().is_some() {
-            return;
-        }
-        match crate::reference::topic_at_cursor(&self.doc.text, self.editor.selection.0) {
+        let mips = self.session.mips().is_some();
+        let at = if mips { crate::reference::mips_topic_at_cursor } else { crate::reference::topic_at_cursor };
+        match at(&self.doc.text, self.editor.selection.0) {
             Some(t) => self.reference.show(t),
-            None => self.windows[Tool::Reference] = true,
+            None => {
+                self.reference.mips = mips;
+                self.windows[Tool::Reference] = true;
+            }
         }
     }
 

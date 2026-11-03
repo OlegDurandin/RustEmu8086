@@ -79,6 +79,28 @@ instruction and the registers and bytes it changed; the code; the registers; wat
 **Memory** (the memory and the variables). The output card shows **Run I/O** with its input line; the PC keyboard
 is not used by MIPS programs.
 
+## Reference
+
+**Help** (or the *help* button, F1) opens the MIPS32 reference; the switch at its top shows the 8086's or the MIPS
+one, and *EN / RU* the language:
+
+- **instructions** — every machine instruction and pseudo-instruction MARS accepts, by group, in articles for a
+  family (`lb / lbu`, `blt / ble / bgt / bge…`): what it does, its exceptions, an example; and its **forms** as
+  MARS's table writes them, each pseudo-instruction with the machine instructions it becomes
+  (`li $t1,100000 → lui $at, 0x1; ori $t1, $at, 0x86a0`);
+- **system calls** — every `syscall` service of MARS by number: arguments, results, notes, an example; the ones not
+  supported yet are grey;
+- **directives** — `.text`, `.data`, `.word`, `.asciiz`, `.align`, `.eqv`…;
+- **registers & memory** — the 32 registers with their numbers and conventions, PC / HI / LO, MARS's memory map.
+
+In the editor, hovering over an instruction, a directive or a `syscall` shows a summary (the service of a
+`syscall` is taken from the `li $v0, n` before it); F1 or ⌘-click opens the article.
+
+## Command line
+
+`rustemu asm / run / disasm` work with MIPS programs too: `.s` files and MIPS sources are recognized, `--arch mips`
+forces it. See [Command line](Command-line).
+
 ## What is supported
 
 - The integer instructions of MARS (77) and its pseudo-instructions, directives `.text .data .ktext .kdata .word
@@ -88,4 +110,4 @@ is not used by MIPS programs.
 - Exceptions (overflow, unaligned access, addresses outside the segments, traps) and a handler at `0x80000180`.
 
 Not yet: floating point (coprocessor 1) and its system calls, dialogs (50–59), macros (`.macro`) and `.include`,
-MARS's memory-mapped devices, a MIPS reference (Help → *MARS documentation* opens MARS's page).
+MARS's memory-mapped devices.
