@@ -16,10 +16,14 @@
 //! Anything else is "address out of range". The loader and the debugger use the raw accessors
 //! ([`Memory::peek8`], [`Memory::load`]), which reach every address.
 
-use std::collections::HashMap;
-
 /// Bytes per page.
 pub const PAGE_SIZE: usize = 4096;
+/// Pages in a block of the page directory (a block covers 4 MB, the size of a segment).
+const BLOCK_PAGES: usize = 1024;
+
+type Page = [u8; PAGE_SIZE];
+/// 1024 pages: 4 MB of the address space.
+type Block = [Option<Box<Page>>; BLOCK_PAGES];
 /// Size MARS gives each segment (its block tables hold 4 MB).
 const SEGMENT_SIZE: u32 = 4 * 1024 * 1024;
 
@@ -128,8 +132,11 @@ pub fn hex(v: u32) -> String {
 /// The memory of the machine.
 #[derive(Clone, Default)]
 pub struct Memory {
-    /// Pages that were written, by page number (address / [`PAGE_SIZE`]); the rest reads as 0.
-    pages: HashMap<u32, Box<[u8; PAGE_SIZE]>>,
+    /// Pages that were written, in a two-level directory: block = address bits 22..31, page in
+    /// the block = bits 12..21 (two index operations per access, no hashing); the rest reads as 0.
+    blocks: Vec<Option<Box<Block>>>,
+    /// Number of pages allocated.
+    pages: usize,
     /// While executing: `(address, old value)` of every byte a store changed.
     journal: Option<Vec<(u32, u8)>>,
     /// Address ranges `[start, end)` that hold loaded code (fetching elsewhere in a code segment
@@ -142,7 +149,7 @@ pub struct Memory {
 
 impl std::fmt::Debug for Memory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Memory").field("pages", &self.pages.len()).field("code", &self.code).finish()
+        f.debug_struct("Memory").field("pages", &self.pages).field("code", &self.code).finish()
     }
 }
 
@@ -154,13 +161,27 @@ impl Memory {
 
     // ---- raw access (loader, debugger) ----
 
+    /// The page holding `addr`, if it was written.
+    #[inline]
+    fn page(&self, addr: u32) -> Option<&Page> {
+        let block = self.blocks.get((addr >> 22) as usize)?.as_deref()?;
+        block[(addr >> 12) as usize & (BLOCK_PAGES - 1)].as_deref()
+    }
+
     /// The byte at `addr`, whatever the segment (unwritten memory is 0).
+    #[inline]
     pub fn peek8(&self, addr: u32) -> u8 {
-        self.pages.get(&(addr / PAGE_SIZE as u32)).map_or(0, |p| p[addr as usize % PAGE_SIZE])
+        self.page(addr).map_or(0, |p| p[addr as usize % PAGE_SIZE])
     }
 
     /// The little-endian word at `addr`, whatever the segment.
+    #[inline]
     pub fn peek32(&self, addr: u32) -> u32 {
+        let at = addr as usize % PAGE_SIZE;
+        if at <= PAGE_SIZE - 4 {
+            // Within one page (always so for an aligned word).
+            return self.page(addr).map_or(0, |p| u32::from_le_bytes(p[at..at + 4].try_into().unwrap()));
+        }
         u32::from_le_bytes(std::array::from_fn(|i| self.peek8(addr.wrapping_add(i as u32))))
     }
 
@@ -193,7 +214,8 @@ impl Memory {
 
     /// Forgets all contents and code (a fresh machine).
     pub fn clear(&mut self) {
-        self.pages.clear();
+        self.blocks.clear();
+        self.pages = 0;
         self.code.clear();
         if let Some(j) = &mut self.journal {
             j.clear();
@@ -202,11 +224,25 @@ impl Memory {
 
     /// Number of pages in use (each [`PAGE_SIZE`] bytes).
     pub fn pages_in_use(&self) -> usize {
-        self.pages.len()
+        self.pages
     }
 
-    fn page_mut(&mut self, addr: u32) -> &mut [u8; PAGE_SIZE] {
-        self.pages.entry(addr / PAGE_SIZE as u32).or_insert_with(|| Box::new([0; PAGE_SIZE]))
+    /// The page holding `addr`, allocated (zeroed) on the first write.
+    #[inline]
+    fn page_mut(&mut self, addr: u32) -> &mut Page {
+        let b = (addr >> 22) as usize;
+        if self.blocks.len() <= b {
+            self.blocks.resize_with(b + 1, || None);
+        }
+        let block = self.blocks[b].get_or_insert_with(|| {
+            // Built on the heap: a block of 1024 pointers is 8 KB.
+            vec![None; BLOCK_PAGES].into_boxed_slice().try_into().unwrap()
+        });
+        let slot = &mut block[(addr >> 12) as usize & (BLOCK_PAGES - 1)];
+        if slot.is_none() {
+            self.pages += 1;
+        }
+        slot.get_or_insert_with(|| Box::new([0; PAGE_SIZE]))
     }
 
     // ---- the journal ----
@@ -228,6 +264,21 @@ impl Memory {
     /// Takes the recorded `(address, old value)` pairs, leaving the journal empty.
     pub fn take_journal(&mut self) -> Vec<(u32, u8)> {
         self.journal.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    /// Moves the recorded `(address, old value)` pairs to the end of `history` (the journal
+    /// keeps its buffer: no allocation per step); returns their number.
+    pub fn drain_journal_into(&mut self, history: &mut std::collections::VecDeque<(u32, u8)>) -> usize {
+        let Some(j) = &mut self.journal else { return 0 };
+        let n = j.len();
+        history.extend(j.drain(..));
+        n
+    }
+
+    /// Puts back one byte recorded in a journal.
+    #[inline]
+    pub fn restore(&mut self, addr: u32, value: u8) {
+        self.page_mut(addr)[addr as usize % PAGE_SIZE] = value;
     }
 
     /// Restores bytes recorded in a journal (in reverse order).
@@ -263,21 +314,29 @@ impl Memory {
         }
     }
 
+    /// `len` (1, 2 or 4) bytes at an address aligned to `len`: within one page.
+    #[inline]
     fn read(&self, addr: u32, len: u32) -> u32 {
-        (0..len).rev().fold(0, |v, i| (v << 8) | self.peek8(addr.wrapping_add(i)) as u32)
+        let at = addr as usize % PAGE_SIZE;
+        self.page(addr).map_or(0, |p| p[at..at + len as usize].iter().rev().fold(0, |v, &b| (v << 8) | b as u32))
     }
 
+    /// Writes `len` (1, 2 or 4) bytes at an address aligned to `len` (within one page), recording
+    /// the old bytes in the journal.
+    #[inline]
     fn write(&mut self, addr: u32, len: u32, value: u32) {
-        for i in 0..len {
-            let a = addr.wrapping_add(i);
-            let b = (value >> (8 * i)) as u8;
-            let page = self.pages.entry(a / PAGE_SIZE as u32).or_insert_with(|| Box::new([0; PAGE_SIZE]));
-            let cell = &mut page[a as usize % PAGE_SIZE];
-            if let Some(j) = &mut self.journal {
-                j.push((a, *cell));
+        let at = addr as usize % PAGE_SIZE;
+        // (The journal is a separate field: borrowed beside the page.)
+        let mut journal = self.journal.take();
+        let page = self.page_mut(addr);
+        for i in 0..len as usize {
+            let cell = &mut page[at + i];
+            if let Some(j) = &mut journal {
+                j.push((addr + i as u32, *cell));
             }
-            *cell = b;
+            *cell = (value >> (8 * i)) as u8;
         }
+        self.journal = journal;
     }
 
     /// A byte the program loads (`lb`, `lbu`, and each byte of `lwl` / `lwr`).
