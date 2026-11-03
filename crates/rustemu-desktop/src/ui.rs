@@ -422,7 +422,13 @@ fn status_bar(app: &mut App, ui: &mut Ui) {
 fn messages(app: &mut App, ui: &mut Ui) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
         if app.build.messages.is_empty() {
-            ui.weak("Press “emulate” (F9) to assemble and run the program, or “compile” (⌘B) to build an executable.");
+            ui.weak(match app.arch() {
+                Arch::I8086 => {
+                    "Press “emulate” (F9) to assemble and run the program, or “compile” (⌘B) to build an executable."
+                }
+                // MIPS programs have no executable file, as in MARS: compile only checks them.
+                Arch::Mips32 => "Press “emulate” (F9) to assemble and run the program, or “compile” (⌘B) to check it.",
+            });
         }
         let mut jump = None;
         for (i, m) in app.build.messages.iter().enumerate() {

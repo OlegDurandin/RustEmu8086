@@ -56,6 +56,7 @@ impl App {
         self.begin_exec();
         let Some(ev) = self.catching(|app| app.session.target.step()) else { return };
         self.handle_event(ev);
+        self.sync_mips_files();
     }
 
     /// Undoes the last instruction (up to the depth of the step-back history).
@@ -299,6 +300,24 @@ impl App {
     /// Advances the emulation for this frame (a panic of the emulator stops the program).
     pub fn tick(&mut self, ctx: &egui::Context) {
         self.catching(|app| app.tick_inner(ctx));
+        self.sync_mips_files();
+    }
+
+    /// The browser: copies the files a MIPS program wrote to drive C: (DOS's memory drive, kept
+    /// in the browser and shown in the "drive C:" window), when they changed.
+    pub(crate) fn sync_mips_files(&mut self) {
+        let Some(m) = self.session.mips() else { return };
+        let rustemu_mips::files::Storage::Memory(files) = &m.files.storage else { return };
+        if m.files.generation == self.web.mips_files_synced {
+            return;
+        }
+        self.web.mips_files_synced = m.files.generation;
+        let files: Vec<(String, Vec<u8>)> = files.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let Some(drive) = self.x86_session_mut().and_then(|s| s.dos_memory_drive_mut()) else { return };
+        let errors: Vec<String> = files.into_iter().filter_map(|(name, data)| drive.write(&name, data).err()).collect();
+        if let Some(e) = errors.first() {
+            self.notice("Drive C:", &format!("A file of the MIPS program could not be kept on drive C:\n\n{e}"));
+        }
     }
 
     fn tick_inner(&mut self, ctx: &egui::Context) {
@@ -473,6 +492,52 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// In the browser MIPS programs see drive C: (DOS's memory drive): they read its files, in
+    /// any case of their names, and what they write is kept there.
+    #[test]
+    fn mips_files_are_on_drive_c_in_the_browser() {
+        let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+        app.front.browser = true;
+        let mut drive = rustemu_core::memdrive::MemDrive::new();
+        drive.write("in.txt", b"abc".to_vec()).unwrap();
+        app.session.set_dos_memory_drive(drive);
+        app.switch_arch(rustemu_session::Arch::Mips32);
+        app.doc.text = ".data
+inn: .asciiz \"in.txt\"
+out: .asciiz \"out.txt\"
+buf: .space 8
+.text
+la $a0, inn
+li $a1, 0
+li $v0, 13
+syscall
+move $a0, $v0
+la $a1, buf
+li $a2, 8
+li $v0, 14
+syscall
+move $a2, $v0
+la $a0, out
+li $a1, 1
+li $v0, 13
+syscall
+move $a0, $v0
+la $a1, buf
+li $v0, 15
+syscall
+li $v0, 16
+syscall
+"
+        .into();
+        app.emulate();
+        assert!(app.loaded(), "{:?}", app.build.messages.iter().map(|m| &m.text).collect::<Vec<_>>());
+        while app.session.target.terminated().is_none() {
+            app.single_step();
+        }
+        let drive = app.x86_session().and_then(|s| s.dos_memory_drive()).unwrap();
+        assert_eq!(drive.read("OUT.TXT"), Some(&b"abc"[..]));
+    }
 
     /// A panic of the emulator stops the program with a notice; the application goes on.
     #[test]

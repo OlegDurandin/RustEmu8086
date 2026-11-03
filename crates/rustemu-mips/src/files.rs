@@ -53,12 +53,15 @@ pub struct Files {
     open: Vec<Option<(String, u32, Handle)>>,
     /// Bytes written in this run (see [`WRITE_QUOTA`]).
     written: u64,
+    /// Grows when a file in memory is created or written: the interface copies the files to the
+    /// browser's drive C: when it changes.
+    pub generation: u64,
 }
 
 impl Files {
     /// No open files.
     pub fn new(storage: Storage) -> Files {
-        Files { storage, open: (0..MAX_FILES).map(|_| None).collect(), written: 0 }
+        Files { storage, open: (0..MAX_FILES).map(|_| None).collect(), written: 0, generation: 0 }
     }
 
     /// Closes every file (a new run).
@@ -123,6 +126,8 @@ impl Files {
             }
             Storage::Memory(files) => {
                 let key = Self::memory_name(name).ok_or_else(|| not_found(if reading { "input" } else { "output" }))?;
+                // Names in any case, as on drive C: (whose files are shared with DOS programs).
+                let key = files.keys().find(|k| k.eq_ignore_ascii_case(&key)).cloned().unwrap_or(key);
                 if reading {
                     if !files.contains_key(&key) {
                         return Err(not_found("input"));
@@ -133,6 +138,7 @@ impl Files {
                     if flags & O_APPEND == 0 {
                         f.clear();
                     }
+                    self.generation += 1;
                     Handle::MemWrite { name: key }
                 }
             }
@@ -197,6 +203,7 @@ impl Files {
             Handle::MemWrite { name } => {
                 let Storage::Memory(files) = &mut self.storage else { return Err(not_open()) };
                 files.entry(name.clone()).or_default().extend_from_slice(data);
+                self.generation += 1;
             }
             Handle::MemRead { .. } => return Err(not_open()),
         }
