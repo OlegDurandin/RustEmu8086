@@ -88,7 +88,7 @@ impl Expr {
         if tokens.is_empty() {
             return Err("empty expression".into());
         }
-        let mut p = Parser { t: &tokens, pos: 0, lookup, target };
+        let mut p = Parser { t: &tokens, pos: 0, lookup, target, depth: 0, operands: 0 };
         let node = p.binary(0)?;
         if p.pos < tokens.len() {
             return Err(format!("unexpected '{}'", tokens[p.pos].text()));
@@ -272,6 +272,10 @@ struct Parser<'a> {
     pos: usize,
     lookup: &'a dyn Fn(&str) -> Option<SymbolRef>,
     target: &'a dyn Target,
+    /// Nesting now (parentheses, brackets, unary operators).
+    depth: u32,
+    /// Operands parsed.
+    operands: u32,
 }
 
 /// Binary operators from the lowest precedence level up.
@@ -341,7 +345,24 @@ impl Parser<'_> {
         Ok(left)
     }
 
+    /// An operand: limited in nesting and number, as the assembler's (a deep expression would
+    /// overflow the stack when it is parsed, evaluated or dropped).
     fn unary(&mut self) -> Result<Node, String> {
+        use rustemu_asm::expr::{MAX_NESTING, MAX_OPERANDS};
+        self.operands += 1;
+        if self.operands > MAX_OPERANDS {
+            return Err(format!("the expression is too long (more than {MAX_OPERANDS} operands)"));
+        }
+        if self.depth >= MAX_NESTING {
+            return Err(format!("the expression is nested too deeply (more than {MAX_NESTING} levels)"));
+        }
+        self.depth += 1;
+        let r = self.unary_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn unary_inner(&mut self) -> Result<Node, String> {
         for (tok, op) in [("-", '-'), ("~", '~'), ("NOT", '~'), ("!", '!')] {
             if self.eat(tok) {
                 return Ok(Node::Unary(op, Box::new(self.unary()?)));
@@ -495,6 +516,16 @@ mod tests {
         };
         let m = machine();
         Expr::parse(text, &lookup, &m).map(|e| e.eval(&m))
+    }
+
+    /// A deep or long watch expression is an error, not a stack overflow (TODO item 7).
+    #[test]
+    fn deep_expressions_are_errors() {
+        let deep = format!("{}1{}", "(".repeat(20_000), ")".repeat(20_000));
+        assert!(ev(&deep).unwrap_err().contains("nested too deeply"));
+        assert!(ev(&"-".repeat(20_000)).unwrap_err().contains("nested too deeply"));
+        assert!(ev(&format!("1{}", "+1".repeat(200_000))).unwrap_err().contains("too long"));
+        assert_eq!(ev(&format!("{}ax{}", "(".repeat(20), ")".repeat(20))), Ok(0x1234));
     }
 
     #[test]

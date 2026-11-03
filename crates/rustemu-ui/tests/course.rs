@@ -92,7 +92,7 @@ fn check(path: &Path) -> Vec<String> {
         problems.push(format!("{name}: input not read: {:?}", String::from_utf8_lossy(&keys)));
     }
     problems.extend(s.x86().unwrap().log.lines().map(|l| format!("{name}: {l}")));
-    let output = String::from_utf8_lossy(&s.x86().unwrap().output).into_owned();
+    let output = String::from_utf8_lossy(s.x86().unwrap().output.bytes()).into_owned();
     for want in tags(&text, "output") {
         if !output.contains(want) {
             problems.push(format!("{name}: no {want:?} in the output {output:?}"));

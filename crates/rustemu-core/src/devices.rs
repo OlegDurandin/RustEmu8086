@@ -51,8 +51,8 @@ pub struct Devices {
     pub stepper_last_move: i8,
     /// LED display: the last word written to port 199.
     pub led: u16,
-    /// Printer: every byte written to port 130.
-    pub printer: Vec<u8>,
+    /// Printer: the bytes written to port 130 (its last megabyte or so).
+    pub printer: rustemu_target::OutputBuffer,
     /// The heater is on (port 127).
     pub heater_on: bool,
     /// Thermometer reading in degrees Celsius (-65..120).
@@ -151,7 +151,7 @@ impl Devices {
             stepper_dot: 0,
             stepper_last_move: 0,
             led: 0,
-            printer: Vec::new(),
+            printer: Default::default(),
             heater_on: false,
             temperature: 0,
             air_temperature: 0,
@@ -457,14 +457,14 @@ mod tests {
     fn snapshot_uses_deltas_for_collections_and_lengths_for_buffers() {
         let mut d = Devices::new();
         d.latch.insert(42, 7);
-        d.printer = Vec::with_capacity(1_000_001);
-        d.printer.resize(1_000_000, b'x');
+        d.printer.write(&vec![b'x'; 1_000_000]);
         d.robot.clear_map();
-        let printer_ptr = d.printer.as_ptr();
+        let printer_ptr = d.printer.bytes().as_ptr();
         let old_palette = d.palette[0];
 
         let snapshot = d.begin_snapshot();
-        assert_eq!(d.printer.as_ptr(), printer_ptr);
+        // The snapshot keeps the length, not a copy of the paper.
+        assert_eq!(d.printer.bytes().as_ptr(), printer_ptr);
         d.output8(42, 9);
         d.output8(43, 10);
         d.output8(ports::PRINTER, b'y');
@@ -477,7 +477,6 @@ mod tests {
         assert_eq!(d.latch.get(&42), Some(&7));
         assert!(!d.latch.contains_key(&43));
         assert_eq!(d.printer.len(), 1_000_000);
-        assert_eq!(d.printer.as_ptr(), printer_ptr);
         assert_eq!(d.traffic_lights, 0);
         assert_eq!(d.palette[0], old_palette);
         assert_eq!(d.robot.get(1, 1), Cell::Empty);

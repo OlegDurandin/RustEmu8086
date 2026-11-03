@@ -747,7 +747,7 @@ impl Machine {
                 self.ok();
             }
             4 => {
-                self.sys.dev.printer.extend_from_slice(&data);
+                self.sys.dev.printer.write(&data);
                 self.cpu.regs[AX] = n as u16;
                 self.ok();
             }

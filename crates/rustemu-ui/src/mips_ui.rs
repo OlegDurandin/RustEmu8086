@@ -385,7 +385,8 @@ pub fn console_ui(app: &mut App, ui: &mut Ui) {
         ui.weak("no MIPS machine");
         return;
     };
-    let output = m.console.text();
+    let (tail, cut) = crate::inspect::output_tail(m.console.bytes(), m.console.dropped());
+    let output = rustemu_mips::console::text(tail);
     let pending = rustemu_mips::console::text(&m.pending_input());
     let waiting = m.is_waiting_input() && pending.is_empty();
     let finished = m.finished;
@@ -400,6 +401,9 @@ pub fn console_ui(app: &mut App, ui: &mut Ui) {
         .show(ui, |ui| {
             let mut job = egui::text::LayoutJob::default();
             let fmt = |c: Color32| egui::TextFormat { font_id: font.clone(), color: c, ..Default::default() };
+            if cut {
+                job.append("(earlier output not shown)\n", 0.0, fmt(ui.visuals().weak_text_color()));
+            }
             job.append(&output, 0.0, fmt(ui.visuals().text_color()));
             if !pending.is_empty() {
                 job.append(&pending, 0.0, fmt(ui.visuals().weak_text_color()));
