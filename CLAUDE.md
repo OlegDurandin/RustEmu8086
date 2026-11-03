@@ -392,7 +392,9 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       не пишет неизменённые значения (`App::put`; записанное читается обратно — при переполнении квоты
       ключ в `unsaved_keys`, повтор при следующем сохранении, одно предупреждение); веб сохраняет каждые 10 с и сам — на `visibilitychange`/`pagehide`
       через `WebRunner::app_mut` (eframe 0.37 слушает несуществующее `onbeforeunload`); без localStorage — notice и
-      вопрос перед закрытием. Экран текстового режима — растровый шрифт 8×16 (`font::glyph8x16`, Unscii 16, public
+      вопрос перед закрытием. Паника: свой хук после хука eframe записывает черновик (`layout::CRASH_DRAFT` — копия
+      `App::draft_record`, обновляется при правке) и показывает сообщение поверх холста (перезагрузить / сообщить);
+      на десктопе `App::catching` (шаг, `tick`, сборка) — уведомление вместо падения. Экран текстового режима — растровый шрифт 8×16 (`font::glyph8x16`, Unscii 16, public
       domain; 4 глифа нарисованы) через атлас с «sharp bilinear» (`screen.rs`). Не сделано: PWA/офлайн, ☻☼⌂ⁿ в
       окнах с текстом (таблица ASCII, дамп памяти). Ссылки «поделиться» — `share.rs`: `#name=…&code=<deflate
       (miniz_oxide), base64url>[&run]`, окно *share link* (File → Share link…, и на Mac — ведёт на `WEB_URL`);
