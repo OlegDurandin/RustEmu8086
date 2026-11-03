@@ -85,7 +85,8 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 
 ## Тестирование
 - `cargo test --workspace` — юнит-тесты CPU, ассемблера (в т.ч. `nasm_compare`: ~18 000 кодировок
-  сверяются с NASM, если он установлен; `nasm_dialect`: NASM-программы целиком против `nasm -f bin`), сквозные тесты `rustemu-session/tests/run.rs` на наших программах `tests/programs/` (их же грузят UI-тесты:
+  сверяются с NASM, если он установлен; `nasm_dialect`: NASM-программы целиком против `nasm -f bin`; `no_panics`:
+  ≈64 000 коротких строк из «опасных» токенов в обоих диалектах — ошибка или код, но не паника), сквозные тесты `rustemu-session/tests/run.rs` на наших программах `tests/programs/` (их же грузят UI-тесты:
   `rustemu_ui::testing::PROGRAMS`, `app_with_example(i)`).
 - **Корпус Emu8086**: `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` — собирает и
   прогоняет все примеры `examples/` (84 из Emu8086 + 2 NASM), плюс загрузка micro-os с виртуальной дискеты. Сейчас: всё собирается и выполняется без ошибок
