@@ -110,8 +110,6 @@ pub struct Settings {
     /// Drive C: of DOS programs is the folder of the program instead of its own folder (the
     /// desktop; programs can then change and delete the files next to the source).
     pub drive_c_source_folder: bool,
-    /// The processor of the workspace shown last ([`Arch::name`]; the 8086 when unknown).
-    pub arch: String,
     /// What the MIPS workspace remembers (the 8086 one keeps it in the fields above).
     pub mips: ArchSettings,
 }
@@ -205,7 +203,6 @@ impl Default for Settings {
             syntax: SyntaxChoice::Auto,
             sessions: Vec::new(),
             drive_c_source_folder: false,
-            arch: String::new(),
             mips: ArchSettings::default(),
         }
     }
@@ -744,11 +741,9 @@ impl App {
         };
         app.swap_workspace(&mut w);
         app.reference.lang = app.settings.reference_lang;
+        // The 8086 at every start (the MIPS workspace opens when asked for: the switch, a MIPS
+        // file, link or example).
         app.open_start_document();
-        // The workspace shown last.
-        if let Some(arch) = Arch::from_name(&app.settings.arch) {
-            app.switch_arch(arch);
-        }
         app
     }
 

@@ -89,6 +89,9 @@ pub(crate) fn fpu_ui(app: &mut App, ui: &mut Ui) {
 
 /// The last ALU operation: operands, result and flags in all bases.
 pub fn alu_ui(app: &mut App, ui: &mut Ui) {
+    if app.session.mips().is_some() {
+        return crate::mips_ui::alu_ui(app, ui);
+    }
     let Some(t) = app.session.x86().map(|m| m.cpu.alu_trace) else { return };
     if t.op == AluOp::None {
         ui.weak("No arithmetic or logic instruction executed yet.");
