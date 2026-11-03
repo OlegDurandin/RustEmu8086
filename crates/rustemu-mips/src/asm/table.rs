@@ -15,6 +15,8 @@ const PSEUDO_OPS: &str = include_str!("../../data/PseudoOps.txt");
 pub enum Operand {
     /// A register.
     Reg,
+    /// A floating-point register (`$f0`).
+    FReg,
     /// An integer of this class.
     Int(IntClass),
     /// A label.
@@ -67,7 +69,7 @@ pub struct Table {
     forms: HashMap<String, Vec<Form>>,
 }
 
-/// The operand kinds of an example, None when it uses coprocessor 1.
+/// The operand kinds of an example.
 fn example_operands(example: &str) -> Option<(String, Vec<Operand>)> {
     let tokens = tokenize(example).ok()?;
     let (mnemonic, rest) = tokens.split_first()?;
@@ -75,6 +77,7 @@ fn example_operands(example: &str) -> Option<(String, Vec<Operand>)> {
         .iter()
         .map(|t| match t.kind {
             Kind::RegName(_) | Kind::RegNum(_) => Some(Operand::Reg),
+            Kind::FpReg(_) => Some(Operand::FReg),
             Kind::Int(v) => Some(Operand::Int(IntClass::of(v))),
             Kind::Ident => Some(Operand::Label),
             Kind::LParen => Some(Operand::LParen),
@@ -84,12 +87,6 @@ fn example_operands(example: &str) -> Option<(String, Vec<Operand>)> {
         })
         .collect::<Option<Vec<_>>>()?;
     Some((mnemonic.text.to_ascii_lowercase(), ops))
-}
-
-/// Mnemonics of coprocessor 1 (not supported yet).
-fn is_fpu(mnemonic: &str) -> bool {
-    mnemonic.contains('.')
-        || matches!(mnemonic, "bc1f" | "bc1t" | "mfc1" | "mtc1" | "lwc1" | "swc1" | "ldc1" | "sdc1" | "movf" | "movt")
 }
 
 impl Table {
@@ -123,9 +120,6 @@ impl Table {
                 templates.push(p.to_string());
             }
             let Some((m, operands)) = example_operands(spec) else { continue };
-            if is_fpu(&m) || templates.iter().any(|t| t.contains("$f") || is_fpu(t.split(' ').next().unwrap_or(""))) {
-                continue;
-            }
             forms.entry(m).or_default().push(Form {
                 example: spec.into(),
                 operands,
@@ -157,6 +151,7 @@ impl Table {
 fn operand_of(t: &Token) -> Option<(Operand, i32)> {
     Some(match &t.kind {
         Kind::RegName(_) | Kind::RegNum(_) => (Operand::Reg, 0),
+        Kind::FpReg(_) => (Operand::FReg, 0),
         Kind::Int(v) => (Operand::Int(IntClass::of(*v)), *v),
         Kind::Reloc { .. } => (Operand::Int(IntClass::I5), 0),
         Kind::Ident => (Operand::Label, 0),
@@ -316,10 +311,12 @@ pub fn substitute(template: &str, tokens: &[&str], label: &str) -> Option<String
     }
     if s.contains("NR") {
         for op in 1..tokens.len() {
-            if let Ok(t) = tokenize(value(op))
-                && let [Token { kind: Kind::RegName(r) | Kind::RegNum(r), .. }] = t.as_slice()
-            {
-                s = s.replace(&format!("NR{op}"), &format!("${}", r + 1));
+            match tokenize(value(op)).as_deref() {
+                Ok([Token { kind: Kind::RegName(r) | Kind::RegNum(r), .. }]) => {
+                    s = s.replace(&format!("NR{op}"), &format!("${}", r + 1));
+                }
+                Ok([Token { kind: Kind::FpReg(r), .. }]) => s = s.replace(&format!("NR{op}"), &format!("$f{}", r + 1)),
+                _ => {}
             }
         }
     }
@@ -351,7 +348,8 @@ mod tests {
         let t = Table::get();
         assert_eq!(t.forms("add").unwrap().len(), 3, "basic add and two pseudo forms");
         assert!(t.forms("li").is_some() && t.forms("la").is_some() && t.forms("blt").is_some());
-        assert!(t.forms("add.s").is_none(), "coprocessor 1 is left out");
+        assert_eq!(t.forms("add.s").unwrap().len(), 1, "coprocessor 1");
+        assert_eq!(t.forms("l.d").unwrap().len(), 8, "its pseudo-instructions");
         assert!(t.mnemonics().count() > 120);
     }
 

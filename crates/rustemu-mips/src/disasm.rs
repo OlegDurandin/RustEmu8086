@@ -10,8 +10,8 @@
 //! - [`Style::Named`]: for reading, `addi $t0, $t1, -100`, branch and jump targets as addresses
 //!   (`beq $t0, $t1, 0x00400010`), logical immediates in hex (`ori $t0, $at, 0x1001`).
 //!
-//! A word that is not an instruction (or is a coprocessor 1 one, not supported yet) is shown as
-//! data: `.word 0x46000000`.
+//! A word that is not an instruction is shown as data: `.word 0xfc000000`. Floating-point
+//! registers are `$f0` in both notations.
 
 use std::sync::OnceLock;
 
@@ -34,6 +34,8 @@ pub enum Arg {
     Reg(u32),
     /// A coprocessor 0 register (`mfc0` / `mtc0`).
     Cp0(u32),
+    /// A floating-point (coprocessor 1) register.
+    Fpr(u32),
     /// An immediate, sign- or zero-extended by its class (a shift amount, a code).
     Imm(i32),
     /// A branch: the word offset from the next instruction, and the target address.
@@ -128,6 +130,7 @@ pub fn decode(word: u32, addr: u32) -> Option<Decoded> {
             match kind {
                 Kind::RegName(_) | Kind::RegNum(_) if k == 1 && matches!(p.mnemonic, "mfc0" | "mtc0") => Arg::Cp0(raw),
                 Kind::RegName(_) | Kind::RegNum(_) => Arg::Reg(raw),
+                Kind::FpReg(_) => Arg::Fpr(raw),
                 Kind::Ident if p.basic.format == Format::J => {
                     Arg::Jump((addr.wrapping_add(4) & 0xF000_0000) | (raw << 2))
                 }
@@ -157,6 +160,7 @@ pub fn text(d: &Decoded, style: Style) -> String {
     let arg = |a: &Arg| match (*a, named) {
         (Arg::Reg(r), false) | (Arg::Cp0(r), _) => format!("${r}"),
         (Arg::Reg(r), true) => format!("${}", REG_NAMES[r as usize]),
+        (Arg::Fpr(r), _) => format!("$f{r}"),
         (Arg::Imm(v), true) if logical(d.mnemonic) => format!("{:#x}", v as u32),
         (Arg::Imm(v), _) => v.to_string(),
         (Arg::Branch(off, _), false) => off.to_string(),
@@ -209,7 +213,9 @@ mod tests {
             assert_eq!(disassemble(w, at, Style::Mars), mars, "{w:08x}");
             assert_eq!(disassemble(w, at, Style::Named), named, "{w:08x}");
         }
-        assert_eq!(disassemble(0x4600_0000, at, Style::Mars), ".word 0x46000000", "coprocessor 1");
+        assert_eq!(disassemble(0x4600_0000, at, Style::Mars), "add.s $f0,$f0,$f0", "coprocessor 1");
+        assert_eq!(disassemble(0x4601_0132, at, Style::Named), "c.eq.s 1, $f0, $f1");
+        assert_eq!(disassemble(0x4505_0004, at, Style::Named), "bc1t 1, 0x00400014");
         assert_eq!(disassemble(0xFC00_0000, at, Style::Named), ".word 0xfc000000");
         let d = decode(0x0c10_0004, at).unwrap();
         assert_eq!((d.mnemonic, d.args.as_slice()), ("jal", &[Arg::Jump(0x0040_0010)][..]));

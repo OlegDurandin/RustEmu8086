@@ -497,11 +497,8 @@ mod tests {
             }
             assert!(!i.summary.is_empty() && !i.description.is_empty(), "{}", i.name);
         }
-        let mut directives: Vec<&str> = rustemu_mips::asm::DIRECTIVES
-            .iter()
-            .copied()
-            .filter(|d| ![".macro", ".end_macro", ".include", ".global"].contains(d))
-            .collect();
+        let mut directives: Vec<&str> =
+            rustemu_mips::asm::DIRECTIVES.iter().copied().filter(|d| *d != ".global").collect();
         directives.sort();
         let mut ours: Vec<&str> = MIPS_DIRECTIVES.iter().map(|d| d.name).collect();
         ours.sort();
@@ -559,8 +556,10 @@ mod tests {
         all.extend(MIPS_DIRECTIVES.iter().map(|d| (d.name.to_string(), d.example)));
         all.extend(SYSCALLS.iter().filter(|s| s.supported).map(|s| (format!("syscall {}", s.code), s.example)));
         for (name, example) in all {
-            if let Err(e) = rustemu_mips::asm::assemble(example) {
-                let e: Vec<String> = e.iter().map(|e| format!("{}:{} {}", e.line, e.col, e.message)).collect();
+            // .include takes the files of the built-in examples, as in the editor.
+            let mut read = |p: &str| crate::examples::MIPS_INCLUDES.iter().find(|f| f.0 == p).map(|f| f.1.to_string());
+            if let Err(e) = rustemu_mips::asm::assemble_with("example.s", example, &mut read) {
+                let e: Vec<String> = e.errors.iter().map(|e| format!("{}:{} {}", e.line, e.col, e.message)).collect();
                 panic!("{name}: {e:?}\n{example}");
             }
         }

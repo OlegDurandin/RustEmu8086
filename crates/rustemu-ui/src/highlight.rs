@@ -229,7 +229,7 @@ fn append_line(job: &mut LayoutJob, line: &str, spans: &Spans, font: &FontId, pa
 }
 
 /// A MIPS line: `#` comments, strings, numbers, `$` registers, `.` directives, the mnemonics of
-/// MARS's instructions and pseudo-instructions, labels.
+/// MARS's instructions and pseudo-instructions, labels, `%` macro parameters.
 fn mips_line_spans(line: &str) -> Spans {
     let mut spans: Spans = Vec::new();
     let mut push = |end: usize, k: Kind| match spans.last_mut() {
@@ -272,6 +272,9 @@ fn mips_line_spans(line: &str) -> Spans {
             let lower = word.to_ascii_lowercase();
             let k = if c == b'$' {
                 Kind::Register
+            } else if c == b'%' && !matches!(lower.as_str(), "%hi" | "%lo") {
+                // A macro parameter.
+                Kind::Emu
             } else if rustemu_mips::asm::DIRECTIVES.contains(&lower.as_str()) || matches!(lower.as_str(), "%hi" | "%lo")
             {
                 Kind::Directive

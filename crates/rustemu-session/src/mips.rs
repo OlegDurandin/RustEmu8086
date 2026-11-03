@@ -48,10 +48,10 @@ impl Session {
         m.load(&prog.image)
     }
 
-    /// Assembles MIPS source `text` of file `name` and loads it.
+    /// Assembles MIPS source `text` of file `name` (its `.include` files read from disk) and loads it.
     pub fn load_mips_source(&mut self, name: &str, text: &str) -> Result<(), String> {
-        let prog = rustemu_mips::asm::assemble(text)
-            .map_err(|e| e.iter().map(|e| format!("{name}: {e}")).collect::<Vec<_>>().join("\n"))?;
+        let mut read = |p: &str| std::fs::read(p).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
+        let prog = rustemu_mips::asm::assemble_with(name, text, &mut read).map_err(|e| e.to_string())?;
         self.load_mips(prog, name)
     }
 }
@@ -60,31 +60,32 @@ impl Session {
 /// source line (offsets from the text segment base), labels as symbols.
 fn debug_info(prog: &rustemu_mips::asm::Program, name: &str) -> rustemu_asm::Program {
     let line = |file_line: usize| file_line as u32;
+    let place = |p: &(usize, usize)| (p.0, line(p.1));
     let mut lines: Vec<LineInfo> = prog
         .statements
         .iter()
         .map(|s| LineInfo {
-            file: 0,
+            file: s.file,
             line: line(s.line),
             image_offset: s.addr.wrapping_sub(TEXT_BASE),
             len: s.words.len() as u32 * 4,
             is_code: true,
             data_size: 0,
             data_float: false,
-            origin: None,
-            chain: Vec::new(),
+            origin: s.origin.as_ref().map(place),
+            chain: s.chain.iter().map(place).collect(),
         })
         .collect();
     lines.extend(prog.data.iter().filter(|d| d.len > 0).map(|d| LineInfo {
-        file: 0,
+        file: d.file,
         line: line(d.line),
         image_offset: d.addr.wrapping_sub(TEXT_BASE),
         len: d.len,
         is_code: false,
         data_size: d.unit,
         data_float: false,
-        origin: None,
-        chain: Vec::new(),
+        origin: d.origin.as_ref().map(place),
+        chain: d.chain.iter().map(place).collect(),
     }));
     // A data label's size is the unit of its data (`.byte` / `.asciiz` 1, `.half` 2, `.word` 4).
     let unit = |addr: u32| prog.data.iter().find(|d| d.addr == addr && d.len > 0).map_or(4, |d| d.unit.max(1));
@@ -110,7 +111,7 @@ fn debug_info(prog: &rustemu_mips::asm::Program, name: &str) -> rustemu_asm::Pro
         listing: Vec::new(),
         symbols,
         segments: Vec::new(),
-        files: vec![name.to_string()],
+        files: std::iter::once(name.to_string()).chain(prog.files.iter().skip(1).map(|f| f.name.clone())).collect(),
         emu: EmuDirectives::default(),
         dialect: Dialect::default(),
     }

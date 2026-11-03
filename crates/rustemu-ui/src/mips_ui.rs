@@ -7,7 +7,8 @@ use egui::{Color32, FontId, RichText, Ui};
 use rustemu_mips::cpu::{Cpu, REG_NAMES};
 use rustemu_mips::disasm::{Style, disassemble};
 use rustemu_mips::memory::{self, Segment};
-use rustemu_mips::target::Checkpoint;
+use rustemu_mips::syscall::{java_double, java_float};
+use rustemu_mips::target::{Checkpoint, FCC, FPR};
 
 use crate::app::{App, RunMode};
 
@@ -40,7 +41,7 @@ pub enum RegGroup {
     Special,
     /// Coprocessor 0: the exception registers.
     Cp0,
-    /// Coprocessor 1 (floating point): not emulated yet.
+    /// Coprocessor 1: `$f0..$f31` (single precision, pairs as doubles) and the 8 condition flags.
     Fpu,
 }
 
@@ -83,9 +84,11 @@ struct Reg {
     prev: u32,
     /// The PC above the groups: while Special (which lists it too) is shown, it is edited there.
     pinned: bool,
+    /// A floating-point register: DEC shows it as a float and takes a float typed.
+    float: bool,
 }
 
-/// The registers of a group (empty for the FPU).
+/// The registers of a group.
 fn group_regs(group: RegGroup, now: &Cpu, prev: &Cpu) -> Vec<Reg> {
     use rustemu_mips::cpu::cp0;
     match group {
@@ -98,6 +101,7 @@ fn group_regs(group: RegGroup, now: &Cpu, prev: &Cpu) -> Vec<Reg> {
                 now: now.regs[r],
                 prev: prev.regs[r],
                 pinned: false,
+                float: false,
             })
             .collect(),
         RegGroup::Special => [
@@ -113,6 +117,7 @@ fn group_regs(group: RegGroup, now: &Cpu, prev: &Cpu) -> Vec<Reg> {
             now,
             prev,
             pinned: false,
+            float: false,
         })
         .collect(),
         RegGroup::Cp0 => [
@@ -129,9 +134,20 @@ fn group_regs(group: RegGroup, now: &Cpu, prev: &Cpu) -> Vec<Reg> {
             now: now.cp0[r],
             prev: prev.cp0[r],
             pinned: false,
+            float: false,
         })
         .collect(),
-        RegGroup::Fpu => Vec::new(),
+        RegGroup::Fpu => (0..32)
+            .map(|r| Reg {
+                index: Some(FPR + r),
+                name: format!("$f{r}"),
+                hint: fpu_role(r),
+                now: now.fpr[r],
+                prev: prev.fpr[r],
+                pinned: false,
+                float: true,
+            })
+            .collect(),
     }
 }
 
@@ -140,7 +156,8 @@ fn reg_cell(app: &mut App, ui: &mut Ui, r: &Reg) {
     let font = FontId::monospace(13.0);
     let changed = r.now != r.prev;
     let color = if changed { crate::colors::error(ui) } else { ui.visuals().strong_text_color() };
-    let shown = |v: u32| if app.mips.decimal { (v as i32).to_string() } else { format!("{v:08X}") };
+    let decimal = |v: u32| if r.float { java_float(f32::from_bits(v)) } else { (v as i32).to_string() };
+    let shown = |v: u32| if app.mips.decimal { decimal(v) } else { format!("{v:08X}") };
     ui.label(RichText::new(&r.name).font(font.clone()).color(ui.visuals().weak_text_color())).on_hover_text(&r.hint);
     let editing = r.index.is_some()
         && app.mips.edit.as_ref().is_some_and(|(i, _)| Some(*i) == r.index)
@@ -156,12 +173,14 @@ fn reg_cell(app: &mut App, ui: &mut Ui, r: &Reg) {
             app.mips.edit = None;
         } else if resp.lost_focus() {
             let (index, text) = app.mips.edit.take().unwrap();
-            match parse_value(&text) {
+            let value = if r.float { parse_float(&text) } else { parse_value(&text) };
+            match value {
                 Some(v) if app.cpu_editable() => {
                     app.session.target.set_register(index, v as u64);
                     app.status = format!("{} = {} (changed by hand)", r.name, hex(v));
                 }
                 Some(_) => {}
+                None if r.float => app.status = format!("'{text}' is not a float or 0x… bits"),
                 None => app.status = format!("'{text}' is not a 32-bit value"),
             }
         }
@@ -173,7 +192,7 @@ fn reg_cell(app: &mut App, ui: &mut Ui, r: &Reg) {
         text = text.strong();
     }
     let resp = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-    let other = if app.mips.decimal { hex(r.now) } else { (r.now as i32).to_string() };
+    let other = if app.mips.decimal { hex(r.now) } else { decimal(r.now) };
     let mut tip = if changed { format!("{other}; was {}", shown(r.prev)) } else { other };
     if editable {
         tip.push_str("\nclick to change");
@@ -182,13 +201,64 @@ fn reg_cell(app: &mut App, ui: &mut Ui, r: &Reg) {
     }
     let resp = resp.on_hover_text(tip);
     if editable && resp.clicked() {
-        let start = if app.mips.decimal { (r.now as i32).to_string() } else { hex(r.now) };
+        let start = if app.mips.decimal { decimal(r.now) } else { hex(r.now) };
         app.mips.edit = r.index.map(|i| (i, start));
     }
 }
 
+/// What a floating-point register is for in the conventions MARS documents.
+fn fpu_role(r: usize) -> String {
+    let role = match r {
+        0..4 => "results of a procedure; syscalls 6, 7, 43, 44 return here",
+        4..12 | 16..20 => "temporary: a procedure may change it",
+        12..16 => "arguments of a procedure; syscalls 2 and 3 print $f12",
+        _ => "saved: a procedure keeps it",
+    };
+    let pair = if r.is_multiple_of(2) { format!("; with $f{} a double", r + 1) } else { String::new() };
+    format!("coprocessor 1 ${r}: {role}{pair} (lwc1, mfc1 / mtc1)")
+}
+
+/// The pair `$f2k`, `$f2k+1` as a double (read only: the words are changed one by one).
+fn double_cell(app: &App, ui: &mut Ui, pair: &[Reg]) {
+    let [lo, hi] = pair else { return };
+    let bits = |l: u32, h: u32| (h as u64) << 32 | l as u64;
+    let (now, prev) = (bits(lo.now, hi.now), bits(lo.prev, hi.prev));
+    let shown = |v: u64| if app.mips.decimal { java_double(f64::from_bits(v)) } else { format!("{v:016X}") };
+    let changed = now != prev;
+    let color = if changed { crate::colors::error(ui) } else { ui.visuals().text_color() };
+    let mut tip = format!("{} and {} as a double", lo.name, hi.name);
+    if changed {
+        tip += &format!("; was {}", shown(prev));
+    }
+    ui.label(RichText::new(shown(now)).font(FontId::monospace(13.0)).color(color)).on_hover_text(tip);
+}
+
+/// The 8 condition flags of coprocessor 1 (c.eq/lt/le set them, bc1t/bc1f and movt/movf test
+/// them); a click changes one while the program is paused.
+fn flags_ui(app: &mut App, ui: &mut Ui, now: u8, prev: u8) {
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("condition flags").strong())
+            .on_hover_text("c.eq / c.lt / c.le set a flag; bc1t / bc1f, movt / movf test it");
+        let editable = app.cpu_editable();
+        for cc in 0..8 {
+            let mut on = now >> cc & 1 != 0;
+            let mut text = RichText::new(cc.to_string()).monospace();
+            if (now ^ prev) >> cc & 1 != 0 {
+                text = text.color(crate::colors::error(ui)).strong();
+            }
+            let resp = ui.add_enabled(editable, egui::Checkbox::new(&mut on, text));
+            if resp.changed() {
+                app.session.target.set_register(FCC, (now ^ 1 << cc) as u64);
+                app.status = format!("condition flag {cc} = {} (changed by hand)", on as u8);
+            }
+        }
+    });
+}
+
 /// The registers: the PC, then one group at a time (GPR, Special, CP0, FPU) as pairs in two
-/// columns. Changed ones are red; values can be changed while the program is paused.
+/// columns (the FPU's pairs also as doubles, then the condition flags). Changed ones are red;
+/// values can be changed while the program is paused.
 pub fn registers_ui(app: &mut App, ui: &mut Ui) {
     let Some((now, prev)) = cpus(app) else {
         ui.weak("no MIPS machine");
@@ -209,6 +279,7 @@ pub fn registers_ui(app: &mut App, ui: &mut Ui) {
             now: now.pc,
             prev: prev.pc,
             pinned: true,
+            float: false,
         };
         reg_cell(app, ui, &pc);
     });
@@ -222,38 +293,32 @@ pub fn registers_ui(app: &mut App, ui: &mut Ui) {
         ui.selectable_value(&mut app.mips.decimal, true, "DEC");
     });
     ui.add_space(2.0);
-    if group == RegGroup::Fpu {
-        // As wide as the registers would be: wrapped text would stretch a window to the screen.
-        ui.scope(|ui| {
-            ui.set_max_width(300.0);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "Coprocessor 1 is not emulated yet: floating-point instructions stop the program with a \
-                         reserved-instruction exception.",
-                    )
-                    .weak(),
-                )
-                .wrap(),
-            );
-        });
-        return;
-    }
     let regs = group_regs(group, &now, &prev);
-    let mut grid = egui::Grid::new(("mips_regs", group as u8)).num_columns(4).spacing([14.0, 4.0]).striped(true);
+    let fpu = group == RegGroup::Fpu;
+    let mut grid = egui::Grid::new(("mips_regs", group as u8))
+        .num_columns(if fpu { 5 } else { 4 })
+        .spacing([14.0, 4.0])
+        .striped(true);
     // The tablet's card: the columns take its width, the rows are taller for fingers. (A window
     // would grow to the screen.)
     if app.front.tablet_layout {
-        grid = grid.min_col_width(((ui.available_width() - 3.0 * 14.0) / 4.0).max(60.0)).spacing([14.0, 6.0]);
+        let cols = if fpu { 5.0 } else { 4.0 };
+        grid = grid.min_col_width(((ui.available_width() - (cols - 1.0) * 14.0) / cols).max(60.0)).spacing([14.0, 6.0]);
     }
     grid.show(ui, |ui| {
         for pair in regs.chunks(2) {
             for r in pair {
                 reg_cell(app, ui, r);
             }
+            if fpu {
+                double_cell(app, ui, pair);
+            }
             ui.end_row();
         }
     });
+    if fpu {
+        flags_ui(app, ui, now.fcc, prev.fcc);
+    }
     if group == RegGroup::Cp0 && now.cp0[rustemu_mips::cpu::cp0::EPC] != 0 {
         let code = now.cp0[rustemu_mips::cpu::cp0::CAUSE] >> 2 & 31;
         let what = match code {
@@ -285,6 +350,16 @@ fn cpus(app: &App) -> Option<(Cpu, Cpu)> {
 /// A value as MARS shows it in hex.
 fn hex(v: u32) -> String {
     format!("0x{v:08x}")
+}
+
+/// Parses a value typed for a floating-point register: `0x…` bits, or a number (`1.5`, `-2e-3`,
+/// `NaN`, `Infinity`) rounded to single precision.
+fn parse_float(text: &str) -> Option<u32> {
+    let t = text.trim().replace('_', "");
+    if t.starts_with("0x") || t.starts_with("0X") {
+        return parse_value(&t);
+    }
+    t.parse::<f32>().ok().map(f32::to_bits)
 }
 
 /// Parses a typed register value: `0x…` hex, or a decimal number (negative ones too).
@@ -653,7 +728,7 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
     }
     let start = app.view.code_view_start & !3;
     let font = FontId::monospace(12.5);
-    let source = app.program.files.first().map(|f| &f.1);
+    let files = &app.program.files;
     let mut toggle = None;
     let mut select = None;
     let r = egui::Grid::new("mips_code")
@@ -712,23 +787,36 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
                 ui.label(RichText::new(format!("{word:08x}")).font(font.clone()).weak());
                 let text = if m.mem.has_code(a) { disassemble(word, a, Style::Named) } else { String::new() };
                 let ins = ui.add(egui::Label::new(strong(text)).sense(egui::Sense::click()));
-                let line = app.session.line_at_addr(a).filter(|(f, _)| *f == 0).map(|(_, l)| l);
-                let line_text = |l: u32| source.and_then(|lines| lines.get(l as usize - 1)).map_or("", |s| s.trim());
-                match line {
-                    Some(l) if app.session.addr_of_line(0, l) == Some(a) => {
+                let line_text = |file: usize, l: usize| {
+                    files.get(file).and_then(|f| f.1.get(l.wrapping_sub(1))).map_or("", |s| s.trim())
+                };
+                // The statement's text: its source line, or (MARS's form) for a line of a macro the
+                // body line after substitution, `<body line> text`.
+                let statement_text = |s: &rustemu_mips::asm::Statement| match (&s.expanded, s.origin) {
+                    (Some(t), Some((_, body))) => format!("<{body}> {t}"),
+                    _ => line_text(s.file, s.line).to_string(),
+                };
+                match statement_at(app, a) {
+                    Some(s) if s.addr == a => {
                         // Short, with single spaces: a long line would stretch the window.
-                        let full = line_text(l).split_whitespace().collect::<Vec<_>>().join(" ");
+                        let full = statement_text(s).split_whitespace().collect::<Vec<_>>().join(" ");
                         let mut text: String = full.chars().take(36).collect();
                         if text.len() < full.len() {
                             text.push('…');
                         }
-                        ui.label(RichText::new(format!("{l}: {text}")).font(font.clone()).weak());
+                        let file = match s.file {
+                            0 => String::new(),
+                            f => files.get(f).map_or(String::new(), |f| format!("{} ", f.0)),
+                        };
+                        ui.label(RichText::new(format!("{file}{}: {text}", s.line)).font(font.clone()).weak())
+                            .on_hover_text(full);
                     }
                     // A pseudo-instruction assembled into several instructions: this is not its first.
-                    Some(l) => {
+                    Some(s) => {
                         ui.label(RichText::new("  ↳").font(font.clone()).weak()).on_hover_text(format!(
-                            "line {l} ({}) continues: a pseudo-instruction becomes several machine instructions",
-                            line_text(l)
+                            "line {} ({}) continues: a pseudo-instruction becomes several machine instructions",
+                            s.line,
+                            statement_text(s)
                         ));
                     }
                     None => {
@@ -800,8 +888,14 @@ pub fn last_step(app: &App) -> Option<MipsStep> {
 /// Text of the listing: per instruction its address, machine word, MARS's basic form and the
 /// source line it came from (MARS's text segment window), then the data lines.
 pub fn listing_text(app: &App) -> Option<String> {
-    let prog = app.session.mips_program.as_ref()?;
-    Some(prog.listing(app.program.text.as_deref()?))
+    Some(app.session.mips_program.as_ref()?.listing())
+}
+
+/// The statement of the loaded MIPS program whose instructions include address `a`.
+fn statement_at(app: &App, a: u32) -> Option<&rustemu_mips::asm::Statement> {
+    let st = &app.session.mips_program.as_ref()?.statements;
+    let i = st.partition_point(|s| s.addr <= a).checked_sub(1)?;
+    st.get(i).filter(|s| a < s.addr.wrapping_add(4 * s.words.len() as u32))
 }
 
 #[cfg(test)]
