@@ -326,6 +326,7 @@ impl MipsGroup {
             MipsGroup::Branch => ("Branches", "Условные переходы"),
             MipsGroup::Jump => ("Jumps and calls", "Переходы и вызовы"),
             MipsGroup::System => ("System, traps, exceptions", "Система, ловушки, исключения"),
+            MipsGroup::Float => ("Floating point (coprocessor 1)", "Плавающая точка (сопроцессор 1)"),
         };
         lang.pick(en, ru)
     }

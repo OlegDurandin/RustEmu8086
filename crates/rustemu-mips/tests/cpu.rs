@@ -426,7 +426,7 @@ fn syscall_break_and_reserved() {
 
     let (_, e) = exception(&[0xFC00_0000]);
     assert_eq!((e.code, e.message.as_str()), (ExcCode::ReservedInstruction, "undefined instruction (0xfc000000)"));
-    let (_, e) = exception(&[0x4600_0000]); // add.s: coprocessor 1
+    let (_, e) = exception(&[0x4680_0000]); // coprocessor 1 with format 20 (L): not in MARS
     assert_eq!(e.code, ExcCode::ReservedInstruction);
 }
 
@@ -516,4 +516,70 @@ fn the_last_alu_operation_is_recorded() {
     let (cpu, ..) = run(&code);
     let t = cpu.alu.unwrap();
     assert!(t.overflow && t.result == 0x8000_0000 && cpu.regs[T1 as usize] == 0);
+}
+
+/// Coprocessor 1 as MARS: Java's arithmetic, canonical NaNs, MARS's rounding to words and its
+/// checks of even registers.
+#[test]
+fn floating_point_as_mars() {
+    use rustemu_mips::asm::assemble;
+    let run_src = |src: &str| {
+        let mut m = rustemu_mips::Machine::new();
+        m.load(&assemble(src).unwrap().image).unwrap();
+        let ev = m.run(10_000);
+        (m, ev)
+    };
+    let (m, _) = run_src(
+        ".data
+a: .float 1.5
+b: .float -2.25
+d: .double 0.1
+.text
+l.s $f0, a
+l.s $f1, b
+add.s $f2, $f0, $f1
+mul.s $f3, $f0, $f1
+sub.s $f4, $f0, $f0
+div.s $f5, $f4, $f4
+l.d $f6, d
+add.d $f8, $f6, $f6
+cvt.w.s $f10, $f1
+round.w.s $f11, $f0
+c.lt.s 3, $f1, $f0
+c.eq.d $f6, $f8
+neg.s $f12, $f0
+sqrt.s $f13, $f1
+li $t0, 7
+mtc1 $t0, $f14
+cvt.s.w $f15, $f14
+floor.w.d $f16, $f8
+",
+    );
+    let f = |r: usize| f32::from_bits(m.cpu.fpr[r]);
+    assert_eq!((f(2), f(3)), (-0.75, -3.375));
+    assert_eq!(m.cpu.fpr[5], 0x7fc0_0000, "0/0: the canonical NaN");
+    assert_eq!(m.cpu.f64(8), 0.2);
+    assert_eq!(m.cpu.fpr[10] as i32, -2, "cvt.w truncates");
+    assert_eq!(m.cpu.fpr[11] as i32, 2, "1.5 rounds to the even 2");
+    assert_eq!((m.cpu.fcc(3), m.cpu.fcc(0)), (true, false));
+    assert_eq!(f(12), -1.5);
+    assert_eq!(m.cpu.fpr[13], 0x7fc0_0000, "sqrt of a negative number");
+    assert_eq!(f(15), 7.0);
+    assert_eq!(m.cpu.fpr[16], 0, "floor of 0.2");
+
+    // An odd register in a double operation: MARS's message, no exception code (CP0 unchanged).
+    let (m, ev) = run_src(".text\nadd.d $f2, $f3, $f4\n");
+    assert_eq!(
+        ev,
+        rustemu_target::Event::Error("Runtime exception at 0x00400000: all registers must be even-numbered".into())
+    );
+    assert_eq!(m.cpu.cp0[13], 0, "Cause is not set");
+    // ldc1 at an address that is not a multiple of 8.
+    let (_, ev) = run_src(".data\n.word 0\nx: .word 0, 0\n.text\nla $t0, x\nldc1 $f2, 0($t0)\n");
+    assert_eq!(
+        ev,
+        rustemu_target::Event::Error(
+            "Runtime exception at 0x00400008: address not aligned on doubleword boundary 0x10010004".into()
+        )
+    );
 }

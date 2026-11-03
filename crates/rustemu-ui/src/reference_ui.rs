@@ -726,6 +726,11 @@ fn registers_article(ui: &mut Ui, l: Lang) {
         "Procedures: arguments in $a0..$a3, results in $v0 (and $v1); jal puts the return address in $ra, jr $ra returns. A procedure keeps $s0..$s7, $sp, $fp and $ra as they were (saving them on the stack when it uses them); $t0..$t9 may change.",
         "Процедуры: аргументы — в $a0..$a3, результат — в $v0 (и $v1); jal кладёт адрес возврата в $ra, jr $ra возвращает. Процедура сохраняет $s0..$s7, $sp, $fp и $ra (кладёт их в стек, если использует); $t0..$t9 могут измениться.",
     ));
+    ui.add_space(4.0);
+    ui.label(l.pick(
+        "Coprocessor 1 (floating point): 32 registers $f0..$f31 of 32 bits, each holding a float; a double takes an even register and the next one ($f2 = $f2:$f3, the low word in the even one). By convention results go in $f0 (and $f2), arguments in $f12 and $f14, $f20..$f30 are saved by a procedure, the others are temporary. 8 condition flags (0..7) hold the results of c.eq, c.lt, c.le for bc1t / bc1f and movt / movf. The FPU group of the registers window shows them all.",
+        "Сопроцессор 1 (плавающая точка): 32 регистра $f0..$f31 по 32 бита, в каждом — число float; double занимает чётный регистр и следующий ($f2 = $f2:$f3, младшее слово — в чётном). По соглашению результат — в $f0 (и $f2), аргументы — в $f12 и $f14, $f20..$f30 процедура сохраняет, остальные временные. 8 флагов условий (0..7) хранят результаты c.eq, c.lt, c.le для bc1t / bc1f и movt / movf. Всё это показывает группа FPU в окне регистров.",
+    ));
     section(ui, l.pick("Memory (as MARS lays it out)", "Память (как её размечает MARS)"));
     egui::Grid::new("mips_memory_ref").striped(true).spacing([16.0, 3.0]).show(ui, |ui| {
         for (addr, en, ru) in [

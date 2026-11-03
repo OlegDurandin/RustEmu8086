@@ -16,6 +16,7 @@ pub mod console;
 pub mod cpu;
 pub mod disasm;
 pub mod files;
+pub mod fpu;
 pub mod machine;
 pub mod memory;
 pub mod random;

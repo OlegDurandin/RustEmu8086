@@ -29,6 +29,17 @@ impl JavaRandom {
         (self.seed >> (48 - bits)) as i32
     }
 
+    /// `nextFloat()`: a float in `0.0..1.0` (24 random bits).
+    pub fn next_float(&mut self) -> f32 {
+        self.next(24) as f32 / (1u32 << 24) as f32
+    }
+
+    /// `nextDouble()`: a double in `0.0..1.0` (53 random bits).
+    pub fn next_double(&mut self) -> f64 {
+        let hi = (self.next(26) as i64) << 27;
+        (hi + self.next(27) as i64) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+
     /// `nextInt()`: any 32-bit value.
     pub fn next_int(&mut self) -> i32 {
         self.next(32)

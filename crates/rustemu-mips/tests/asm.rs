@@ -224,8 +224,6 @@ fn errors_like_mars() {
     assert_eq!(e[0].message, "\".word\" directive cannot appear in text segment");
     let e = errors(".data\n.word 1.5\n");
     assert_eq!(e[0].message, "\"1.5\" is not a valid integer constant or label");
-    let e = errors(".text\nadd.s $f0, $f1, $f2\n");
-    assert!(e[0].message.contains("coprocessor 1"));
     let w = ok(".data\n.byte 300\n").warnings;
     assert_eq!(w[0].message, "\"300\" is out-of-range for a signed value and possibly truncated");
     let e = errors(".text\nli $t0, 12x\n");
@@ -250,9 +248,107 @@ fn swr_with_an_address_stores_through_at() {
 
 #[test]
 fn every_basic_instruction_of_mars_is_known() {
-    // The 87 integer basic forms of MARS's InstructionSet.java (coprocessor 1 left out).
-    assert_eq!(rustemu_mips::asm::BASIC.len(), 87);
+    // The 155 basic forms of MARS's InstructionSet.java: 87 integer, 68 of coprocessor 1.
+    assert_eq!(rustemu_mips::asm::BASIC.len(), 155);
     let p = ok(".text\nclz $t0, $t1\nclo $t2, $t3\n");
     assert_eq!(p.statements[0].words, [0x7120_4020], "MARS encodes rt = 0");
     assert_eq!(p.statements[1].basic, ["clo $10,$11"]);
+}
+
+#[test]
+fn macros_expand_as_in_mars() {
+    let src = r#".macro print_int(%x)
+    li $v0, 1
+    add $a0, $zero, %x
+    syscall
+.end_macro
+.macro times(%r, %n)
+    li %r, 0
+loop:
+    print_int(%r)
+    addi %r, %r, 1
+    blt %r, %n, loop
+.end_macro
+.text
+main:
+    times($t0, 3)
+    times $t1, 2
+    li $v0, 10
+    syscall
+"#;
+    let (out, _) = run(src, "");
+    assert_eq!(out, "01201");
+    let p = ok(src);
+    let names: Vec<&str> = p.symbols.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"loop_M0") && names.contains(&"loop_M2"), "a label per expansion: {names:?}");
+    // The statements of an expansion belong to the call; the body line and the nesting are kept.
+    let s = p.statements.iter().find(|s| s.expanded.as_deref() == Some("add $a0, $zero, $t0")).unwrap();
+    assert_eq!((s.file, s.line, s.origin), (0, 15, Some((0, 3))));
+    assert_eq!(s.chain, [(0, 9), (0, 3)], "times' line 9 calls print_int, whose line 3 this is");
+    assert!(p.listing().contains("  15: <3> add $a0, $zero, $t0"));
+}
+
+#[test]
+fn include_reads_files_relative_to_the_including_one() {
+    let files = [
+        ("dir/lib.asm", ".include \"print.asm\"\n.macro done\n    li $v0, 10\n    syscall\n.end_macro\n"),
+        ("dir/print.asm", ".macro print(%n)\n    li $a0, %n\n    li $v0, 1\n    syscall\n.end_macro\n"),
+    ];
+    let mut asked = Vec::new();
+    let mut read = |p: &str| {
+        asked.push(p.to_string());
+        files.iter().find(|f| f.0 == p).map(|f| f.1.to_string())
+    };
+    let p =
+        rustemu_mips::asm::assemble_with("main.s", ".include \"dir/lib.asm\"\nprint(7)\ndone\n", &mut read).unwrap();
+    assert_eq!(asked, ["dir/lib.asm", "dir/print.asm"]);
+    let names: Vec<&str> = p.files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["main.s", "dir/lib.asm", "dir/print.asm"]);
+    let first = &p.statements[0];
+    assert_eq!((first.file, first.line, first.origin), (0, 2, Some((2, 2))), "print's body is in print.asm");
+    let mut m = Machine::new();
+    m.load(&p.image).unwrap();
+    m.run(100);
+    assert_eq!(m.console.text(), "7");
+
+    let e = rustemu_mips::asm::assemble_with("main.s", ".include \"a.s\"\n", &mut |_| {
+        Some("nop\n.include \"a.s\"\n".into())
+    })
+    .unwrap_err();
+    assert_eq!(e.to_string(), "a.s: line 2 column 10: Recursive include of file a.s");
+    let e = errors(".include \"x.s\"\n");
+    assert_eq!(e[0].message, "Error reading include file x.s");
+}
+
+#[test]
+fn macro_errors_show_the_calls() {
+    let e = errors(".macro m(%a)\n  addi $t0, %a, 1\n.end_macro\n.macro n(%r)\n  m(%r)\n.end_macro\n  n(foo)\n");
+    assert_eq!(e[0].to_string(), "line 7->5->2 column 13: \"foo\": operand is of incorrect type");
+    assert_eq!(
+        errors(".macro m\nm\n.end_macro\nm\n")[0].message,
+        "Detected a macro expansion loop (recursive reference). "
+    );
+    assert_eq!(
+        errors("nop\n.macro m\n")[0].to_string(),
+        "line 2: Macro started but not ended (no .end_macro directive)"
+    );
+}
+
+#[test]
+fn macro_bombs_are_stopped() {
+    // Each level calls the one below it 8 times: 8^7 lines.
+    let mut src = String::from(".macro m0\nnop\n.end_macro\n");
+    for k in 1..8 {
+        src += &format!(".macro m{k}\n{}.end_macro\n", format!("m{}\n", k - 1).repeat(8));
+    }
+    src += "m7\n";
+    let e = errors(&src);
+    assert!(e.iter().any(|e| e.message.contains("more than 250000 lines")), "{e:?}");
+    // A chain of 100 macros, each calling the previous one.
+    let mut src = String::from(".macro c0\nnop\n.end_macro\n");
+    for k in 1..100 {
+        src += &format!(".macro c{k}\nc{}\n.end_macro\n", k - 1);
+    }
+    src += "c99\n";
+    assert!(errors(&src).iter().any(|e| e.message.contains("nested deeper than 64")));
 }

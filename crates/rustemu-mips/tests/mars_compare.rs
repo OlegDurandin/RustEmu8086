@@ -505,6 +505,8 @@ fn source_operand(g: &mut Rng, op: rustemu_mips::asm::Operand, branch: bool) -> 
     use rustemu_mips::asm::{IntClass, Operand};
     match op {
         Operand::Reg => n(g.reg()),
+        // ($f31 has no next register for the pairs of mfc1.d / mtc1.d.)
+        Operand::FReg => format!("$f{}", g.below(31)),
         Operand::Int(IntClass::I5) => g.below(32).to_string(),
         Operand::Int(IntClass::I16U) => (32 + g.below(65536 - 32)).to_string(),
         Operand::Int(IntClass::I16) => (-1 - g.below(32768) as i64).to_string(),
@@ -640,4 +642,452 @@ fn assembler_matches_mars() {
     }
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(failures, 0, "{failures} instructions differ from MARS");
+}
+
+/// Words for the floating-point registers: the values where floats differ (zeros, ±1.5, halves
+/// for rounding, NaN, infinities, denormals, the edges of the 32-bit range), the high words of
+/// such doubles, and random bits.
+const FLOAT_WORDS: [u32; 30] = [
+    0x0000_0000,
+    0x8000_0000,
+    0x3f80_0000,
+    0x3fc0_0000,
+    0x4020_0000,
+    0xc020_0000,
+    0x3f00_0000,
+    0xbfc0_0000,
+    0x7fc0_0000,
+    0x7f80_0001,
+    0x7f80_0000,
+    0xff80_0000,
+    0x4f32_d05e,
+    0xcf32_d05e,
+    0x0000_0001,
+    0x3eaa_aaab,
+    0x4b00_0000,
+    0x4eff_ffff,
+    0x4f00_0000,
+    0xcf00_0000,
+    0x3ff0_0000,
+    0x4004_0000,
+    0xc004_0000,
+    0x7ff8_0000,
+    0x7ff0_0000,
+    0x41e0_0000,
+    0xc1e0_0000,
+    0x3fe0_0000,
+    0x41df_ffff,
+    0x400c_0000,
+];
+
+/// A random program of coprocessor 1: registers from `FLOAT_WORDS` and random bits, then
+/// arithmetic, square roots, conversions and roundings to words, comparisons into the 8
+/// condition flags, conditional moves and branches, moves to and from the general registers,
+/// stores. Double operations take even registers, sometimes an odd one (MARS's runtime error).
+/// At the end the condition flags go to $s0..$s7.
+fn float_program(seed: u64) -> String {
+    let mut g = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    let mut src = String::from(".data\nwords:\n");
+    for _ in 0..32 {
+        let w = if g.below(3) == 0 { g.next() as u32 } else { FLOAT_WORDS[g.below(30) as usize] };
+        src += &format!("    .word 0x{w:08x}\n");
+    }
+    src += "out: .space 128\n.text\n    la $a0, words\n    la $a1, out\n";
+    for r in 0..32 {
+        src += &format!("    lwc1 $f{r}, {}($a0)\n", 4 * r);
+    }
+    for t in ["$t0", "$t1", "$t2"] {
+        src += &format!("    li {t}, {}\n", g.below(4) as i32 - 1);
+    }
+    let any = |g: &mut Rng| format!("$f{}", g.below(32));
+    let even = |g: &mut Rng| {
+        // One time in 600 an odd register (a program in ten or so): MARS stops with
+        // "must be even-numbered".
+        if g.below(600) == 0 { format!("$f{}", 2 * g.below(16) + 1) } else { format!("$f{}", 2 * g.below(16)) }
+    };
+    let mut label = 0;
+    for _ in 0..40 {
+        let line = match g.below(16) {
+            0 => {
+                let op = ["add", "sub", "mul", "div"][g.below(4) as usize];
+                format!("{op}.s {}, {}, {}", any(&mut g), any(&mut g), any(&mut g))
+            }
+            1 => {
+                let op = ["add", "sub", "mul", "div"][g.below(4) as usize];
+                format!("{op}.d {}, {}, {}", even(&mut g), even(&mut g), even(&mut g))
+            }
+            2 => {
+                let op = ["sqrt", "abs", "neg", "mov", "round.w", "trunc.w", "ceil.w", "floor.w", "cvt.w"]
+                    [g.below(9) as usize];
+                format!("{op}.s {}, {}", any(&mut g), any(&mut g))
+            }
+            3 => {
+                let op = ["sqrt", "abs", "neg", "mov"][g.below(4) as usize];
+                format!("{op}.d {}, {}", even(&mut g), even(&mut g))
+            }
+            4 => {
+                let op = ["round.w", "trunc.w", "ceil.w", "floor.w", "cvt.w", "cvt.s"][g.below(6) as usize];
+                format!("{op}.d {}, {}", any(&mut g), even(&mut g))
+            }
+            5 => match g.below(3) {
+                0 => format!("cvt.d.s {}, {}", even(&mut g), any(&mut g)),
+                1 => format!("cvt.d.w {}, {}", even(&mut g), any(&mut g)),
+                _ => format!("cvt.s.w {}, {}", any(&mut g), any(&mut g)),
+            },
+            6 | 7 => {
+                let c = ["eq", "lt", "le"][g.below(3) as usize];
+                if g.below(2) == 0 {
+                    format!("c.{c}.s {}, {}, {}", g.below(8), any(&mut g), any(&mut g))
+                } else {
+                    format!("c.{c}.d {}, {}, {}", g.below(8), even(&mut g), even(&mut g))
+                }
+            }
+            8 => {
+                let op = ["movf", "movt"][g.below(2) as usize];
+                if g.below(2) == 0 {
+                    format!("{op}.s {}, {}, {}", any(&mut g), any(&mut g), g.below(8))
+                } else {
+                    format!("{op}.d {}, {}, {}", even(&mut g), even(&mut g), g.below(8))
+                }
+            }
+            9 => {
+                let op = ["movn", "movz"][g.below(2) as usize];
+                let t = ["$t0", "$t1", "$t2"][g.below(3) as usize];
+                if g.below(2) == 0 {
+                    format!("{op}.s {}, {}, {t}", any(&mut g), any(&mut g))
+                } else {
+                    format!("{op}.d {}, {}, {t}", even(&mut g), even(&mut g))
+                }
+            }
+            10 => {
+                let t = ["$t3", "$t4", "$t5"][g.below(3) as usize];
+                format!("mfc1 {t}, {}", any(&mut g))
+            }
+            11 => format!("mtc1 {}, {}", ["$t0", "$t1", "$t2"][g.below(3) as usize], any(&mut g)),
+            12 => {
+                label += 1;
+                let op = ["bc1t", "bc1f"][g.below(2) as usize];
+                format!(
+                    "{op} {}, skip{label}\n    abs.s $f{}, $f{}\nskip{label}:",
+                    g.below(8),
+                    g.below(32),
+                    g.below(32)
+                )
+            }
+            13 => {
+                let op = ["movf", "movt"][g.below(2) as usize];
+                format!("{op} $t6, $t{}, {}", g.below(3), g.below(8))
+            }
+            14 => format!("swc1 {}, {}($a1)", any(&mut g), 4 * g.below(32)),
+            _ => format!("sdc1 {}, {}($a1)", even(&mut g), 8 * g.below(16)),
+        };
+        src += &format!("    {line}\n");
+    }
+    src += "    li $k0, 1\n";
+    for cc in 0..8 {
+        src += &format!("    li $s{cc}, 0\n    movt $s{cc}, $k0, {cc}\n");
+    }
+    src
+}
+
+/// Registers compared by the floating-point programs.
+fn float_regs() -> Vec<String> {
+    let gpr = ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+    gpr.iter().map(|r| format!("${r}")).chain((0..32).map(|r| format!("$f{r}"))).collect()
+}
+
+/// The program on the core: the registers of `float_regs`, 128 bytes at `out`, the error.
+fn run_core_float(src: &str) -> Outcome {
+    let p = rustemu_mips::asm::assemble(src).unwrap_or_else(|e| panic!("{e:?}\n{src}"));
+    let mut m = rustemu_mips::Machine::new();
+    m.load(&p.image).unwrap();
+    let error = match m.run(100_000) {
+        rustemu_target::Event::Error(e) => Some(e),
+        _ => None,
+    };
+    let regs = float_regs()
+        .into_iter()
+        .map(|r| {
+            let v = match r.strip_prefix("$f") {
+                Some(n) => m.cpu.fpr[n.parse::<usize>().unwrap()],
+                None => m.cpu.regs[NAMES.iter().position(|n| *n == &r[1..]).unwrap()],
+            };
+            (r[1..].to_string(), v)
+        })
+        .collect();
+    let out = DATA_BASE + 128;
+    Outcome { regs, data: (0..32).map(|k| m.mem.peek32(out + 4 * k)).collect(), error }
+}
+
+fn run_mars_float(mars: &Path, dir: &Path, src: &str) -> Outcome {
+    let file = dir.join("float.asm");
+    std::fs::write(&file, src).unwrap();
+    let mut cmd = Command::new("java");
+    if mars.extension().is_some_and(|e| e == "jar") {
+        cmd.arg("-jar").arg(mars);
+    } else {
+        cmd.arg("-cp").arg(mars).arg("Mars");
+    }
+    cmd.arg("nc").arg("100000").args(float_regs());
+    let out = DATA_BASE + 128;
+    cmd.arg(format!("0x{out:08x}-0x{:08x}", out + 124)).arg(&file);
+    let output = cmd.output().expect("java runs");
+    let text = String::from_utf8_lossy(&output.stdout).to_string() + &String::from_utf8_lossy(&output.stderr);
+    let mut regs = Vec::new();
+    let mut data = Vec::new();
+    let mut error = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix('$') {
+            let mut cols = rest.split('\t');
+            let name = cols.next().unwrap().to_string();
+            let value = cols.next().unwrap().trim().trim_start_matches("0x");
+            regs.push((name, u32::from_str_radix(value, 16).unwrap()));
+        } else if line.starts_with("Mem[") {
+            data.extend(
+                line.split('\t')
+                    .skip(1)
+                    .filter(|w| w.starts_with("0x"))
+                    .map(|w| u32::from_str_radix(&w[2..], 16).unwrap()),
+            );
+        } else if let Some(i) = line.find("Runtime exception at ") {
+            error = Some(line[i..].trim().to_string());
+        } else if line.contains("Assemble: operation completed with errors") {
+            panic!("MARS did not assemble the program:\n{text}\n{src}");
+        }
+    }
+    Outcome { regs, data, error }
+}
+
+/// Random programs of coprocessor 1 on the core and on MARS: the general and floating-point
+/// registers, the condition flags, the stored words and the error must be the same.
+#[test]
+fn float_programs_match_mars() {
+    let Some(mars) = std::env::var_os("MARS") else {
+        eprintln!("MARS is not set: skipping the comparison with MARS");
+        return;
+    };
+    let mars = Path::new(&mars).canonicalize().expect("MARS exists");
+    let count: u64 = std::env::var("MARS_PROGRAMS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let dir = std::env::temp_dir().join(format!("rustemu_mars_float_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut errors = 0;
+    let mut stopped = 0;
+    for seed in 1..=count {
+        let src = float_program(seed);
+        let (ours, theirs) = (run_core_float(&src), run_mars_float(&mars, &dir, &src));
+        stopped += ours.error.is_some() as u32;
+        if ours != theirs {
+            errors += 1;
+            if errors <= 5 {
+                eprintln!("seed {seed}: differs\n--- program\n{src}--- core\n{ours:?}\n--- MARS\n{theirs:?}\n");
+            }
+        }
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    eprintln!("{count} programs, {stopped} stopped by an odd register");
+    assert_eq!(errors, 0, "{errors} of {count} floating-point programs differ from MARS");
+}
+
+/// Programs with macros and `.include`s: (main program, included files by path).
+const MACRO_CASES: &[(&str, &[(&str, &str)])] = &[
+    // MARS's help: arguments with and without parentheses, a label in a data segment of a macro,
+    // a macro passed by name to another one.
+    (
+        r#".macro print_int (%x)
+    li $v0, 1
+    add $a0, $zero, %x
+    syscall
+.end_macro
+.macro print_str (%str)
+    .data
+myLabel: .asciiz %str
+    .text
+    li $v0, 4
+    la $a0, myLabel
+    syscall
+.end_macro
+.macro for (%regIterator, %from, %to, %bodyMacroName)
+    add %regIterator, $zero, %from
+    Loop:
+    %bodyMacroName ()
+    add %regIterator, %regIterator, 1
+    ble %regIterator, %to, Loop
+.end_macro
+.macro body()
+    print_int $t0
+    print_str "\n"
+.end_macro
+.text
+    print_int (10)
+    print_str ("test1")
+    for ($t0, 1, 3, body)
+    li $v0, 10
+    syscall
+"#,
+        &[],
+    ),
+    // Overloading by the number of arguments; a redefinition (the last one wins); SPIM's `$x`
+    // parameters; arguments separated by spaces; a label on the line of a call.
+    (
+        r#".macro inc(%r)
+    addi %r, %r, 1
+.end_macro
+.macro inc(%r, %n)
+    addi %r, %r, %n
+.end_macro
+.macro inc(%r)
+    addiu %r, %r, 1
+.end_macro
+.macro swap($a, $b)
+    move $at, $a
+    move $a, $b
+    move $b, $at
+.end_macro
+.text
+start: inc $t0
+    inc($t1, 5)
+here: swap $t0 $t1
+    j here
+    beq $t0, $t1, start
+"#,
+        &[],
+    ),
+    // MARS's substitution: a parameter that starts another one's name replaces its first
+    // occurrence (here inside the other parameter).
+    (".macro m(%r, %rr)\n    add %r, %rr, %r\n    add %rr, %r, %r\n.end_macro\n.text\n    m($t1, $t2)\n", &[]),
+    // A macro in the data segment, a continuation of a data directive, .eqv in a body, labels
+    // of two expansions, a label used in data.
+    (
+        r#".macro table(%v)
+    .eqv TWICE 2
+    .word %v, %v
+here: .word here, TWICE
+.end_macro
+.data
+    table(7)
+    table(-1)
+    .half 3
+    5, 6
+"#,
+        &[],
+    ),
+    // .include: a macro library from a subfolder, which includes a file next to itself.
+    (
+        ".include \"lib/macros.asm\"\n.text\nmain: exit_with(3)\n    print(42)\n",
+        &[
+            (
+                "lib/macros.asm",
+                ".include \"print.asm\"\n.macro exit_with(%code)\n    li $a0, %code\n    li $v0, 17\n    syscall\n.end_macro\n",
+            ),
+            ("lib/print.asm", ".macro print(%n)\n    li $a0, %n\n    li $v0, 1\n    syscall\n.end_macro\n"),
+        ],
+    ),
+    // Errors: an unknown parameter, a loop, a nested definition, .end_macro alone, an unknown
+    // name, a forward reference, invalid names and parameters, an error in a nested expansion.
+    (".macro m(%a)\nli $t0, %b\n.end_macro\nm(1)\n", &[]),
+    (".macro m\nm\n.end_macro\nm\n", &[]),
+    (".macro m\n.macro n\n.end_macro\n", &[]),
+    ("nop\n.end_macro\n", &[]),
+    ("nop\n.macro m\nnop\n", &[]),
+    ("m\n.macro m\nnop\n.end_macro\nm 1\n", &[]),
+    (".macro li\n.end_macro\n.macro 5\n.end_macro\n", &[]),
+    (".macro m(%a, b)\n.end_macro\n", &[]),
+    (".macro m(%a)\n  nop\n  addi $t0, %a, 1\n.end_macro\n.macro n(%r)\n  m(%r)\n.end_macro\n.text\n  n(foo)\n", &[]),
+    (".macro m\n  .eqv K 1\n.end_macro\n.eqv K 2\nm\n", &[]),
+    // Labels of a loop in two expansions; errors of the second pass in an expansion.
+    (
+        ".macro count(%r, %n)\n    li %r, 0\nloop:\n    addi %r, %r, 1\n    blt %r, %n, loop\n.end_macro\n.text\n    count($t0, 3)\n    count($t1, 5)\n    j loop_M1\n",
+        &[],
+    ),
+    (".macro m\n  nop\n  j nowhere\n.end_macro\n.text\n  nop\n  m\n", &[]),
+    // .include errors: a second include of a file, a missing one, without quotes; a label on
+    // an .include line goes with the line.
+    (".include \"inc.asm\"\n.include \"inc.asm\"\n", &[("inc.asm", "nop\n")]),
+    (".include \"nofile.asm\"\n", &[]),
+    (".include inc.asm\nnop\n", &[("inc.asm", "nop\n")]),
+    ("x: .include \"inc.asm\"\nj x\n", &[("inc.asm", "nop\n")]),
+    (".include \"inc.asm\"\nnop\n", &[("inc.asm", "nop\nli $t0, %x\nbogus\n")]),
+];
+
+/// Macros and `.include` against MARS: the machine code and data of each case, or its errors
+/// (file, line with the macro calls, column, message).
+#[test]
+fn macros_match_mars() {
+    let Some(mars) = std::env::var_os("MARS") else {
+        eprintln!("MARS is not set: skipping the comparison with MARS");
+        return;
+    };
+    let mars = Path::new(&mars).canonicalize().expect("MARS exists");
+    let root = std::env::temp_dir().join(format!("rustemu_mars_macros_{}", std::process::id()));
+    let mut failures = 0;
+    for (k, (main, files)) in MACRO_CASES.iter().enumerate() {
+        let dir = root.join(k.to_string());
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let file = dir.join("main.asm");
+        std::fs::write(&file, main).unwrap();
+        for (name, text) in *files {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+        // Ours.
+        let mut read = |p: &str| std::fs::read_to_string(p).ok();
+        let ours = rustemu_mips::asm::assemble_with(&file.to_string_lossy(), main, &mut read);
+        let short = |s: &str| s.replace(&format!("{}/", dir.display()), "");
+        let (our_code, our_data, our_errors) = match &ours {
+            Ok(p) => {
+                let mut m = rustemu_mips::Machine::new();
+                m.load(&p.image).unwrap();
+                let data: Vec<u32> = (0..64).map(|i| m.mem.peek32(DATA_BASE + 4 * i)).collect();
+                (p.statements.iter().flat_map(|s| s.words.clone()).collect::<Vec<u32>>(), data, Vec::new())
+            }
+            Err(e) => {
+                let errors = e
+                    .errors
+                    .iter()
+                    .map(|x| short(format!("{} {x}", e.files[x.file]).trim_end()))
+                    .collect::<Vec<String>>();
+                (Vec::new(), Vec::new(), errors)
+            }
+        };
+        // MARS.
+        let (text_dump, data_dump) = (dir.join("text.hex"), dir.join("data.hex"));
+        let mut cmd = Command::new("java");
+        if mars.extension().is_some_and(|e| e == "jar") {
+            cmd.arg("-jar").arg(&mars);
+        } else {
+            cmd.arg("-cp").arg(&mars).arg("Mars");
+        }
+        let out = cmd
+            .args(["nc", "a", "dump", ".text", "HexText"])
+            .arg(&text_dump)
+            .args(["dump", ".data", "HexText"])
+            .arg(&data_dump)
+            .arg(&file)
+            .output()
+            .expect("java runs");
+        let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+        let their_errors: Vec<String> =
+            text.lines().filter_map(|l| l.strip_prefix("Error in ")).map(|l| short(l.trim_end())).collect();
+        let hex = |p: &Path| -> Vec<u32> {
+            std::fs::read_to_string(p)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| u32::from_str_radix(l.trim(), 16).unwrap())
+                .collect()
+        };
+        let their_code = if their_errors.is_empty() { hex(&text_dump) } else { Vec::new() };
+        let their_data: Vec<u32> =
+            if their_errors.is_empty() { hex(&data_dump).into_iter().take(64).collect() } else { Vec::new() };
+        let ok = our_errors == their_errors
+            && our_code == their_code
+            && our_data[..their_data.len().min(our_data.len())] == their_data[..their_data.len().min(our_data.len())];
+        if !ok {
+            failures += 1;
+            eprintln!(
+                "case {k} differs:\n{main}--- ours\n{our_errors:#?}\n{our_code:08x?}\n--- MARS\n{their_errors:#?}\n{their_code:08x?}\n{text}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(&root).ok();
+    assert_eq!(failures, 0, "{failures} of {} macro / .include cases differ from MARS", MACRO_CASES.len());
 }

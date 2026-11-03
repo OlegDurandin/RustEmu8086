@@ -61,6 +61,10 @@ pub enum ExcCode {
     Overflow = 12,
     /// A trap instruction whose condition holds.
     Trap = 13,
+    /// A runtime error MARS reports without an exception code (an odd register of a double
+    /// operation): Cause, EPC and BadVAddr are not changed, but the exception handler (when there
+    /// is one) is still entered.
+    Runtime = 31,
 }
 
 /// An exception raised by an instruction (see [`Cpu::step`]).
@@ -120,6 +124,11 @@ pub struct Cpu {
     pub pc: u32,
     /// Coprocessor 0 registers by number (MARS has 8, 12, 13 and 14; the others read as 0).
     pub cp0: [u32; 32],
+    /// Coprocessor 1 (floating point) registers `$f0`..`$f31`: a float, or a double in an even
+    /// register and the next one (the low word first).
+    pub fpr: [u32; 32],
+    /// The 8 condition flags of coprocessor 1 (bit n: flag n), set by `c.eq/lt/le`.
+    pub fcc: u8,
     /// Instructions executed since the reset.
     pub instr_count: u64,
     /// The last operation of the arithmetic and logic unit (for the ALU window; None until one).
@@ -207,20 +216,20 @@ impl Default for Cpu {
 
 /// The parts of an instruction word.
 #[derive(Clone, Copy)]
-struct Fields {
-    word: u32,
-    rs: usize,
-    rt: usize,
-    rd: usize,
-    shamt: u32,
+pub(crate) struct Fields {
+    pub(crate) word: u32,
+    pub(crate) rs: usize,
+    pub(crate) rt: usize,
+    pub(crate) rd: usize,
+    pub(crate) shamt: u32,
     /// The 16-bit immediate, sign-extended.
-    simm: u32,
+    pub(crate) simm: u32,
     /// The 16-bit immediate, zero-extended.
     uimm: u32,
 }
 
 impl Fields {
-    fn new(word: u32) -> Fields {
+    pub(crate) fn new(word: u32) -> Fields {
         Fields {
             word,
             rs: (word >> 21 & 31) as usize,
@@ -234,9 +243,9 @@ impl Fields {
 }
 
 /// Why an instruction stopped: an exception before the CPU state is touched.
-type Fault = (ExcCode, String, Option<u32>);
+pub(crate) type Fault = (ExcCode, String, Option<u32>);
 
-fn access(e: AccessError) -> Fault {
+pub(crate) fn access(e: AccessError) -> Fault {
     let code = match e.access {
         Access::Load => ExcCode::AddressLoad,
         Access::Store => ExcCode::AddressStore,
@@ -252,7 +261,7 @@ fn trap(cond: bool) -> Result<(), Fault> {
     if cond { Err((ExcCode::Trap, "trap".into(), None)) } else { Ok(()) }
 }
 
-fn reserved(word: u32) -> Fault {
+pub(crate) fn reserved(word: u32) -> Fault {
     (ExcCode::ReservedInstruction, format!("undefined instruction ({})", hex(word)), None)
 }
 
@@ -265,7 +274,7 @@ impl Cpu {
         regs[SP] = memory::SP_INIT;
         let mut cp0 = [0; 32];
         cp0[cp0::STATUS] = cp0::STATUS_RESET;
-        Cpu { regs, hi: 0, lo: 0, pc: memory::TEXT_BASE, cp0, instr_count: 0, alu: None }
+        Cpu { regs, hi: 0, lo: 0, pc: memory::TEXT_BASE, cp0, fpr: [0; 32], fcc: 0, instr_count: 0, alu: None }
     }
 
     /// Register `r` (`$0` reads as 0).
@@ -352,12 +361,15 @@ impl Cpu {
         bad: Option<u32>,
         fetch: bool,
     ) -> Exception {
-        if let Some(a) = bad {
-            self.cp0[cp0::VADDR] = a;
+        // MARS's runtime errors without a code leave coprocessor 0 as it is.
+        if code != ExcCode::Runtime {
+            if let Some(a) = bad {
+                self.cp0[cp0::VADDR] = a;
+            }
+            self.cp0[cp0::CAUSE] = (self.cp0[cp0::CAUSE] & 0xFFFF_FC83) | ((code as u32) << 2);
+            self.cp0[cp0::EPC] = pc;
+            self.cp0[cp0::STATUS] |= cp0::EXL;
         }
-        self.cp0[cp0::CAUSE] = (self.cp0[cp0::CAUSE] & 0xFFFF_FC83) | ((code as u32) << 2);
-        self.cp0[cp0::EPC] = pc;
-        self.cp0[cp0::STATUS] |= cp0::EXL;
         let handled = mem.has_code(memory::EXCEPTION_HANDLER);
         self.pc = if handled { memory::EXCEPTION_HANDLER } else { pc };
         Exception { code, message, pc, bad_vaddr: bad, fetch, handled }
@@ -466,13 +478,8 @@ impl Cpu {
                 mem.store32(addr, rt).map_err(access)?;
                 self.set_reg(f.rt, 1);
             }
-            0x11 | 0x31 | 0x35 | 0x39 | 0x3D => {
-                return Err((
-                    ExcCode::ReservedInstruction,
-                    format!("floating-point instructions are not supported yet ({})", hex(word)),
-                    None,
-                ));
-            }
+            0x11 => self.cop1(&f)?,
+            0x31 | 0x35 | 0x39 | 0x3D => self.fpu_memory(mem, &f, addr)?,
             _ => return Err(reserved(word)),
         }
         Ok(Step::Ok)
@@ -554,13 +561,7 @@ impl Cpu {
             0x33 => trap(rs < rt)?,
             0x34 => trap(rs == rt)?,
             0x36 => trap(rs != rt)?,
-            0x01 => {
-                return Err((
-                    ExcCode::ReservedInstruction,
-                    format!("floating-point instructions are not supported yet ({})", hex(f.word)),
-                    None,
-                ));
-            }
+            0x01 => self.movf_gpr(f)?,
             _ => return Err(reserved(f.word)),
         }
         Ok(Step::Ok)

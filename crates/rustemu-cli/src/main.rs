@@ -87,17 +87,20 @@ fn source_text(path: &Path) -> Result<Option<String>, String> {
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-/// The errors of a MIPS source as `file: line L column C: message`.
-fn mips_errors(path: &Path, errors: &[rustemu_mips::asm::AsmError]) -> String {
-    let name = path.display();
-    errors.iter().map(|e| format!("{name}: {e}")).collect::<Vec<_>>().join("\n")
+/// Assembles MIPS source `text` of file `path`, its `.include` files read from disk; the errors as
+/// `file: line L column C: message`, warnings printed.
+fn assemble_mips(path: &Path, text: &str) -> Result<rustemu_mips::asm::Program, String> {
+    let name = path.display().to_string();
+    let mut read = |p: &str| std::fs::read(p).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
+    let prog = rustemu_mips::asm::assemble_with(&name, text, &mut read).map_err(|e| e.to_string())?;
+    for w in &prog.warnings {
+        eprintln!("{}: warning: {w}", prog.files[w.file].name);
+    }
+    Ok(prog)
 }
 
 fn cmd_asm_mips(path: &Path, text: &str, args: &[String]) -> Result<u8, String> {
-    let prog = rustemu_mips::asm::assemble(text).map_err(|e| mips_errors(path, &e))?;
-    for w in &prog.warnings {
-        eprintln!("{}: warning: {w}", path.display());
-    }
+    let prog = assemble_mips(path, text)?;
     let words: usize = prog.statements.iter().map(|s| s.words.len()).sum();
     let data: u32 = prog.data.iter().map(|d| d.len).sum();
     println!("{} (MIPS32): {words} instructions, {data} bytes of data", path.display());
@@ -108,7 +111,7 @@ fn cmd_asm_mips(path: &Path, text: &str, args: &[String]) -> Result<u8, String> 
     }
     if flag(args, "-l") {
         let lst = path.with_extension("lst");
-        std::fs::write(&lst, prog.listing(text)).map_err(|e| e.to_string())?;
+        std::fs::write(&lst, prog.listing()).map_err(|e| e.to_string())?;
         println!("listing: {}", lst.display());
     }
     if flag(args, "-s") {
@@ -173,7 +176,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
         }
         let text = text.ok_or("a MIPS program is run from its source (.s / .asm)")?;
         let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-        let prog = rustemu_mips::asm::assemble(&text).map_err(|e| mips_errors(&path, &e))?;
+        let prog = assemble_mips(&path, &text)?;
         s.load_mips(prog, &name)?;
     } else {
         s.command_line = opt(args, "--args").unwrap_or("").to_string();
@@ -447,7 +450,7 @@ mod tests {
         let bytes = prog.text_bytes();
         assert_eq!(bytes.len(), 12);
         assert_eq!(&bytes[..4], &0x3c01_1234u32.to_le_bytes(), "lui $at, 0x1234");
-        assert!(prog.listing("main: li $t0, 0x12345678\nsyscall\n").contains("1: main: li $t0, 0x12345678"));
+        assert!(prog.listing().contains("1: main: li $t0, 0x12345678"));
         assert_eq!(prog.symbols_text(), "00400000  text  main\n");
     }
 
