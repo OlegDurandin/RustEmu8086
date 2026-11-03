@@ -230,13 +230,15 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             s.target.set_history(false);
             run_chunk(&mut s, &mut executed, max)
         };
-        let out = s.target.output();
-        if !screen && out.len() > printed {
+        // `printed` counts every byte written: the output keeps only its last megabyte or so.
+        let (out, dropped) = (s.target.output(), s.target.output_dropped());
+        if !screen && dropped + out.len() > printed {
+            let new = &out[printed.saturating_sub(dropped)..];
             // MIPS's console holds UTF-8 text; DOS's output is CP437 with CR LF.
-            let text = if mips { out[printed..].to_vec() } else { to_host_text(&out[printed..]) };
+            let text = if mips { new.to_vec() } else { to_host_text(new) };
             stdout.write_all(&text).ok();
             stdout.flush().ok();
-            printed = out.len();
+            printed = dropped + out.len();
         }
         match ev {
             Event::Continue => {}
@@ -289,7 +291,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             eprintln!("[log] {l}");
         }
         if !m.sys.dev.printer.is_empty() {
-            eprintln!("[printer] {}", String::from_utf8_lossy(&m.sys.dev.printer));
+            eprintln!("[printer] {}", String::from_utf8_lossy(m.sys.dev.printer.bytes()));
         }
     }
     Ok(code)

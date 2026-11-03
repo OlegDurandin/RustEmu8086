@@ -143,6 +143,79 @@ pub enum FrameKind {
     Interrupt(u8),
 }
 
+/// Bytes an [`OutputBuffer`] keeps (older ones are dropped).
+pub const OUTPUT_LIMIT: usize = 1 << 20;
+
+/// What a program writes (its console output, the printer's paper), bounded: only the last
+/// [`OUTPUT_LIMIT`] bytes are kept, so that a program printing forever does not fill the memory.
+/// Its length counts every byte ever written, so step back can return to an earlier length.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutputBuffer {
+    /// The kept bytes: the last of everything written.
+    bytes: Vec<u8>,
+    /// Bytes dropped from the front.
+    dropped: usize,
+}
+
+impl OutputBuffer {
+    /// Appends `bytes`.
+    pub fn write(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+        self.trim();
+    }
+
+    /// Appends one byte.
+    pub fn push(&mut self, b: u8) {
+        self.bytes.push(b);
+        self.trim();
+    }
+
+    /// Drops old bytes in large pieces, so that the output does not shift on every write.
+    fn trim(&mut self) {
+        if self.bytes.len() > OUTPUT_LIMIT + OUTPUT_LIMIT / 4 {
+            let cut = self.bytes.len() - OUTPUT_LIMIT;
+            self.bytes.drain(..cut);
+            self.dropped += cut;
+        }
+    }
+
+    /// Bytes written since the buffer was cleared, dropped ones included.
+    pub fn len(&self) -> usize {
+        self.dropped + self.bytes.len()
+    }
+
+    /// Nothing was written.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The kept bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Old bytes no longer kept (the position of the first kept byte).
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+
+    /// Goes back to the state when [`OutputBuffer::len`] was `len` (step back).
+    pub fn truncate(&mut self, len: usize) {
+        if len <= self.dropped {
+            self.bytes.clear();
+            self.dropped = len;
+        } else {
+            self.bytes.truncate(len - self.dropped);
+        }
+    }
+
+    /// Empties the buffer.
+    pub fn clear(&mut self) {
+        self.bytes.clear();
+        self.dropped = 0;
+    }
+}
+
 /// A value saved by a target and given back to it (machine snapshots, the state before a step).
 /// Its contents are known only to the target that made it ([`State::get`]).
 #[derive(Clone)]
@@ -205,8 +278,12 @@ pub trait Target: Any + Send {
     fn image_base(&self) -> Option<u32>;
     /// The exit code once the program has terminated.
     fn terminated(&self) -> Option<u8>;
-    /// Everything the program has written to its console, in the machine's character set.
+    /// What the program has written to its console, in the machine's character set: the last
+    /// [`OUTPUT_LIMIT`] bytes or so (see [`OutputBuffer`]).
     fn output(&self) -> &[u8];
+    /// Bytes of console output no longer kept, before [`Target::output`] (the position of its
+    /// first byte in everything written).
+    fn output_dropped(&self) -> usize;
     /// The program is blocked waiting for keyboard input.
     fn is_waiting_input(&self) -> bool;
     /// Keys are queued that the program has not read yet.
@@ -285,5 +362,29 @@ impl dyn Target {
     /// Index of the register named `name` (case-insensitive) in [`Target::registers`].
     pub fn register_index(&self, name: &str) -> Option<usize> {
         self.registers().iter().position(|r| r.name.eq_ignore_ascii_case(name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_keeps_the_end_and_steps_back() {
+        let mut o = OutputBuffer::default();
+        o.write(b"hello ");
+        let at = o.len();
+        o.write(b"world");
+        assert_eq!(o.bytes(), b"hello world");
+        o.truncate(at);
+        assert_eq!(o.bytes(), b"hello ");
+        for _ in 0..OUTPUT_LIMIT * 2 {
+            o.push(b'x');
+        }
+        assert!(o.bytes().len() <= OUTPUT_LIMIT + OUTPUT_LIMIT / 4);
+        assert_eq!(o.len(), 6 + OUTPUT_LIMIT * 2);
+        assert_eq!(o.dropped() + o.bytes().len(), o.len());
+        o.truncate(3);
+        assert_eq!((o.len(), o.bytes().len()), (3, 0));
     }
 }

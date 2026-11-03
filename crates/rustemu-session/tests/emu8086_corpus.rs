@@ -117,8 +117,11 @@ fn all_examples_run() {
         for l in s.x86().unwrap().log.lines() {
             problems.push(format!("{name}: {l}"));
         }
-        let out: String =
-            String::from_utf8_lossy(&s.x86().unwrap().output).chars().filter(|c| !c.is_control()).take(50).collect();
+        let out: String = String::from_utf8_lossy(s.x86().unwrap().output.bytes())
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(50)
+            .collect();
         println!("{name:<36} {outcome:<18} {out}");
     }
     std::fs::remove_dir_all(&sandbox).ok();
