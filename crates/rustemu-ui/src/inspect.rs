@@ -350,7 +350,7 @@ pub(crate) fn listing_ui(app: &mut App, ui: &mut Ui) {
 
 pub(crate) fn log_ui(app: &mut App, ui: &mut Ui) {
     let t = &*app.session.target;
-    let log = app.session.x86().map_or(&[][..], |m| &m.log[..]);
+    let log: Vec<String> = app.session.x86().map(|m| m.log.lines().collect()).unwrap_or_default();
     ui.label(RichText::new("console output").strong());
     egui::ScrollArea::vertical().id_salt("out").max_height(160.0).stick_to_bottom(true).show(ui, |ui| {
         let text: String = t
@@ -367,7 +367,7 @@ pub(crate) fn log_ui(app: &mut App, ui: &mut Ui) {
         if log.is_empty() {
             ui.weak("(none)");
         }
-        for l in log {
+        for l in &log {
             ui.label(RichText::new(l).monospace().color(crate::colors::warn(ui)));
         }
     });
