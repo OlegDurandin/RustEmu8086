@@ -207,16 +207,23 @@ impl Tool {
         let at = |title: &str, x: f32, y: f32| egui::Window::new(title.to_owned()).default_pos(pos2(x, y));
         // Some windows keep an id of their own: their title changes, or egui remembers them by it.
         let unique = |w: egui::Window<'a>, id: &str| w.id(egui::Id::unique(id));
+        let mips = app.arch() == rustemu_session::Arch::Mips32;
         match self {
+            // MIPS's emulator is wider (the code list has the source column) and its windows are
+            // placed around it: ids of their own, so egui keeps the 8086's places apart.
+            Tool::Emulator if mips => unique(at("emulator", 8.0, 64.0), "mips_emulator_window").default_width(1000.0),
             Tool::Emulator => unique(at("emulator", 8.0, 64.0), "emulator_window").default_width(660.0),
             Tool::Screen => unique(at(&crate::screen::title(app), 700.0, 64.0), "screen_window")
                 // The screen fills the window: drag its edge to make it larger or smaller.
                 .default_size([660.0, 440.0])
                 .min_size([240.0, 160.0]),
+            Tool::Source if mips => {
+                unique(at("original source code", 1024.0, 390.0), "mips_source_window").default_size([400.0, 460.0])
+            }
             Tool::Source => {
                 unique(at("original source code", 700.0, 540.0), "source_window").default_size([700.0, 300.0])
             }
-            Tool::RunIo => unique(at("Run I/O", 880.0, 64.0), "run_io_window").default_size([540.0, 360.0]),
+            Tool::RunIo => unique(at("Run I/O", 1024.0, 64.0), "run_io_window").default_size([400.0, 300.0]),
             Tool::Memory => at("memory", 80.0, 420.0),
             Tool::Stack => at("stack", 680.0, 110.0),
             Tool::Vars => at("variables", 300.0, 300.0),

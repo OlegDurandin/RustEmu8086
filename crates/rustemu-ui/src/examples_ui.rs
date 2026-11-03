@@ -69,9 +69,11 @@ fn open_example(app: &mut App, i: usize, emulate: bool) {
     }
 }
 
-/// "more examples...": every example file (Emu8086 opens its examples folder).
+/// "more examples...": every example file of the workspace's processor (Emu8086 opens its examples
+/// folder).
 pub(crate) fn more_examples_window(app: &mut App, ctx: &egui::Context) {
     let Some(emulate) = app.dialogs.more_examples else { return };
+    let mips = app.arch() == Arch::Mips32;
     let mut open = true;
     let mut chosen = None;
     egui::Window::new("more examples")
@@ -85,11 +87,18 @@ pub(crate) fn more_examples_window(app: &mut App, ctx: &egui::Context) {
                     .desired_width(f32::INFINITY),
             );
             let filter = app.dialogs.examples_filter.to_lowercase();
+            let examples: Vec<(&str, String)> = if mips {
+                crate::examples::MIPS_EXAMPLES.iter().map(|&(caption, file, _)| (file, caption.to_string())).collect()
+            } else {
+                crate::examples::EXAMPLES
+                    .iter()
+                    .map(|&(name, src)| (name, crate::examples::description(name, src)))
+                    .collect()
+            };
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                for (i, (name, src)) in crate::examples::EXAMPLES.iter().enumerate() {
+                for (i, (name, about)) in examples.iter().enumerate() {
                     // The name and what the example does (whole in the tooltip); the filter looks
                     // at both.
-                    let about = crate::examples::description(name, src);
                     if !name.to_lowercase().contains(&filter) && !about.to_lowercase().contains(&filter) {
                         continue;
                     }
@@ -99,12 +108,12 @@ pub(crate) fn more_examples_window(app: &mut App, ctx: &egui::Context) {
                                 egui::Label::new(RichText::new(*name).monospace().strong()).sense(egui::Sense::click()),
                             );
                             let text = ui.add(
-                                egui::Label::new(RichText::new(&about).weak()).truncate().sense(egui::Sense::click()),
+                                egui::Label::new(RichText::new(about).weak()).truncate().sense(egui::Sense::click()),
                             );
                             name.union(text)
                         })
                         .inner
-                        .on_hover_text(&about);
+                        .on_hover_text(about);
                     if r.clicked() {
                         chosen = Some(i);
                     }
@@ -113,7 +122,14 @@ pub(crate) fn more_examples_window(app: &mut App, ctx: &egui::Context) {
         });
     if let Some(i) = chosen {
         app.dialogs.more_examples = None;
-        open_example(app, i, emulate);
+        if mips {
+            app.guarded(PendingAction::MipsExample(i));
+            if emulate && app.dialogs.confirm_discard.is_none() {
+                app.emulate();
+            }
+        } else {
+            open_example(app, i, emulate);
+        }
     } else if !open {
         app.dialogs.more_examples = None;
     }

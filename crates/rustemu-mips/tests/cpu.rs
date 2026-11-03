@@ -490,3 +490,30 @@ fn step_back_with_the_journal() {
     assert_eq!(cpu.pc, TEXT_BASE + 12, "back at the store");
     assert_eq!(memory::Segment::of(DATA_BASE + 3), Some(memory::Segment::Data));
 }
+
+#[test]
+fn the_last_alu_operation_is_recorded() {
+    // li $t0, 7; li $t1, -2; nop; sub $t2, $t0, $t1; lw (not ALU); sll $t3, $t0, 4; mult $t0, $t1
+    let mut code = vec![];
+    code.extend(li(T0, 7));
+    code.extend(li(T1, -2i32 as u32));
+    code.push(0);
+    code.push(sp(T0, T1, T2, 0, 0x22));
+    let (cpu, ..) = run(&code);
+    let t = cpu.alu.expect("sub was recorded, nop was not");
+    assert_eq!((t.pc, t.a, t.b, t.result, t.hi, t.overflow), (TEXT_BASE + 20, 7, -2i32 as u32, 9, None, false));
+    code.push(sp(0, T0, T3, 4, 0x00));
+    let (cpu, ..) = run(&code);
+    let t = cpu.alu.unwrap();
+    assert_eq!((t.a, t.b, t.result), (7, 4, 112));
+    code.push(sp(T0, T1, 0, 0, 0x18));
+    let (cpu, ..) = run(&code);
+    let t = cpu.alu.unwrap();
+    assert_eq!((t.result, t.hi), (-14i32 as u32, Some(u32::MAX)));
+    // addi overflow: the result is recorded, not written.
+    let mut code = li(T0, 0x7FFF_FFFF).to_vec();
+    code.push(i(0x08, T0, T1, 1));
+    let (cpu, ..) = run(&code);
+    let t = cpu.alu.unwrap();
+    assert!(t.overflow && t.result == 0x8000_0000 && cpu.regs[T1 as usize] == 0);
+}

@@ -210,6 +210,18 @@ fn visual_step_shows_what_changed() {
     h.run_steps(2);
     assert!(h.query_by_label("SUB 0Fh − 01h = 0Eh").is_some());
     save(&mut h, "32_tablet_visual_step");
+    // The ALU is a window over the tab, not one of its tools.
+    h.get_by_label("Open ALU details").click();
+    h.run_steps(2);
+    assert!(h.state().app.windows[rustemu_ui::tools::Tool::Alu] && h.state().state.debug.tool.is_none());
+    // The ALU button of the tools opens it too.
+    h.state_mut().app.windows[rustemu_ui::tools::Tool::Alu] = false;
+    h.run_steps(2);
+    h.get_by_label("ALU").click();
+    h.run_steps(2);
+    assert!(h.state().app.windows[rustemu_ui::tools::Tool::Alu]);
+    h.state_mut().app.windows[rustemu_ui::tools::Tool::Alu] = false;
+    h.run_steps(2);
     // R11: the inspector shows a byte as 8 bits and a word as 16.
     h.get_by_label("BL = 0E").click();
     h.run_steps(2);
@@ -466,7 +478,36 @@ fn tablet_mips_workspace() {
     h.run_steps(2);
     // The last step: `li $v0, 5` set $v0.
     h.get_by_label_contains("$v0 0x4 → 0x5");
-    assert!(h.query_by_label("ALU").is_none() && h.query_by_label("Debug log").is_none());
+    // The ALU: its button, and the last step (`li $v0, 5` = addiu) opens it with the details.
+    assert!(h.query_by_label("ALU").is_some() && h.query_by_label("Debug log").is_none());
+    h.get_by_label("Open ALU details").click();
+    h.run_steps(2);
+    assert!(h.state().app.windows[rustemu_ui::tools::Tool::Alu]);
+    h.get_by_label("immediate");
+    h.state_mut().app.windows[rustemu_ui::tools::Tool::Alu] = false;
+    h.run_steps(2);
+    // The menu has only MIPS's windows, the example library only its examples.
+    h.get_by_label("file, examples, tools").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Variables").is_some());
+    // (FPU is also a tab of the registers card.)
+    for name in ["Virtual drive", "Virtual devices", "Debug log", "Reference"] {
+        assert!(h.query_by_label(name).is_none(), "{name}");
+    }
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.state_mut().app.dialogs.more_examples = Some(false);
+    h.run_steps(2);
+    assert!(h.query_by_label("fibonacci.s").is_some() && h.query_by_label("calc.asm").is_none());
+    h.get_by_label("hello.s").click();
+    h.run_steps(2);
+    assert!(h.state().app.doc.text.contains("Hello, MIPS!"));
+    h.state_mut().app.load_mips_example(1);
+    h.state_mut().app.emulate();
+    for _ in 0..5 {
+        h.state_mut().app.single_step();
+    }
+    h.run_steps(2);
     // Run to the input: the output shows Run I/O and its input line; the keypad stays closed.
     h.state_mut().app.start_run();
     h.run_steps(8);
