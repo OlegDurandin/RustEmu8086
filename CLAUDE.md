@@ -15,7 +15,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 выбор инструкции по слову в `Cpu::step`, запись в `$zero` не считается; окно ALU — `mips_ui::alu_ui`), исключения как в MARS (Cause/EPC/BadVAddr/EXL; обработчик 0x80000180, если там есть код), `syscall` → `Step::Syscall`. FPU (COP1) — пока reserved instruction. `machine.rs` — `Machine`: загрузка `Image` (куски кода/данных, проверка сегментов), шаг/run (`rustemu_target::Event`), блокирующий ввод как в 8086 (PC назад на `syscall`, пустые повторы не в истории), `sleep` (`Event::Sleeping`, `instant_waits`), история шага назад (2000 шагов и ≤ 64 МБ журнала; для `syscall` — консоль, ввод, куча, генераторы; файлы — барьер); `syscall.rs` — сервисы MARS 1, 4, 5, 8–17, 30–36, 40–42 с его сообщениями ошибок, ввод как в панели Run I/O (эхо, конец по Enter или по длине; `read char` — без Enter); FPU-сервисы и диалоги 50–59 — ошибка; `console.rs` — текстовая консоль вместо B800 (байты, ≤ 1 МБ, показ UTF-8 / Latin-1); `files.rs` — песочница (папка или память, без `..`/абсолютных/ссылок наружу, квота 16 МБ записи, дескрипторы 3..31, флаги 0/1/9); `random.rs` — `java.util.Random` (последовательности как в MARS). `asm/` — ассемблер диалекта MARS: `lexer.rs` (правила токенизатора MARS: унарный `+`/`-`, символьные литералы, `Integer.decode`; `%hi(x)`/`%lo(x)` — расширение, как в GNU as), `basic.rs` (85 базовых инструкций: пример + маска кодирования, сгенерировано из `InstructionSet.java`), `table.rs` (`data/PseudoOps.txt` MARS как есть — 322 целочисленных формы псевдоинструкций; выбор формы — первая подходящая по классам операндов, как `OperandFormat`; подстановка шаблонов — как `makeTemplateSubstitutions`; исправлен шаблон `swr $t1,100`, в MARS там `nop`), `mod.rs` (два прохода, директивы `.text/.data/.ktext/.kdata/.word/.half/.byte/.float/.double/.ascii/.asciiz/.space/.align/.extern/.globl/.eqv/.set`, автовыравнивание с переносом метки, ссылки вперёд; ошибки с текстами MARS; строки — UTF-8; результат `Program`: `Image`, `statements` со столбцом Basic, `data`, `symbols`, `warnings`). Макросов и `.include` пока нет. `disasm.rs` — дизассемблер по той же таблице `BASIC`: первая форма, чьи фиксированные биты совпали (как MARS: 0 — `nop`), поля `f/s/t` → `Decoded { mnemonic, args: [Arg::Reg/Cp0/Imm/Branch/Jump] }`; `Style::Mars` — колонка Basic (`addi $8,$9,-100`, ветвление — смещением), `Style::Named` — `addi $t0, $t1, -100`, цели адресами, логические константы в hex; `clz/clo` — с любым rt; не инструкция / FPU — `.word 0x…`. `target.rs` — `impl Target` (регистры `$zero..$ra`, `$0..$31`, PC/HI/LO; `flow` — `jal/jalr/bgezal/bltzal` вызов, `jr $ra` возврат; стек вызовов по `$ra` и стеку; снимки `Snapshot` без файлов; `Checkpoint { cpu }`; `AsMips` — `mips()`/`mips_mut()` у `dyn Target`). |
 | `crates/rustemu-asm` | Ассемблер диалектов Emu8086/MASM и NASM (`Dialect`, `detect_dialect`, `assemble_dialect`; NASM: `parse_line_nasm`, `tokenize_nasm`, перевод `%`-директив в `Preprocessor::nasm_lines`, локальные метки `rename_local_labels`, секции .text/.data/.bss с выравниванием 4, `times`, строгий размер операнда `encode::set_strict_size`). MASM: `lexer` → `source` (INCLUDE, MACRO/LOCAL/ENDM, REPT, IF/IFDEF) → `parse` → `asm` (многопроходная сборка до сходимости, сегменты, данные, релокации, листинг) + `encode` (кодирование инструкций) + `expr`. Встроенная `inc/emu8086.inc`. |
 | `crates/rustemu-session` | Связка ассемблер ↔ эмулятор через `pub target: Box<dyn Target>` (8086-машина — `Session::x86()`/`x86_mut()`, MIPS — `mips()`/`Session::new_mips`/`load_mips` в `mips.rs`: отладочная информация MIPS переводится в общий `rustemu_asm::Program` — строки и символы, размер переменной — единица `.byte/.half/.word`, исходная программа — `mips_program`; зависящее от процессора — `match target.arch()`; 8086-часть — `x86.rs`: форматы COM/EXE/BIN/BOOT, дискеты, символы seg:off, диск C: в памяти): загрузка `Program`/файлов, сопоставление CS:IP ↔ строка исходника, Reload, выражения отладчика (`expr.rs`: регистры, флаги, переменные, `[mem]`, операторы C/ассемблера), стек вызовов (`call_stack` — эвристический обход стека по CALL/INT), строки дизассемблера (`code.rs`: `Session::code_row` — данные программы как `DB`/`DW`/`DD` по `LineInfo::is_code`/`data_size`, нули вне кода — `DB n DUP (0)`; инструкция на CS:IP — всегда код). |
-| `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin), `disasm`. |
+| `crates/rustemu-cli` | Бинарь `rustemu`: `asm`, `run` (headless, ввод через `--input` или stdin, `--regs` — регистры в конце), `disasm`. Процессор — `--arch`, иначе MIPS для `.s` и исходников для MIPS (`rustemu_session::detect_arch`); MIPS: `asm` — проверка, `-o` — дамп сегмента кода (`Program::text_bytes`), `-l` — `Program::listing`, `-s` — `symbols_text`; `run` — файлы в папке программы, ввод с `\n`; `disasm --arch mips [--mars]`. |
 | `crates/rustemu-ui` | Общая часть GUI на `eframe/egui` 0.37 (рендерер wgpu): `App` (состояние, файлы, сборка, запуск, настройки; рабочие места процессоров — `app/arch.rs`), окна MIPS (`mips_ui.rs`), редактор, экран, инструменты (`tools.rs` — одна таблица всех окон, `Host` — свои инструменты интерфейса) и диалоги (`rustemu_ui::windows` раз в кадр), справочник, сервисы ОС — `platform.rs`, `native_options()`; фича `testing` — помощники UI-тестов (`testing.rs`). Своего `eframe::App` нет. |
 | `crates/rustemu-desktop` | Интерфейс Emu8086: библиотека (`DesktopApp`, главное окно с меню/тулбаром — `ui.rs`, окно эмулятора и исходника — `emulator.rs`; UI-тесты `ui_tests.rs`) + бинарь `RustEmu8086` (macOS). |
 | `crates/rustemu-tablet` | Интерфейс планшета (см. 6.7) — для веб-версии на iPad и сенсорных экранах: `TabletApp` + `TabletState`; бинарь `rustemu-tablet` — окно на Mac для разработки. Нативных сборок iPadOS/Android нет. |
@@ -33,10 +33,11 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
   останавливает выполнение, паркует текущее (`App::parked`) и возвращает/создаёт другое (первый раз — его
   `last_file` или первый пример). Настройки: 8086 — прежние поля, MIPS — `Settings::mips` (`ArchSettings`);
   запуск — всегда в 8086 (MIPS — переключателем, файлом, примером или ссылкой). Архитектура принадлежит документу: `FileSession::arch`, `StoredProgram::arch`,
-  `&arch=MIPS32` в ссылке; без неё — текущая, если `detect_arch` (регистры `$t0`/`ax`, `syscall`) не уверен в
+  `&arch=MIPS32` в ссылке; без неё — текущая, если `detect_arch` (`rustemu-session/src/detect.rs`; регистры `$t0`/`ax`, `syscall`) не уверен в
   другой (тогда диалог «Which processor?», `Dialogs::open_as`); `enter_workspace_for` — общий вход для open,
   примеров, программ браузера, загрузок и ссылок. Окна — `App::has_tool` (только 8086: экран, устройства, диск,
-  FPU, флаги, стек, DEBUG.EXE, журнал, value viewer, emu8086.inc, справочник; только MIPS — `Tool::RunIo`).
+  FPU, флаги, стек, DEBUG.EXE, журнал, value viewer, emu8086.inc; только MIPS — `Tool::RunIo`). Справочник — одно
+  окно, показывает процессор рабочего места (`RefState::mips`, переключатель 8086 / MIPS32 в окне).
   Черновики браузера — `draft` / `draft_mips`; диск C: DOS — всегда в 8086-сессии (`x86_session`).
 - **Прерывания — «настоящие».** IVT в 0000:0000 указывает на заглушки `F000:1000+4*n`, заглушка —
   опкод `0F FF nn` («BOP») + `IRET`. На BOP `Machine::service` вызывает HLE-обработчик; изменённые
@@ -138,6 +139,7 @@ cargo test --workspace
 cargo run -p rustemu-cli -- run examples/hello.asm --input x
 cargo run -p rustemu-cli -- run examples/calc.asm --input '12\n30\nx'
 cargo run -p rustemu-cli -- asm examples/exetest.asm -l -s
+cargo run -p rustemu-cli -- run examples/mips/sum.s --input '100\n' --regs   # MIPS32 (MARS)
 cargo run -p rustemu-desktop        # GUI (можно передать путь к .asm)
 cargo run -p rustemu-tablet         # интерфейс планшета в окне на Mac
 cargo test -p rustemu-desktop -p rustemu-tablet  # UI-тесты + PNG-снимки в target/ui-snapshots/
@@ -335,7 +337,15 @@ cd crates/rustemu-web && trunk serve   # веб-версия на http://127.0.0
       PC-клавиатуры, Memory = память + переменные, Last step по истории MIPS; меню ⋮ — только окна, у которых `App::has_tool`,
       Example library (`more_examples_window`) — примеры процессора рабочего места. Редактор: подсветка MARS
       (`Highlighter::set_mips`), подсказки форм инструкций. Примеры — `examples/mips/*.s` (`MIPS_EXAMPLES`, меню
-      Examples, `?example=mips/hello.s`); New — `MIPS_TEMPLATE`. Нет: справочника MIPS, FPU, MMIO-устройств MARS
+      Examples, `?example=mips/hello.s`); New — `MIPS_TEMPLATE`. Нет: FPU, MMIO-устройств MARS
+- [x] 7.4 Справочник MIPS32 (EN, RU) и CLI: `rustemu_ui::reference::mips` — статьи инструкций семействами
+      (`MIPS_INSTRUCTIONS`, `MipsGroup`; формы и развёртка псевдоинструкций — не текстом, а из `asm::Table` и сборки
+      формы в окне, `reference_ui::expansion`), директивы (`MIPS_DIRECTIVES`), сервисы syscall 1–59 (`SYSCALLS`,
+      `supported`), роли регистров; русский текст — `reference/ru_mips.rs` (по имени / номеру). `Topic::MipsInstr/
+      MipsDirective/Syscall`, вкладки окна System calls и Registers & memory; редактор: `mips_topic_at` (мнемоника,
+      директива, `syscall` с сервисом из `li $v0, n` выше), подсказка и F1 / ⌘-клик. Тесты: каждая мнемоника
+      ассемблера описана, каждый пример собирается, русский текст полный и код примеров тот же. CLI — см. таблицу
+      крейтов
 
 ### Этап 6. Полировка
 - [x] 6.1 Сравнение с Emu8086: корпус из 84 оригинальных примеров (сборка + выполнение), устройства по

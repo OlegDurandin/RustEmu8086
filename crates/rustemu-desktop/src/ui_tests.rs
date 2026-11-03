@@ -292,6 +292,56 @@ fn reference_window_and_editor_lookup() {
 }
 
 #[test]
+fn mips_reference() {
+    use rustemu_session::Arch;
+    use rustemu_ui::reference::Topic;
+    let mut h = harness(App::with_settings(Settings { last_file: None, ..Default::default() }));
+    h.run();
+    h.state_mut().switch_arch(Arch::Mips32);
+    h.run();
+    // F1 on `syscall` after `li $v0, 4` opens print string; on `la`, its article with the forms.
+    let st = h.state_mut();
+    // (The first `syscall` of hello.s is in a comment: no article there.)
+    let ci = st.doc.text.find("syscall").unwrap();
+    st.editor.selection = (ci, ci);
+    st.help_at_cursor();
+    assert_eq!(st.reference.topic, None);
+    let ci = st.doc.text.find("msg\n").unwrap()
+        + 4
+        + st.doc.text[st.doc.text.find("msg\n").unwrap() + 4..].find("syscall").unwrap();
+    st.editor.selection = (ci, ci);
+    st.help_at_cursor();
+    h.run_steps(5);
+    let print_string = rustemu_ui::reference::find_syscall(4).unwrap();
+    assert_eq!(h.state().reference.topic, Some(Topic::Syscall(print_string)));
+    assert!(h.state().reference.mips);
+    h.get_by_label("print string");
+    save(&mut h, "49_mips_reference_syscall");
+    let st = h.state_mut();
+    let ci = st.doc.text.find("la ").unwrap();
+    st.editor.selection = (ci, ci);
+    st.help_at_cursor();
+    h.run_steps(5);
+    let la = rustemu_ui::reference::find_mips_instruction("la").unwrap();
+    assert_eq!(h.state().reference.topic, Some(Topic::MipsInstr(la)));
+    // The forms: what the pseudo-instruction becomes.
+    h.get_by_label("la $t1,label");
+    assert!(h.query_all_by_label_contains("→ lui $at").count() > 1);
+    save(&mut h, "49_mips_reference_instruction");
+    // In Russian; the registers tab.
+    h.state_mut().reference.lang = rustemu_ui::reference::Lang::Ru;
+    h.state_mut().reference.show_tab(rustemu_ui::reference_ui::Tab::Registers);
+    h.run_steps(5);
+    h.get_by_label("указатель стека: стек растёт вниз от 0x7FFFEFFC");
+    save(&mut h, "49_mips_reference_registers");
+    // Back to the 8086: its reference again.
+    h.state_mut().reference.lang = rustemu_ui::reference::Lang::En;
+    h.state_mut().switch_arch(Arch::I8086);
+    h.run();
+    assert!(!h.state().reference.mips);
+}
+
+#[test]
 fn about_window() {
     let mut app = app_with_example(0);
     app.windows[Tool::About] = true;
@@ -1451,8 +1501,6 @@ fn mips_workspace() {
     assert_eq!(h.state().arch(), Arch::Mips32);
     assert_eq!(h.state().file_name(), "hello.s");
     save(&mut h, "40_mips_editor");
-    // The 8086's tools are not offered.
-    assert!(h.query_by_label("❓ help").is_none());
     h.get_by_label("▶ emulate").click();
     h.run();
     assert!(h.state().loaded(), "{:?}", h.state().build.messages.iter().map(|m| &m.text).collect::<Vec<_>>());

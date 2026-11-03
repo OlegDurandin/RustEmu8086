@@ -46,6 +46,57 @@ impl std::fmt::Display for AsmError {
     }
 }
 
+impl Program {
+    /// The listing, as MARS's text segment: address, machine word, basic instruction and the
+    /// source line (at the first instruction of a statement); then the data lines.
+    pub fn listing(&self, source: &str) -> String {
+        let lines: Vec<&str> = source.lines().collect();
+        let src = |l: usize| lines.get(l.wrapping_sub(1)).map_or("", |s| s.trim_end());
+        let mut out = String::from("address    code       basic                      source\n");
+        for s in &self.statements {
+            for (k, (w, b)) in s.words.iter().zip(&s.basic).enumerate() {
+                let source = if k == 0 { format!("{:>4}: {}", s.line, src(s.line)) } else { String::new() };
+                out += &format!("{:08x}   {w:08x}   {b:<26} {source}\n", s.addr + 4 * k as u32);
+            }
+        }
+        if !self.data.is_empty() {
+            out += "\ndata\n";
+            for d in self.data.iter().filter(|d| d.len > 0) {
+                out += &format!("{:08x}   {:>5} bytes  {:>4}: {}\n", d.addr, d.len, d.line, src(d.line));
+            }
+        }
+        out
+    }
+
+    /// The labels, one a line: address, `text` or `data`, name.
+    pub fn symbols_text(&self) -> String {
+        self.symbols
+            .iter()
+            .map(|s| format!("{:08x}  {}  {}\n", s.addr, if s.data { "data" } else { "text" }, s.name))
+            .collect()
+    }
+
+    /// The user text segment as bytes from its base 0x00400000 (little-endian words, gaps as
+    /// zeros), as MARS's "dump .text Binary".
+    pub fn text_bytes(&self) -> Vec<u8> {
+        let in_text = |a: u32| (memory::TEXT_BASE..memory::TEXT_LIMIT).contains(&a);
+        let mut out = Vec::new();
+        for s in &self.statements {
+            for (k, w) in s.words.iter().enumerate() {
+                let a = s.addr + 4 * k as u32;
+                if in_text(a) {
+                    let at = (a - memory::TEXT_BASE) as usize;
+                    if out.len() < at + 4 {
+                        out.resize(at + 4, 0);
+                    }
+                    out[at..at + 4].copy_from_slice(&w.to_le_bytes());
+                }
+            }
+        }
+        out
+    }
+}
+
 /// The machine instructions of a source statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statement {

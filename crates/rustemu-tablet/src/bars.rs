@@ -319,7 +319,8 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         ui.close();
     }
     ui.separator();
-    if app.has_tool(Tool::Reference) && ui.button("Reference").clicked() {
+    if ui.button("Reference").clicked() {
+        app.reference.mips = !x86;
         app.windows[Tool::Reference] = true;
         ui.close();
     }

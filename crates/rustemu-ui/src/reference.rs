@@ -1,18 +1,40 @@
 //! Built-in reference: 8086/80186 instructions, assembler directives, BIOS and DOS interrupts and
-//! a guide to the NASM syntax, in English and Russian ([`Lang`]).
+//! a guide to the NASM syntax; MIPS32 instructions, directives and system calls ([`MIPS_INSTRUCTIONS`], [`SYSCALLS`]); in
+//! English and Russian ([`Lang`]).
 
 mod directives;
 mod instructions;
 mod interrupts;
+mod mips;
 mod ru;
 mod ru_directives;
 mod ru_instructions;
 mod ru_interrupts;
+mod ru_mips;
 
 pub use directives::*;
 pub use instructions::*;
 pub use interrupts::*;
-pub use ru::{FunctionText, GuideSection, Lang, flag_titles, nasm_section, syntax_in};
+pub use mips::*;
+pub use ru::{FunctionText, GuideSection, Lang, SyscallText, flag_titles, nasm_section, register_role, syntax_in};
+
+/// Finds a MIPS instruction article by mnemonic or alias (case-insensitive).
+pub fn find_mips_instruction(name: &str) -> Option<usize> {
+    let l = name.to_ascii_lowercase();
+    MIPS_INSTRUCTIONS.iter().position(|i| i.name == l || i.aliases.contains(&l.as_str()))
+}
+
+/// Finds a MIPS directive article (`.globl` and `.global` are one).
+pub fn find_mips_directive(name: &str) -> Option<usize> {
+    let l = name.to_ascii_lowercase();
+    let l = if l == ".global" { ".globl".to_string() } else { l };
+    MIPS_DIRECTIVES.iter().position(|d| d.name == l)
+}
+
+/// Index in [`SYSCALLS`] of a service number.
+pub fn find_syscall(code: u32) -> Option<usize> {
+    SYSCALLS.iter().position(|s| s.code == code)
+}
 
 /// Finds an instruction entry by name or alias (case-insensitive).
 pub fn find_instruction(name: &str) -> Option<usize> {
@@ -77,12 +99,37 @@ pub enum Topic {
     Nasm(usize),
     /// Interrupt index and the function code, if known.
     Int(usize, Option<u16>),
+    /// A MIPS instruction: index in [`MIPS_INSTRUCTIONS`].
+    MipsInstr(usize),
+    /// A MIPS directive: index in [`MIPS_DIRECTIVES`].
+    MipsDirective(usize),
+    /// A MIPS system call: index in [`SYSCALLS`].
+    Syscall(usize),
 }
 
 impl Topic {
+    /// An article of the MIPS reference.
+    pub fn is_mips(self) -> bool {
+        matches!(self, Topic::MipsInstr(_) | Topic::MipsDirective(_) | Topic::Syscall(_))
+    }
+
     /// Title and one line of details for the editor tooltip.
     pub fn tooltip(self, lang: Lang) -> (String, String) {
         match self {
+            Topic::MipsInstr(i) => {
+                let e = &MIPS_INSTRUCTIONS[i];
+                (format!("{}  {}", e.name, e.summary_in(lang)), e.group.title_in(lang).to_string())
+            }
+            Topic::MipsDirective(i) => {
+                let d = &MIPS_DIRECTIVES[i];
+                (d.name.to_string(), d.summary_in(lang).to_string())
+            }
+            Topic::Syscall(i) => {
+                let s = &SYSCALLS[i];
+                let t = s.text_in(lang);
+                let args = [t.input, t.output].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join("; ");
+                (format!("syscall {}  {}", s.code, t.name), args)
+            }
             Topic::Instr(i) => {
                 let e = &INSTRUCTIONS[i];
                 (format!("{}  {}", e.name, e.summary_in(lang)), flags_summary(e.flags, lang))
@@ -200,6 +247,105 @@ pub fn topic_at_cursor(text: &str, ci: usize) -> Option<Topic> {
     topic_at(text, ci).or_else(|| ci.checked_sub(1).and_then(|c| topic_at(text, c)))
 }
 
+/// MIPS: the reference article for the word at char index `ci` of `text` — the mnemonic of a
+/// statement, a directive, or the service of `syscall` set by a `li $v0, n` before it.
+pub fn mips_topic_at(text: &str, ci: usize) -> Option<Topic> {
+    let chars: Vec<char> = text.chars().collect();
+    let is_id = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '$' | '.');
+    if ci >= chars.len() || !is_id(chars[ci]) {
+        return None;
+    }
+    let mut a = ci;
+    while a > 0 && is_id(chars[a - 1]) {
+        a -= 1;
+    }
+    let mut b = ci;
+    while b < chars.len() && is_id(chars[b]) {
+        b += 1;
+    }
+    let line_start = chars[..a].iter().rposition(|&c| c == '\n').map_or(0, |p| p + 1);
+    let before: String = chars[line_start..a].iter().collect();
+    // In a comment or a string.
+    if mips_code(&before).len() < before.len() || before.chars().filter(|&c| c == '"').count() % 2 == 1 {
+        return None;
+    }
+    let word: String = chars[a..b].iter().collect::<String>().to_ascii_lowercase();
+    if word.starts_with('.') {
+        return find_mips_directive(&word).map(Topic::MipsDirective);
+    }
+    // The mnemonic is the first word after the labels.
+    let labels_only = before.split(':').next_back().is_some_and(|rest| rest.trim().is_empty());
+    if !labels_only {
+        return None;
+    }
+    if word == "syscall" {
+        let lines: Vec<&str> =
+            text[..text.char_indices().nth(line_start).map_or(text.len(), |(i, _)| i)].lines().collect();
+        if let Some(i) = preceding_service(&lines).and_then(find_syscall) {
+            return Some(Topic::Syscall(i));
+        }
+    }
+    find_mips_instruction(&word).map(Topic::MipsInstr)
+}
+
+/// Like [`mips_topic_at`] for the text cursor, which may also stand right after the word.
+pub fn mips_topic_at_cursor(text: &str, ci: usize) -> Option<Topic> {
+    mips_topic_at(text, ci).or_else(|| ci.checked_sub(1).and_then(|c| mips_topic_at(text, c)))
+}
+
+/// A MIPS line without its `#` comment (a `#` in a string or a character is kept).
+fn mips_code(line: &str) -> &str {
+    let mut quote = None;
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(q), _) if q == c => quote = None,
+            (None, '#') => return &line[..i],
+            _ => {}
+        }
+    }
+    line
+}
+
+/// The service number put in `$v0` by the lines before a `syscall` (`li $v0, n`, `addi`/`addiu`/
+/// `ori $v0, $zero, n`), looking back until a label, a branch or another `syscall`.
+fn preceding_service(lines: &[&str]) -> Option<u32> {
+    for line in lines.iter().rev().take(16) {
+        let code = mips_code(line);
+        // A labelled line can be jumped to: its statement is the last one looked at.
+        let labelled = code.contains(':');
+        let code = code.rsplit(':').next().unwrap_or("");
+        let t: Vec<String> = code
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|t| !t.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        let Some(op) = t.first() else { continue };
+        let dest = t.get(1).map(String::as_str);
+        let number = |s: &str| {
+            let (s, radix) = match s.strip_prefix("0x") {
+                Some(h) => (h, 16),
+                None => (s, 10),
+            };
+            u32::from_str_radix(s, radix).ok()
+        };
+        match (op.as_str(), dest) {
+            ("li", Some("$v0" | "$2")) => return t.get(2).and_then(|v| number(v)),
+            ("addi" | "addiu" | "ori", Some("$v0" | "$2"))
+                if matches!(t.get(2).map(String::as_str), Some("$zero" | "$0")) =>
+            {
+                return t.get(3).and_then(|v| number(v));
+            }
+            (_, Some("$v0" | "$2")) => return None,
+            ("syscall" | "jal" | "jalr" | "jr" | "j" | "b", _) => return None,
+            (op, _) if op.starts_with('b') => return None,
+            _ if labelled => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Value of the function selector (AH or AX) set by the lines before an `INT`, looking back
 /// until a label, a jump or another call.
 fn preceding_function(lines: &[&str], selector: &str) -> Option<u16> {
@@ -243,7 +389,7 @@ mod tests {
             Some(Topic::Directive(i)) => DIRECTIVES[i].name.to_string(),
             Some(Topic::Int(i, f)) => format!("INT {:X} {f:?}", INTERRUPTS[i].number),
             Some(Topic::Nasm(i)) => NASM_GUIDE[i].title.to_string(),
-            None => "-".into(),
+            _ => "-".into(),
         };
         assert_eq!(name(at("mov ah")), "MOV");
         assert_eq!(name(at("mov here")), "-");
@@ -260,6 +406,33 @@ mod tests {
         // The text cursor right after the word.
         assert_eq!(name(topic_at_cursor(src, src.find("lea").unwrap() + 3)), "LEA");
         assert_eq!(name(topic_at(src, src.find("lea").unwrap() + 3)), "-");
+    }
+
+    #[test]
+    fn mips_topics_in_source() {
+        let src = ".data\nmsg: .asciiz \"li syscall\"\n.text\nmain: li $v0, 4   # li here\nla $a0, msg\nsyscall\n\
+                   addi $v0, $zero, 10\nsyscall\nloop: blt $t0, $t1, loop\nsyscall\nnext: nop\nsyscall\n";
+        let at = |w: &str, nth: usize| {
+            let pos = src.match_indices(w).nth(nth).unwrap().0;
+            mips_topic_at(src, pos)
+        };
+        let name = |t: Option<Topic>| match t {
+            Some(Topic::MipsInstr(i)) => MIPS_INSTRUCTIONS[i].name.to_string(),
+            Some(Topic::MipsDirective(i)) => MIPS_DIRECTIVES[i].name.to_string(),
+            Some(Topic::Syscall(i)) => format!("syscall {}", SYSCALLS[i].code),
+            _ => "-".into(),
+        };
+        assert_eq!(name(at(".asciiz", 0)), ".asciiz");
+        assert_eq!(name(at("li", 0)), "-", "in a string");
+        assert_eq!(name(at("li $v0", 0)), "li");
+        assert_eq!(name(at("li here", 0)), "-", "in a comment");
+        assert_eq!(name(at("syscall\n", 0)), "syscall 4");
+        assert_eq!(name(at("syscall\n", 1)), "syscall 10");
+        assert_eq!(name(at("blt", 0)), "blt");
+        assert_eq!(name(at("syscall\n", 2)), "syscall", "after a branch: the service is not known");
+        assert_eq!(name(at("syscall\n", 3)), "syscall", "after a label: the service is not known");
+        assert_eq!(name(at("$a0", 0)), "-");
+        assert_eq!(name(mips_topic_at_cursor(src, src.find("la $a0").unwrap() + 2)), "la");
     }
 
     #[test]
@@ -305,6 +478,90 @@ mod tests {
         for i in INSTRUCTIONS {
             for n in std::iter::once(&i.name).chain(i.aliases) {
                 assert!(prefixes.contains(n) || rustemu_asm::encode::is_mnemonic(n), "{n}");
+            }
+        }
+    }
+
+    /// Every MIPS mnemonic the assembler accepts has an article, and every article names
+    /// mnemonics it accepts.
+    #[test]
+    fn mips_articles_cover_the_assembler() {
+        let table = rustemu_mips::asm::Table::get();
+        let mut missing: Vec<&str> = table.mnemonics().filter(|m| find_mips_instruction(m).is_none()).collect();
+        missing.sort();
+        assert!(missing.is_empty(), "no article for {missing:?}");
+        for i in MIPS_INSTRUCTIONS {
+            for n in std::iter::once(&i.name).chain(i.aliases) {
+                assert!(table.forms(n).is_some(), "{n} is not a mnemonic");
+                assert_eq!(n.to_ascii_lowercase(), *n);
+            }
+            assert!(!i.summary.is_empty() && !i.description.is_empty(), "{}", i.name);
+        }
+        let mut directives: Vec<&str> = rustemu_mips::asm::DIRECTIVES
+            .iter()
+            .copied()
+            .filter(|d| ![".macro", ".end_macro", ".include", ".global"].contains(d))
+            .collect();
+        directives.sort();
+        let mut ours: Vec<&str> = MIPS_DIRECTIVES.iter().map(|d| d.name).collect();
+        ours.sort();
+        assert_eq!(ours, directives);
+        assert!(SYSCALLS.windows(2).all(|w| w[0].code < w[1].code));
+        assert!(SYSCALLS.iter().all(|s| s.supported != s.example.is_empty()));
+    }
+
+    /// Code of a MIPS example without `#` comments and trailing spaces, line by line.
+    fn mips_code(example: &str) -> Vec<String> {
+        example
+            .lines()
+            .map(|l| {
+                // (No example has a '#' inside a string.)
+                l.split('#').next().unwrap_or("").trim_end().to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mips_russian_text_is_complete() {
+        let ru = Lang::Ru;
+        for e in MIPS_INSTRUCTIONS {
+            let t = e.ru().unwrap_or_else(|| panic!("no Russian text for {}", e.name));
+            assert!(!t.summary.is_empty() && !t.description.is_empty(), "{}", e.name);
+            assert_eq!(mips_code(e.example_in(ru)), mips_code(e.example), "{}: other code", e.name);
+        }
+        for d in MIPS_DIRECTIVES {
+            let t = d.ru().unwrap_or_else(|| panic!("no Russian text for {}", d.name));
+            assert!(!t.summary.is_empty() && !t.description.is_empty(), "{}", d.name);
+            assert_eq!(mips_code(d.example_in(ru)), mips_code(d.example), "{}: other code", d.name);
+        }
+        for s in SYSCALLS {
+            assert!(s.ru().is_some(), "no Russian text for syscall {}", s.code);
+            let t = s.text_in(ru);
+            assert!(!t.name.is_empty() && (s.input.is_empty() || !t.input.is_empty()), "{}", s.code);
+            assert_eq!(mips_code(t.example), mips_code(s.example), "syscall {}: other code", s.code);
+        }
+        for t in ru_mips::INSTRUCTIONS {
+            assert!(MIPS_INSTRUCTIONS.iter().any(|e| e.name == t.key), "{}", t.key);
+        }
+        for t in ru_mips::DIRECTIVES {
+            assert!(MIPS_DIRECTIVES.iter().any(|d| d.name == t.key), "{}", t.key);
+        }
+        for t in ru_mips::SYSCALLS {
+            assert!(find_syscall(t.code).is_some(), "{}", t.code);
+        }
+    }
+
+    /// Every MIPS example assembles as it is.
+    #[test]
+    fn mips_examples_assemble() {
+        let mut all: Vec<(String, &str)> = Vec::new();
+        all.extend(MIPS_INSTRUCTIONS.iter().map(|i| (i.name.to_string(), i.example)));
+        all.extend(MIPS_DIRECTIVES.iter().map(|d| (d.name.to_string(), d.example)));
+        all.extend(SYSCALLS.iter().filter(|s| s.supported).map(|s| (format!("syscall {}", s.code), s.example)));
+        for (name, example) in all {
+            if let Err(e) = rustemu_mips::asm::assemble(example) {
+                let e: Vec<String> = e.iter().map(|e| format!("{}:{} {}", e.line, e.col, e.message)).collect();
+                panic!("{name}: {e:?}\n{example}");
             }
         }
     }

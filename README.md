@@ -67,7 +67,9 @@ Then press **F8** (or **Step**) a few times. Went too far? **⇧F8** steps back.
   opens a ready example.
 - **MIPS32 too.** Switch the processor to MIPS32 (toolbar, or the badge on a tablet) for a workspace of its own: the
   MARS assembler syntax, system calls (`syscall`), a Run I/O console, registers grouped by use, flat memory, and the
-  same step back, breakpoints and watches. Each processor keeps its own program; switching loses nothing.
+  same step back, breakpoints and watches. Each processor keeps its own program; switching loses nothing. A MIPS
+  reference (instructions with what each pseudo-instruction becomes, `syscall` services, registers) is built in,
+  and the `rustemu` command line runs MIPS programs too.
 
 The processor is checked against 2.9 million tests recorded on a real 8088
 ([SingleStepTests](https://github.com/SingleStepTests/8088)), and instruction encodings against NASM.

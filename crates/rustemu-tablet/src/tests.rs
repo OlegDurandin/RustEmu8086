@@ -491,7 +491,8 @@ fn tablet_mips_workspace() {
     h.run_steps(2);
     assert!(h.query_by_label("Variables").is_some());
     // (FPU is also a tab of the registers card.)
-    for name in ["Virtual drive", "Virtual devices", "Debug log", "Reference"] {
+    assert!(h.query_by_label("Reference").is_some(), "the MIPS reference");
+    for name in ["Virtual drive", "Virtual devices", "Debug log"] {
         assert!(h.query_by_label(name).is_none(), "{name}");
     }
     h.key_press(egui::Key::Escape);
