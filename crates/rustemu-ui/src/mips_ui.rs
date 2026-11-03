@@ -389,6 +389,7 @@ pub fn console_ui(app: &mut App, ui: &mut Ui) {
     let pending = rustemu_mips::console::text(&m.pending_input());
     let waiting = m.is_waiting_input() && pending.is_empty();
     let finished = m.finished;
+    let file_error = m.file_error.clone();
     let font = FontId::monospace(13.0);
     let input_h = 64.0;
     egui::ScrollArea::vertical()
@@ -436,7 +437,14 @@ pub fn console_ui(app: &mut App, ui: &mut Ui) {
         None if app.run != RunMode::Paused => RichText::new("running").weak(),
         None => RichText::new(" ").weak(),
     };
-    ui.label(state);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(state);
+        // Why a file service returned -1 (the program only sees the -1).
+        if let Some(e) = file_error {
+            ui.label(RichText::new(format!("last file error: {e}")).color(crate::colors::warn(ui)))
+                .on_hover_text("syscall 13, 14 or 15 returned -1 in $v0; the program goes on and should check $v0");
+        }
+    });
 }
 
 /// Parses an address of the memory window: hex (`0x10010000`, `10010000`) or an expression of

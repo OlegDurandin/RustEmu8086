@@ -15,7 +15,9 @@
 //! Input is read as in MARS's Run I/O pane: what is typed is echoed to the console, and a read
 //! ends with Enter or when the requested number of characters is typed (one for 12). Errors stop
 //! the program with MARS's messages (`invalid integer input (syscall 5)`), as exceptions of the
-//! `syscall` instruction. The floating-point services (2, 3, 6, 7, 43, 44) need coprocessor 1 and
+//! `syscall` instruction — except the errors of the file services (13, 14, 15): as in MARS, they
+//! return −1 in `$v0` and the program goes on (it is its job to check); only a bad address of the
+//! name or the buffer raises an exception. The floating-point services (2, 3, 6, 7, 43, 44) need coprocessor 1 and
 //! the dialog services (50..59) MARS's dialog windows; neither exists yet.
 
 use rustemu_target::Event;
@@ -146,6 +148,17 @@ impl Machine {
         Some(line)
     }
 
+    /// The result of a file service in `$v0`: the value, or −1 for an error (whose message is
+    /// kept in [`Machine::file_error`], as MARS keeps it for its own use). The program goes on.
+    fn file_result(&mut self, r: Result<i32, String>) -> Result<Done, Fail> {
+        let v = r.unwrap_or_else(|e| {
+            self.file_error = Some(e);
+            -1
+        });
+        self.cpu.set_reg(V0, v as u32);
+        Ok(Done::Continue)
+    }
+
     fn print(&mut self, text: &str) -> Result<Done, Fail> {
         self.console.write(text.as_bytes());
         Ok(Done::Continue)
@@ -222,22 +235,13 @@ impl Machine {
             13 => {
                 let name = String::from_utf8_lossy(&self.c_string(a0)?).into_owned();
                 self.barrier = true;
-                match self.files.open(&name, a1) {
-                    Ok(fd) => {
-                        self.cpu.set_reg(V0, fd);
-                        Ok(Done::Continue)
-                    }
-                    Err(e) => {
-                        self.cpu.set_reg(V0, u32::MAX);
-                        Err(Fail::syscall(format!("{e} (syscall 13)")))
-                    }
-                }
+                let fd = self.files.open(&name, a1);
+                self.file_result(fd.map(|fd| fd as i32))
             }
             14 => {
                 let len = a2 as i32;
                 if len < 0 {
-                    self.cpu.set_reg(V0, u32::MAX);
-                    return Err(Fail::syscall(format!("negative length {len} (syscall 14)")));
+                    return self.file_result(Err(format!("negative length {len}")));
                 }
                 let data = if a0 == 0 {
                     let Some(d) = self.take_input(Some(len as usize)) else { return Ok(Done::Block) };
@@ -246,10 +250,7 @@ impl Machine {
                     self.barrier = true;
                     match self.files.read(a0, len as usize) {
                         Ok(d) => d,
-                        Err(e) => {
-                            self.cpu.set_reg(V0, u32::MAX);
-                            return Err(Fail::syscall(format!("{e} (syscall 14)")));
-                        }
+                        Err(e) => return self.file_result(Err(e)),
                     }
                 };
                 for (i, &b) in data.iter().enumerate() {
@@ -261,8 +262,7 @@ impl Machine {
             15 => {
                 let len = a2 as i32;
                 if len < 0 {
-                    self.cpu.set_reg(V0, u32::MAX);
-                    return Err(Fail::syscall(format!("negative length {len} (syscall 15)")));
+                    return self.file_result(Err(format!("negative length {len}")));
                 }
                 let data =
                     (0..len as u32).map(|i| self.mem.load8(a1.wrapping_add(i))).collect::<Result<Vec<u8>, _>>()?;
@@ -272,16 +272,8 @@ impl Machine {
                     return Ok(Done::Continue);
                 }
                 self.barrier = true;
-                match self.files.write(a0, &data) {
-                    Ok(n) => {
-                        self.cpu.set_reg(V0, n as u32);
-                        Ok(Done::Continue)
-                    }
-                    Err(e) => {
-                        self.cpu.set_reg(V0, u32::MAX);
-                        Err(Fail::syscall(e))
-                    }
-                }
+                let n = self.files.write(a0, &data);
+                self.file_result(n.map(|n| n as i32))
             }
             16 => {
                 if (3..MAX_FILES as u32).contains(&a0) {
