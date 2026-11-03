@@ -180,7 +180,7 @@ fn editing_a_device_clears_step_back_history() {
     h.state_mut().emulate();
     h.state_mut().single_step();
     assert!(h.state().session.target.history_len() > 0);
-    h.state_mut().session.x86_mut().unwrap().sys.dev.printer.extend_from_slice(b"AB");
+    h.state_mut().session.x86_mut().unwrap().sys.dev.printer.write(b"AB");
     h.state_mut().view.device_tab = rustemu_ui::devices_ui::Device::Printer;
     h.state_mut().windows[Tool::Devices] = true;
     h.run();

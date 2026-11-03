@@ -31,3 +31,26 @@ fn a_full_segment_of_rept_still_assembles() {
     let p = assemble_str("org 100h\nrept 65000\ndb 0\nendm\nret\n").unwrap();
     assert_eq!(p.file_bytes().len(), 65001);
 }
+
+/// Deep or long expressions are errors, not a stack overflow that ends the process (TODO item
+/// 7): parentheses, unary minus, NASM's `?:`, a chain of additions.
+#[test]
+fn deep_expressions_are_errors() {
+    let deep = |open: &str, inner: &str, close: &str, n: usize| format!("{}{inner}{}", open.repeat(n), close.repeat(n));
+    let cases = [
+        format!("org 100h\nmov ax, {}\n", deep("(", "1", ")", 20_000)),
+        format!("org 100h\nmov ax, {}\n", deep("-", "1", "", 20_000)),
+        format!("org 100h\nmov ax, 1{}\n", "+1".repeat(200_000)),
+        format!("bits 16\nmov ax, {}\n", deep("1 ? ", "1", " : 0", 20_000)),
+        format!("org 100h\nx equ {}\n", deep("NOT ", "1", "", 20_000)),
+    ];
+    for src in &cases {
+        let (line, msg) = error_of(src);
+        assert_eq!(line, 2);
+        assert!(msg.contains("nested too deeply") || msg.contains("too long"), "{msg}");
+    }
+    // Real expressions stay far below the limits.
+    let p = assemble_str(&format!("org 100h\nmov ax, {}\nmov bx, 1{}\n", deep("(", "1", ")", 20), "+1".repeat(200)))
+        .unwrap();
+    assert_eq!(p.file_bytes()[..6], [0xB8, 1, 0, 0xBB, 0xC9, 0x00]);
+}

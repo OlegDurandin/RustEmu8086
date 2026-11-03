@@ -143,14 +143,27 @@ pub struct Parser<'a> {
     pub pos: usize,
     /// NASM syntax: `byte [x]` without PTR, `$$`, C operators, little-endian character constants.
     pub nasm: bool,
+    /// Nesting now: parentheses, brackets, unary operators, `NOT`, `?:` (see [`MAX_NESTING`]).
+    depth: u32,
+    /// Operands parsed by this parser (see [`MAX_OPERANDS`]).
+    operands: u32,
 }
+
+/// Deepest nesting of an expression: parentheses and brackets (two levels each), unary operators,
+/// `NOT`, NASM's `?:`. Parsing, evaluating and dropping an expression recurse over it, and a stack
+/// overflow ends the whole process (the browser's stack is 1 MB): 20 000 parentheses did. Real
+/// programs nest a few levels.
+pub const MAX_NESTING: u32 = 64;
+/// Most operands in the expressions of one line: a chain `1+1+…+1` is a tree as deep as it is
+/// long, and the assembler evaluates it recursively (some 5 KB of stack a level in a debug build).
+pub const MAX_OPERANDS: u32 = 256;
 
 type PResult<T> = Result<T, (usize, String)>;
 
 impl<'a> Parser<'a> {
     /// A parser at the start of `toks` (MASM syntax).
     pub fn new(toks: &'a [Token]) -> Self {
-        Parser { toks, pos: 0, nasm: false }
+        Parser { toks, pos: 0, nasm: false, depth: 0, operands: 0 }
     }
 
     /// The next token.
@@ -224,14 +237,26 @@ impl<'a> Parser<'a> {
 
     /// Parses an expression with the operator precedence of the dialect.
     pub fn expr(&mut self) -> PResult<Expr> {
-        if self.nasm {
-            return self.nasm_cond();
+        self.nested(|p| if p.nasm { p.nasm_cond() } else { p.or_expr() })
+    }
+
+    /// Runs `f` one level deeper (see [`MAX_NESTING`]).
+    fn nested(&mut self, f: impl FnOnce(&mut Self) -> PResult<Expr>) -> PResult<Expr> {
+        if self.depth >= MAX_NESTING {
+            return self.err(format!("the expression is nested too deeply (more than {MAX_NESTING} levels)"));
         }
-        self.or_expr()
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
     }
 
     /// NASM: `c ? a : b`, the lowest precedence.
     fn nasm_cond(&mut self) -> PResult<Expr> {
+        self.nested(Self::nasm_cond_inner)
+    }
+
+    fn nasm_cond_inner(&mut self) -> PResult<Expr> {
         let c = self.nasm_logic(0)?;
         if !self.eat_p('?') {
             return Ok(c);
@@ -353,7 +378,7 @@ impl<'a> Parser<'a> {
 
     fn not_expr(&mut self) -> PResult<Expr> {
         if self.eat_kw("NOT") {
-            let e = self.not_expr()?;
+            let e = self.nested(Self::not_expr)?;
             return Ok(Expr::Un(UnOp::Not, Box::new(e)));
         }
         self.cmp_expr()
@@ -446,7 +471,16 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// An operand: unary operators and a primary (see [`MAX_OPERANDS`], [`MAX_NESTING`]).
     fn unary(&mut self) -> PResult<Expr> {
+        self.operands += 1;
+        if self.operands > MAX_OPERANDS {
+            return self.err(format!("the expressions of the line are too long (more than {MAX_OPERANDS} operands)"));
+        }
+        self.nested(Self::unary_inner)
+    }
+
+    fn unary_inner(&mut self) -> PResult<Expr> {
         if self.eat_p('~') {
             let e = self.unary()?;
             return Ok(Expr::Un(UnOp::Not, Box::new(e)));

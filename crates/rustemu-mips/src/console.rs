@@ -7,16 +7,12 @@
 //! not fill the memory.
 
 /// Bytes the console keeps (older output is dropped).
-pub const CONSOLE_LIMIT: usize = 1 << 20;
+pub const CONSOLE_LIMIT: usize = rustemu_target::OUTPUT_LIMIT;
 
-/// What the program has printed and the input it has read (echoed as typed).
+/// What the program has printed and the input it has read (echoed as typed): a bounded
+/// [`rustemu_target::OutputBuffer`] shown as text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Console {
-    /// The kept output: the last bytes of everything written.
-    bytes: Vec<u8>,
-    /// Bytes dropped from the front.
-    dropped: usize,
-}
+pub struct Console(rustemu_target::OutputBuffer);
 
 impl Console {
     /// An empty console.
@@ -26,54 +22,42 @@ impl Console {
 
     /// Appends `bytes` to the console.
     pub fn write(&mut self, bytes: &[u8]) {
-        self.bytes.extend_from_slice(bytes);
-        // Dropped in large pieces, so that output does not shift on every write.
-        if self.bytes.len() > CONSOLE_LIMIT + CONSOLE_LIMIT / 4 {
-            let cut = self.bytes.len() - CONSOLE_LIMIT;
-            self.bytes.drain(..cut);
-            self.dropped += cut;
-        }
+        self.0.write(bytes);
     }
 
     /// Number of bytes written since the console was cleared (including dropped ones).
     pub fn len(&self) -> usize {
-        self.dropped + self.bytes.len()
+        self.0.len()
     }
 
     /// Nothing was written.
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.0.is_empty()
     }
 
     /// The kept bytes.
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        self.0.bytes()
     }
 
     /// Number of old bytes no longer kept.
     pub fn dropped(&self) -> usize {
-        self.dropped
+        self.0.dropped()
     }
 
     /// Goes back to the state when [`Console::len`] was `len` (step back).
     pub fn truncate(&mut self, len: usize) {
-        if len <= self.dropped {
-            self.bytes.clear();
-            self.dropped = len;
-        } else {
-            self.bytes.truncate(len - self.dropped);
-        }
+        self.0.truncate(len);
     }
 
     /// Empties the console.
     pub fn clear(&mut self) {
-        self.bytes.clear();
-        self.dropped = 0;
+        self.0.clear();
     }
 
     /// The kept output as text (see the module documentation).
     pub fn text(&self) -> String {
-        text(&self.bytes)
+        text(self.0.bytes())
     }
 }
 

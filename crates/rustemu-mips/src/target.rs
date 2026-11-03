@@ -136,6 +136,10 @@ impl Target for Machine {
         self.console.bytes()
     }
 
+    fn output_dropped(&self) -> usize {
+        self.console.dropped()
+    }
+
     fn is_waiting_input(&self) -> bool {
         Machine::is_waiting_input(self)
     }

@@ -229,10 +229,13 @@ fn thermometer(m: &mut Machine, ui: &mut Ui) {
     }
 }
 
+/// The end of the paper shown (a long printout is not laid out every frame).
+const PAPER_SHOWN: usize = 8 * 1024;
+
 fn printer(m: &mut Machine, ui: &mut Ui) {
     let d = &mut m.sys.dev;
-    let text: String = d
-        .printer
+    let paper = d.printer.bytes();
+    let text: String = paper[paper.len().saturating_sub(PAPER_SHOWN)..]
         .iter()
         .filter(|&&b| b != b'\r')
         .map(|&b| match b {
