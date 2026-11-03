@@ -1,6 +1,6 @@
 //! The Debugger tab's own cards: the visual step (what the last instruction did and why), the code
 //! (source, source mixed with the instructions, or the instructions alone) and the tools that open
-//! one at a time (watch, breakpoints, call stack, trace, ALU).
+//! one at a time (watch, breakpoints, call stack, trace, debug log); the ALU button opens its window.
 //!
 //! Two lines are told apart everywhere: the last executed instruction (a calm blue bar) and the
 //! next one at CS:IP (an amber arrow). While the BIOS serves an `INT`, the code shows the `INT` of
@@ -10,6 +10,7 @@ use egui::{Align2, FontId, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use rustemu_core::linear;
 use rustemu_session::step::StepView;
 use rustemu_ui::app::App;
+use rustemu_ui::tools::Tool;
 
 use crate::TabletState;
 use crate::cards::{breakpoints_card, call_stack_card, trace_card, watch_card};
@@ -34,18 +35,16 @@ pub(crate) enum DebugTool {
     Breakpoints,
     CallStack,
     Trace,
-    Alu,
     /// The DEBUG.EXE-style console with the log of every stop.
     Console,
 }
 
 impl DebugTool {
-    const ALL: [(DebugTool, &'static str); 6] = [
+    const ALL: [(DebugTool, &'static str); 5] = [
         (DebugTool::Watch, "Watch"),
         (DebugTool::Breakpoints, "Breakpoints"),
         (DebugTool::CallStack, "Call stack"),
         (DebugTool::Trace, "Trace"),
-        (DebugTool::Alu, "ALU"),
         (DebugTool::Console, "Debug log"),
     ];
 }
@@ -81,7 +80,7 @@ pub(crate) fn step_height(t: &TabletState) -> f32 {
 }
 
 /// What the last instruction did: the instruction and its line, the changed registers, flags and
-/// memory; "why" explains the flags, "ALU details" opens the ALU tool.
+/// memory; "why" explains the flags, "ALU details" opens the ALU window.
 pub(crate) fn step_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: Rect) {
     let (mut head, mut b) = card(ui, rect, "LAST STEP");
     if let Some(v) = app.session.current_view(into_macros(app))
@@ -129,7 +128,7 @@ pub(crate) fn step_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: R
             t.debug.why = !t.debug.why;
         }
         if step.alu.is_some() && ui.button("Open ALU details").clicked() {
-            t.debug.tool = Some(DebugTool::Alu);
+            app.windows[Tool::Alu] = true;
         }
     });
     if t.debug.why {
@@ -141,7 +140,7 @@ pub(crate) fn step_card(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: R
 }
 
 /// The last MIPS instruction: its text, address and line, the registers and bytes it changed.
-fn mips_step(app: &App, b: &mut Ui) {
+fn mips_step(app: &mut App, b: &mut Ui) {
     let Some(step) = rustemu_ui::mips_ui::last_step(app) else {
         b.label(RichText::new("Nothing executed yet.").size(17.0).color(pal::TEXT));
         b.label(RichText::new("Step (F8) runs one instruction; what it changed is shown here.").color(pal::WEAK));
@@ -176,9 +175,17 @@ fn mips_step(app: &App, b: &mut Ui) {
             );
         }
     });
-    if app.session.target.is_waiting_input() {
-        b.label(RichText::new("Waiting for input: type it in the Run I/O console").color(pal::AMBER).strong());
-    }
+    // The step was an ALU operation: its details are in the ALU window.
+    let alu = app.session.mips().and_then(|m| m.cpu.alu).is_some_and(|t| t.instr == app.session.target.instr_count());
+    b.add_space(6.0);
+    b.horizontal(|ui| {
+        if app.session.target.is_waiting_input() {
+            ui.label(RichText::new("Waiting for input: type it in the Run I/O console").color(pal::AMBER).strong());
+        }
+        if alu && ui.button("Open ALU details").clicked() {
+            app.windows[Tool::Alu] = true;
+        }
+    });
 }
 
 /// The changes of a step as chips: `BL 0Fh → 0Eh`, `CF 0 → 1`, `[07200h] 00 → 34`.
@@ -524,7 +531,7 @@ pub(crate) fn tools_area(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: 
         t.debug.tool = None;
     }
     let output = t.debug.output_tool.then_some((DebugTool::Output, "Output"));
-    // The trace, the ALU and the DEBUG.EXE log are the 8086's.
+    // The trace and the DEBUG.EXE log are the 8086's.
     let mips = app.session.mips().is_some();
     let ours =
         |tool: &DebugTool| !mips || matches!(tool, DebugTool::Watch | DebugTool::Breakpoints | DebugTool::CallStack);
@@ -542,6 +549,18 @@ pub(crate) fn tools_area(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: 
             t.debug.tool = if on { None } else { Some(tool) };
         }
     }
+    // The ALU is a window over the tab.
+    {
+        let on = app.windows[Tool::Alu];
+        let resp = r.add(
+            egui::Button::new(RichText::new("ALU").size(15.0).color(if on { egui::Color32::WHITE } else { pal::TEXT }))
+                .fill(if on { pal::BLUE } else { pal::BUTTON })
+                .min_size(vec2(64.0, TOOLS_ROW_H)),
+        );
+        if resp.on_hover_text("the arithmetic and logic unit: the last operation, in a window").clicked() {
+            app.windows[Tool::Alu] = !on;
+        }
+    }
     let Some(tool) = t.debug.tool else { return };
     if rest.height() < HEAD_H + 40.0 {
         return;
@@ -555,12 +574,6 @@ pub(crate) fn tools_area(app: &mut App, t: &mut TabletState, ui: &mut Ui, rect: 
         DebugTool::Console => {
             let (_, mut b) = card(ui, rest, "DEBUG LOG");
             rustemu_ui::console::console_ui(app, &mut b);
-        }
-        DebugTool::Alu => {
-            let (_, mut b) = card(ui, rest, "ALU");
-            egui::ScrollArea::vertical().id_salt("t_alu").auto_shrink([false, false]).show(&mut b, |ui| {
-                rustemu_ui::units::alu_ui(app, ui);
-            });
         }
     }
 }

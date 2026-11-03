@@ -179,7 +179,7 @@ fn project_menu(app: &mut App, ui: &mut Ui) {
         app.guarded(PendingAction::New);
         done = true;
     }
-    let open_hint = "ASM · COM · EXE · BIN";
+    let open_hint = if app.session.mips().is_some() { "ASM · S" } else { "ASM · COM · EXE · BIN" };
     if menu_row(ui, Icon::Folder, "Open from Files…", open_hint) {
         app.guarded(if browser { PendingAction::Upload } else { PendingAction::Open(None) });
         done = true;
@@ -289,29 +289,37 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         ui.close();
     }
     ui.separator();
-    // Drive C: (its files in the browser, its folder on the desktop) and the floppies, as in the
-    // desktop layout.
-    ui.menu_button("Virtual drive", |ui| rustemu_ui::drive_ui::virtual_drive_menu(app, ui));
-    let memory_drive = app.session.dos_memory_drive().is_some();
-    let w = &mut app.windows;
-    if memory_drive {
-        ui.checkbox(&mut w[Tool::Drive], "Drive C: files");
+    // Only the windows of the workspace's processor (the 8086's drive, devices, ALU... not in MIPS).
+    let x86 = app.session.x86().is_some();
+    if x86 {
+        // Drive C: (its files in the browser, its folder on the desktop) and the floppies, as in
+        // the desktop layout.
+        ui.menu_button("Virtual drive", |ui| rustemu_ui::drive_ui::virtual_drive_menu(app, ui));
     }
-    ui.checkbox(&mut w[Tool::Devices], "Virtual devices");
-    ui.checkbox(&mut w[Tool::Vars], "Variables");
-    ui.checkbox(&mut w[Tool::Symbols], "Symbol table");
-    ui.checkbox(&mut w[Tool::Listing], "Listing");
-    ui.checkbox(&mut w[Tool::Alu], "ALU");
-    ui.checkbox(&mut w[Tool::Fpu], "FPU");
-    ui.checkbox(&mut w[Tool::StopCondition], "Stop on condition");
+    let memory_drive = app.session.dos_memory_drive().is_some();
+    let tools = [
+        (Tool::Drive, "Drive C: files", memory_drive),
+        (Tool::Devices, "Virtual devices", true),
+        (Tool::Vars, "Variables", true),
+        (Tool::Symbols, "Symbol table", true),
+        (Tool::Listing, "Listing", true),
+        (Tool::Alu, "ALU", true),
+        (Tool::Fpu, "FPU", true),
+        (Tool::StopCondition, "Stop on condition", true),
+    ];
+    for (tool, name, shown) in tools {
+        if shown && app.has_tool(tool) {
+            ui.checkbox(&mut app.windows[tool], name);
+        }
+    }
     // A tool of the Debugger tab, not a window over everything.
-    if ui.button("Debug log").clicked() {
+    if x86 && ui.button("Debug log").clicked() {
         t.tab = Tab::Debugger;
         t.debug.tool = Some(crate::debugger::DebugTool::Console);
         ui.close();
     }
     ui.separator();
-    if ui.button("Reference").clicked() {
+    if app.has_tool(Tool::Reference) && ui.button("Reference").clicked() {
         app.windows[Tool::Reference] = true;
         ui.close();
     }

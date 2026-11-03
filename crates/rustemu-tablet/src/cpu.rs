@@ -309,9 +309,10 @@ pub(crate) fn full_height(w: f32, view: &CpuView) -> f32 {
         + 8.0
 }
 
-/// Height of the MIPS card: the tabs, the title and the 16 rows of the general purpose registers.
+/// Height of the MIPS card: the PC, the tabs, the title and the 16 rows of the general purpose
+/// registers.
 pub(crate) fn mips_height() -> f32 {
-    HEAD_H + 12.0 + 2.0 * 36.0 + 16.0 * 24.0 + 8.0
+    HEAD_H + 12.0 + 26.0 + 2.0 * 36.0 + 16.0 * 24.0 + 8.0
 }
 
 /// Height of the preview card for a width.

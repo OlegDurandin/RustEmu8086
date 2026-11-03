@@ -122,6 +122,81 @@ pub struct Cpu {
     pub cp0: [u32; 32],
     /// Instructions executed since the reset.
     pub instr_count: u64,
+    /// The last operation of the arithmetic and logic unit (for the ALU window; None until one).
+    pub alu: Option<AluTrace>,
+}
+
+/// An operation of the arithmetic and logic unit: an arithmetic, logic, comparison, shift,
+/// multiplication or division instruction, with its operands and result. Loads, stores, branches
+/// and `lui` are not recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AluTrace {
+    /// Address of the instruction.
+    pub pc: u32,
+    /// The instruction word (its mnemonic: [`crate::disasm`]).
+    pub word: u32,
+    /// The first operand: `rs` (`rt` for shifts).
+    pub a: u32,
+    /// The second operand: `rt`, the immediate as the instruction extends it, or the shift
+    /// amount (0 for `clz`/`clo`).
+    pub b: u32,
+    /// What was written to the destination register (LO for the instructions that write HI and
+    /// LO); for an overflow, the 32-bit result that was not written.
+    pub result: u32,
+    /// HI, for the instructions that write HI and LO.
+    pub hi: Option<u32>,
+    /// `add`, `addi`, `sub` overflowed: nothing was written, the exception was raised.
+    pub overflow: bool,
+    /// The instruction counter after it ([`Cpu::instr_count`]).
+    pub instr: u64,
+}
+
+/// Where an ALU instruction takes its second operand and puts its result.
+#[derive(Clone, Copy)]
+enum AluForm {
+    /// `rd = rs op rt`.
+    Reg,
+    /// `rt = rs op immediate` (sign-extended).
+    SignedImm,
+    /// `rt = rs op immediate` (zero-extended).
+    UnsignedImm,
+    /// `rd = rt shift shamt`.
+    Shift,
+    /// `rd = rt shift (rs & 31)`.
+    VarShift,
+    /// HI:LO from `rs` and `rt`.
+    HiLo,
+    /// `rd = op rs` (`clz`, `clo`).
+    Unary,
+}
+
+/// The ALU form of an instruction word, None for the others and for those writing only `$zero`
+/// (`nop` is `sll $zero, $zero, 0`).
+fn alu_form(word: u32) -> Option<AluForm> {
+    let form = match word >> 26 {
+        0x00 => match word & 0x3F {
+            0x00 | 0x02 | 0x03 => AluForm::Shift,
+            0x04 | 0x06 | 0x07 => AluForm::VarShift,
+            0x18..=0x1B => AluForm::HiLo,
+            0x20..=0x27 | 0x2A | 0x2B => AluForm::Reg,
+            _ => return None,
+        },
+        0x08..=0x0B => AluForm::SignedImm,
+        0x0C..=0x0E => AluForm::UnsignedImm,
+        0x1C => match word & 0x3F {
+            0x02 => AluForm::Reg,
+            0x00 | 0x01 | 0x04 | 0x05 => AluForm::HiLo,
+            0x20 | 0x21 => AluForm::Unary,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let dest = match form {
+        AluForm::HiLo => return Some(form),
+        AluForm::SignedImm | AluForm::UnsignedImm => word >> 16 & 31,
+        _ => word >> 11 & 31,
+    };
+    (dest != 0).then_some(form)
 }
 
 impl Default for Cpu {
@@ -190,7 +265,7 @@ impl Cpu {
         regs[SP] = memory::SP_INIT;
         let mut cp0 = [0; 32];
         cp0[cp0::STATUS] = cp0::STATUS_RESET;
-        Cpu { regs, hi: 0, lo: 0, pc: memory::TEXT_BASE, cp0, instr_count: 0 }
+        Cpu { regs, hi: 0, lo: 0, pc: memory::TEXT_BASE, cp0, instr_count: 0, alu: None }
     }
 
     /// Register `r` (`$0` reads as 0).
@@ -220,10 +295,47 @@ impl Cpu {
         };
         self.instr_count += 1;
         self.pc = pc.wrapping_add(4);
-        match self.execute(mem, word) {
+        let form = alu_form(word);
+        let operands = form.map(|form| self.alu_operands(form, word));
+        let result = self.execute(mem, word);
+        if let (Some(form), Some((a, b))) = (form, operands) {
+            self.record_alu(form, word, pc, a, b, matches!(&result, Err((ExcCode::Overflow, ..))));
+        }
+        match result {
             Ok(step) => step,
             Err((code, message, bad)) => Step::Exception(self.raise(mem, code, message, pc, bad, false)),
         }
+    }
+
+    /// The two operands of an ALU instruction, before it executes.
+    fn alu_operands(&self, form: AluForm, word: u32) -> (u32, u32) {
+        let f = Fields::new(word);
+        let (rs, rt) = (self.reg(f.rs), self.reg(f.rt));
+        match form {
+            AluForm::Reg | AluForm::HiLo => (rs, rt),
+            AluForm::SignedImm => (rs, f.simm),
+            AluForm::UnsignedImm => (rs, f.uimm),
+            AluForm::Shift => (rt, f.shamt),
+            AluForm::VarShift => (rt, rs & 31),
+            AluForm::Unary => (rs, 0),
+        }
+    }
+
+    /// Records an executed ALU instruction ([`Cpu::alu`]) from its operands and what it wrote.
+    fn record_alu(&mut self, form: AluForm, word: u32, pc: u32, a: u32, b: u32, overflow: bool) {
+        let f = Fields::new(word);
+        let (result, hi) = match form {
+            AluForm::HiLo => (self.lo, Some(self.hi)),
+            // add / addi / sub: the destination was not written.
+            _ if overflow => {
+                (if word & 0x3F == 0x22 && word >> 26 == 0 { a.wrapping_sub(b) } else { a.wrapping_add(b) }, None)
+            }
+            AluForm::SignedImm | AluForm::UnsignedImm => (self.reg(f.rt), None),
+            // `mul` also writes HI and LO.
+            AluForm::Reg if word >> 26 == 0x1C => (self.reg(f.rd), Some(self.hi)),
+            _ => (self.reg(f.rd), None),
+        };
+        self.alu = Some(AluTrace { pc, word, a, b, result, hi, overflow, instr: self.instr_count });
     }
 
     /// Records an exception of the instruction at `pc` in coprocessor 0 (as MARS does whether or

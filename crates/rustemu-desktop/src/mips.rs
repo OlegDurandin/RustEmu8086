@@ -42,6 +42,8 @@ pub(crate) fn emulator_ui(app: &mut App, ui: &mut Ui) {
         let w = &mut app.windows;
         ui.toggle_value(&mut w[Tool::Memory], "memory").on_hover_text("data segment, heap and stack");
         ui.toggle_value(&mut w[Tool::Vars], "vars").on_hover_text("the program's data labels");
+        ui.toggle_value(&mut w[Tool::Alu], "ALU")
+            .on_hover_text("the last arithmetic or logic operation: operands and result");
         ui.toggle_value(&mut w[Tool::Watch], "watch");
         ui.toggle_value(&mut w[Tool::CallStack], "call stack");
     });
@@ -122,6 +124,7 @@ fn view_menu(app: &mut App, ui: &mut Ui) {
     ui.checkbox(&mut w[Tool::Vars], "variables");
     ui.checkbox(&mut w[Tool::Symbols], "symbol table");
     ui.checkbox(&mut w[Tool::Listing], "listing");
+    ui.checkbox(&mut w[Tool::Alu], "arithmetic & logical unit");
     ui.separator();
     ui.checkbox(&mut w[Tool::Watch], "watch");
     ui.checkbox(&mut w[Tool::Breakpoints], "breakpoints");

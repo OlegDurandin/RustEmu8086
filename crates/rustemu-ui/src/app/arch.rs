@@ -157,7 +157,6 @@ impl App {
         self.stop();
         self.store_settings();
         let fresh = self.activate(arch);
-        self.settings.arch = arch.name().to_string();
         if fresh {
             self.open_start_document();
         }
@@ -293,7 +292,6 @@ impl App {
             Tool::Screen
             | Tool::Devices
             | Tool::Drive
-            | Tool::Alu
             | Tool::Fpu
             | Tool::Flags
             | Tool::FlagAnalyser
@@ -327,6 +325,15 @@ mod tests {
     }
 
     #[test]
+    fn every_start_is_in_the_8086() {
+        let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+        app.switch_arch(Arch::Mips32);
+        app.store_settings();
+        let app = App::with_settings(app.settings.clone());
+        assert_eq!(app.arch(), Arch::I8086);
+    }
+
+    #[test]
     fn workspaces_keep_their_documents() {
         let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
         app.doc.text.push_str("; edited\n");
@@ -335,7 +342,6 @@ mod tests {
         assert_eq!(app.arch(), Arch::Mips32);
         assert!(app.file_name().ends_with(".s"), "{}", app.file_name());
         assert!(!app.windows[Tool::Memory]);
-        assert_eq!(app.settings.arch, "MIPS32");
         app.emulate();
         assert!(app.loaded(), "{:?}", app.build.messages.iter().map(|m| &m.text).collect::<Vec<_>>());
         app.switch_arch(Arch::I8086);
