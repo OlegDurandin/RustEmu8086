@@ -72,10 +72,21 @@ pub struct Preprocessor<'a> {
     open_files: Vec<String>,
     /// NASM `%define name(params) body` (by upper-case name): expanded where they are used.
     nasm_functions: HashMap<String, (Vec<String>, String)>,
+    /// Lines gone through so far (source lines and every line of every expansion).
+    expanded: usize,
+    /// The expansion went over [`MAX_EXPANDED_LINES`]: everything stops.
+    over: bool,
 }
 
 /// Deepest INCLUDE nesting (a cycle through differently spelled names stops here).
 const MAX_INCLUDE_DEPTH: usize = 32;
+
+/// Most lines the preprocessor goes through: the source lines and every line of every REPT,
+/// `%rep` and macro expansion. Nested REPT or macros that call each other twice would otherwise
+/// grow to hundreds of millions of lines (minutes and gigabytes, in the window's thread — the
+/// browser's only one); a real program stays far below (64 KB of code is at most 65 536 lines that
+/// make bytes; the largest Emu8086 example has about 300). A bomb stops in about 0.4 s in release.
+pub const MAX_EXPANDED_LINES: usize = 250_000;
 
 /// Words that begin/end blocks we must track while collecting macro bodies.
 fn first_words(text: &str) -> (String, String) {
@@ -262,6 +273,8 @@ impl<'a> Preprocessor<'a> {
             nasm: false,
             open_files: Vec::new(),
             nasm_functions: HashMap::new(),
+            expanded: 0,
+            over: false,
         }
     }
 
@@ -521,6 +534,9 @@ impl<'a> Preprocessor<'a> {
 
     /// Processes lines, expanding macros recursively, and appends the result to `self.out`.
     fn process(&mut self, lines: Vec<Line>, depth: u32) {
+        if self.over {
+            return;
+        }
         if depth > 64 {
             if let Some(l) = lines.first() {
                 self.error(l, "macro nesting too deep");
@@ -534,6 +550,21 @@ impl<'a> Preprocessor<'a> {
         while i < lines.len() {
             let l = lines[i].clone();
             i += 1;
+            self.expanded += 1;
+            if self.expanded > MAX_EXPANDED_LINES {
+                // Reported once, at the line the outermost expansion came from.
+                if !self.over {
+                    self.over = true;
+                    self.error(
+                        &l,
+                        format!(
+                            "the expansion is too large: more than {MAX_EXPANDED_LINES} lines \
+                             (nested REPT / %rep or macros that call each other?)"
+                        ),
+                    );
+                }
+                return;
+            }
             let mut l = l;
             let (fw1, fw2) = first_words(&l.text);
             // Names tested by IFDEF and friends must not be replaced by their text.
@@ -704,6 +735,9 @@ impl<'a> Preprocessor<'a> {
                     let (body, next) = self.collect_block(&lines, i, &l);
                     i = next;
                     for _ in 0..n.clamp(0, 65536) {
+                        if self.over {
+                            break;
+                        }
                         let copy = body
                             .iter()
                             .map(|b| Line {
