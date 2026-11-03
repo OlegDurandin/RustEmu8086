@@ -502,7 +502,7 @@ impl Machine {
             Some(t) => Some(t),
             None => {
                 if self.dos.drive.is_none() {
-                    self.log.push("DOS file access is disabled (no virtual drive configured)".into());
+                    self.log.push("DOS file access is disabled (no virtual drive configured)");
                 }
                 self.fail(E_PATH_NOT_FOUND);
                 None

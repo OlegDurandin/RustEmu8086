@@ -1110,7 +1110,7 @@ fname db 'big.dat', 0
     let m = s.x86().unwrap();
     assert_eq!(ev, Event::Terminated(0), "{:?}", m.log);
     assert_eq!(std::fs::metadata(dir.join("big.dat")).unwrap().len(), HOST_WRITE_QUOTA);
-    assert_eq!(m.log.iter().filter(|l| l.contains("drive C: limit")).count(), 1, "{:?}", m.log);
+    assert_eq!(m.log.lines().filter(|l| l.contains("drive C: limit")).count(), 1, "{:?}", m.log);
 
     // A seek to 2 GB and a write: nothing written, no 2 GB file.
     let (s, ev) = run("org 100h
@@ -1174,4 +1174,40 @@ fname db 'aaa', 0
     assert_eq!(ev, Event::Terminated(0));
     assert_eq!((m.cpu.regs[6], m.cpu.regs[3]), (HOST_MAX_CREATED as u16, 5), "SI = files created, BX = the error");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_log_stays_small() {
+    // An unsupported DOS function in a loop: one message, counted.
+    let src = "org 100h
+    mov cx, 50000
+again:
+    mov ah, 0FFh
+    int 21h
+    loop again
+    mov ax, 4C00h
+    int 21h
+";
+    let (s, ev) = run_src(src, "");
+    assert_eq!(ev, Event::Terminated(0));
+    let lines: Vec<String> = s.x86().unwrap().log.lines().collect();
+    assert_eq!(lines, ["INT 21h/AH=FFh is not supported (×50000)"]);
+
+    // Two of them in turn: no repeats in a row, but at most MAX_ENTRIES messages are kept.
+    let src = "org 100h
+    mov cx, 5000
+again:
+    mov ah, 0FEh
+    int 21h
+    mov ah, 0FFh
+    int 21h
+    loop again
+    mov ax, 4C00h
+    int 21h
+";
+    let (s, ev) = run_src(src, "");
+    assert_eq!(ev, Event::Terminated(0));
+    let lines: Vec<String> = s.x86().unwrap().log.lines().collect();
+    assert_eq!(lines.len(), rustemu_core::log::MAX_ENTRIES + 1);
+    assert_eq!(lines[0], format!("({} older messages not kept)", 10_000 - rustemu_core::log::MAX_ENTRIES));
 }

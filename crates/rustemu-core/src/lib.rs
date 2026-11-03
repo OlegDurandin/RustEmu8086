@@ -12,6 +12,7 @@ pub mod dos;
 pub mod font;
 pub mod fpu;
 pub mod keyboard;
+pub mod log;
 pub mod machine;
 pub mod memdrive;
 pub mod robot;

@@ -187,7 +187,7 @@ struct Snapshot {
     cpu: Cpu,
     undo: Vec<(u32, u8)>,
     output_len: usize,
-    log_len: usize,
+    log: crate::log::Mark,
     terminated: Option<u8>,
     tick_instr: u64,
     tick_time: Option<web_time::Instant>,
@@ -221,7 +221,7 @@ pub struct MachineState {
     keys: VecDeque<u16>,
     irq: VecDeque<u8>,
     output: Vec<u8>,
-    log: Vec<String>,
+    log: crate::log::Log,
     terminated: Option<u8>,
     loaded: Option<LoadInfo>,
     dos: DosSnapshot,
@@ -243,8 +243,9 @@ pub struct Machine {
     pub loaded: Option<LoadInfo>,
     /// Text written by the program to the console (DOS output, BIOS teletype).
     pub output: Vec<u8>,
-    /// Messages for the emulator log (unsupported services and such).
-    pub log: Vec<String>,
+    /// Messages for the emulator log (unsupported services and such); repeats are counted and
+    /// the log is bounded (see [`crate::log`]).
+    pub log: crate::log::Log,
     /// The program ended with this exit code (INT 20h, INT 21h/4Ch, RET to the PSP).
     pub terminated: Option<u8>,
     /// Record history for step-back.
@@ -303,7 +304,7 @@ impl Machine {
             breakpoints: HashSet::new(),
             loaded: None,
             output: Vec::new(),
-            log: Vec::new(),
+            log: Default::default(),
             terminated: None,
             history_enabled: true,
             history: VecDeque::new(),
@@ -705,7 +706,7 @@ impl Machine {
         };
         let snap_cpu = self.cpu.clone();
         let out_len = self.output.len();
-        let log_len = self.log.len();
+        let log_mark = self.log.mark();
         let snap_terminated = self.terminated;
         let snap_tick_instr = self.tick_instr;
         let snap_tick_time = self.tick_time;
@@ -737,7 +738,7 @@ impl Machine {
                 && undo.is_empty()
                 && self.cpu.same_state(&snap_cpu)
                 && self.output.len() == out_len
-                && self.log.len() == log_len
+                && self.log.mark() == log_mark
                 && self.terminated == snap_terminated
                 && snap_system.as_ref().is_none_or(|s| self.system_unchanged(s));
             if !idle {
@@ -748,7 +749,7 @@ impl Machine {
                     cpu: snap_cpu,
                     undo,
                     output_len: out_len,
-                    log_len,
+                    log: log_mark,
                     terminated: snap_terminated,
                     tick_instr: snap_tick_instr,
                     tick_time: snap_tick_time,
@@ -869,7 +870,7 @@ impl Machine {
                 self.sys.mem.undo(&s.undo);
                 self.cpu = s.cpu;
                 self.output.truncate(s.output_len);
-                self.log.truncate(s.log_len);
+                self.log.restore(s.log);
                 self.terminated = s.terminated;
                 self.tick_instr = s.tick_instr;
                 self.tick_time = s.tick_time;
