@@ -1,6 +1,5 @@
 //! The instruction table of MARS: its basic instructions (example syntax and encoding mask from
-//! `InstructionSet.java`) and pseudo-instructions (`PseudoOps.txt`, read at startup), without the
-//! coprocessor 1 ones. MARS is distributed under the MIT license (see `data/PseudoOps.txt`).
+//! `InstructionSet.java`) and pseudo-instructions (`PseudoOps.txt`, read at startup). MARS is distributed under the MIT license (see `data/PseudoOps.txt`).
 
 /// The encoding format of a basic instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,8 +28,8 @@ pub struct Basic {
     pub help: &'static str,
 }
 
-/// MARS's basic integer instructions (87 forms), in its order (forms of one mnemonic are tried in
-/// this order).
+/// MARS's basic instructions: 87 integer forms, then 68 of coprocessor 1, in its order (forms of
+/// one mnemonic are tried in this order).
 pub const BASIC: &[Basic] = &[
     Basic {
         example: "nop",
@@ -553,5 +552,414 @@ pub const BASIC: &[Basic] = &[
         mask: "01000010000000000000000000011000",
         format: Format::R,
         help: "Exception return : Set Program Counter to Coprocessor 0 EPC register value, set Coprocessor Status register bit 1 (exception level) to zero",
+    },
+    // Coprocessor 1 (floating point) and the moves on its condition flags, in MARS's order.
+    Basic {
+        example: "movf $t1,$t2",
+        mask: "000000sssss00000fffff00000000001",
+        format: Format::R,
+        help: "Move if FP condition flag 0 false : Set $t1 to $t2 if FPU (Coprocessor 1) condition flag 0 is false (zero)",
+    },
+    Basic {
+        example: "movf $t1,$t2,1",
+        mask: "000000sssssttt00fffff00000000001",
+        format: Format::R,
+        help: "Move if specified FP condition flag false : Set $t1 to $t2 if FPU (Coprocessor 1) condition flag specified by the immediate is false (zero)",
+    },
+    Basic {
+        example: "movt $t1,$t2",
+        mask: "000000sssss00001fffff00000000001",
+        format: Format::R,
+        help: "Move if FP condition flag 0 true : Set $t1 to $t2 if FPU (Coprocessor 1) condition flag 0 is true (one)",
+    },
+    Basic {
+        example: "movt $t1,$t2,1",
+        mask: "000000sssssttt01fffff00000000001",
+        format: Format::R,
+        help: "Move if specfied FP condition flag true : Set $t1 to $t2 if FPU (Coprocessor 1) condition flag specified by the immediate is true (one)",
+    },
+    Basic {
+        example: "add.s $f0,$f1,$f3",
+        mask: "01000110000tttttsssssfffff000000",
+        format: Format::R,
+        help: "Floating point addition single precision : Set $f0 to single-precision floating point value of $f1 plus $f3",
+    },
+    Basic {
+        example: "sub.s $f0,$f1,$f3",
+        mask: "01000110000tttttsssssfffff000001",
+        format: Format::R,
+        help: "Floating point subtraction single precision : Set $f0 to single-precision floating point value of $f1  minus $f3",
+    },
+    Basic {
+        example: "mul.s $f0,$f1,$f3",
+        mask: "01000110000tttttsssssfffff000010",
+        format: Format::R,
+        help: "Floating point multiplication single precision : Set $f0 to single-precision floating point value of $f1 times $f3",
+    },
+    Basic {
+        example: "div.s $f0,$f1,$f3",
+        mask: "01000110000tttttsssssfffff000011",
+        format: Format::R,
+        help: "Floating point division single precision : Set $f0 to single-precision floating point value of $f1 divided by $f3",
+    },
+    Basic {
+        example: "sqrt.s $f0,$f1",
+        mask: "0100011000000000sssssfffff000100",
+        format: Format::R,
+        help: "Square root single precision : Set $f0 to single-precision floating point square root of $f1",
+    },
+    Basic {
+        example: "floor.w.s $f0,$f1",
+        mask: "0100011000000000sssssfffff001111",
+        format: Format::R,
+        help: "Floor single precision to word : Set $f0 to 32-bit integer floor of single-precision float in $f1",
+    },
+    Basic {
+        example: "ceil.w.s $f0,$f1",
+        mask: "0100011000000000sssssfffff001110",
+        format: Format::R,
+        help: "Ceiling single precision to word : Set $f0 to 32-bit integer ceiling of single-precision float in $f1",
+    },
+    Basic {
+        example: "round.w.s $f0,$f1",
+        mask: "0100011000000000sssssfffff001100",
+        format: Format::R,
+        help: "Round single precision to word : Set $f0 to 32-bit integer round of single-precision float in $f1",
+    },
+    Basic {
+        example: "trunc.w.s $f0,$f1",
+        mask: "0100011000000000sssssfffff001101",
+        format: Format::R,
+        help: "Truncate single precision to word : Set $f0 to 32-bit integer truncation of single-precision float in $f1",
+    },
+    Basic {
+        example: "add.d $f2,$f4,$f6",
+        mask: "01000110001tttttsssssfffff000000",
+        format: Format::R,
+        help: "Floating point addition double precision : Set $f2 to double-precision floating point value of $f4 plus $f6",
+    },
+    Basic {
+        example: "sub.d $f2,$f4,$f6",
+        mask: "01000110001tttttsssssfffff000001",
+        format: Format::R,
+        help: "Floating point subtraction double precision : Set $f2 to double-precision floating point value of $f4 minus $f6",
+    },
+    Basic {
+        example: "mul.d $f2,$f4,$f6",
+        mask: "01000110001tttttsssssfffff000010",
+        format: Format::R,
+        help: "Floating point multiplication double precision : Set $f2 to double-precision floating point value of $f4 times $f6",
+    },
+    Basic {
+        example: "div.d $f2,$f4,$f6",
+        mask: "01000110001tttttsssssfffff000011",
+        format: Format::R,
+        help: "Floating point division double precision : Set $f2 to double-precision floating point value of $f4 divided by $f6",
+    },
+    Basic {
+        example: "sqrt.d $f2,$f4",
+        mask: "0100011000100000sssssfffff000100",
+        format: Format::R,
+        help: "Square root double precision : Set $f2 to double-precision floating point square root of $f4",
+    },
+    Basic {
+        example: "floor.w.d $f1,$f2",
+        mask: "0100011000100000sssssfffff001111",
+        format: Format::R,
+        help: "Floor double precision to word : Set $f1 to 32-bit integer floor of double-precision float in $f2",
+    },
+    Basic {
+        example: "ceil.w.d $f1,$f2",
+        mask: "0100011000100000sssssfffff001110",
+        format: Format::R,
+        help: "Ceiling double precision to word : Set $f1 to 32-bit integer ceiling of double-precision float in $f2",
+    },
+    Basic {
+        example: "round.w.d $f1,$f2",
+        mask: "0100011000100000sssssfffff001100",
+        format: Format::R,
+        help: "Round double precision to word : Set $f1 to 32-bit integer round of double-precision float in $f2",
+    },
+    Basic {
+        example: "trunc.w.d $f1,$f2",
+        mask: "0100011000100000sssssfffff001101",
+        format: Format::R,
+        help: "Truncate double precision to word : Set $f1 to 32-bit integer truncation of double-precision float in $f2",
+    },
+    Basic {
+        example: "bc1t label",
+        mask: "0100010100000001ffffffffffffffff",
+        format: Format::B,
+        help: "Branch if FP condition flag 0 true (BC1T, not BCLT) : If Coprocessor 1 condition flag 0 is true (one) then branch to statement at label's address",
+    },
+    Basic {
+        example: "bc1t 1,label",
+        mask: "01000101000fff01ssssssssssssssss",
+        format: Format::B,
+        help: "Branch if specified FP condition flag true (BC1T, not BCLT) : If Coprocessor 1 condition flag specified by immediate is true (one) then branch to statement at label's address",
+    },
+    Basic {
+        example: "bc1f label",
+        mask: "0100010100000000ffffffffffffffff",
+        format: Format::B,
+        help: "Branch if FP condition flag 0 false (BC1F, not BCLF) : If Coprocessor 1 condition flag 0 is false (zero) then branch to statement at label's address",
+    },
+    Basic {
+        example: "bc1f 1,label",
+        mask: "01000101000fff00ssssssssssssssss",
+        format: Format::B,
+        help: "Branch if specified FP condition flag false (BC1F, not BCLF) : If Coprocessor 1 condition flag specified by immediate is false (zero) then branch to statement at label's address",
+    },
+    Basic {
+        example: "c.eq.s $f0,$f1",
+        mask: "01000110000sssssfffff00000110010",
+        format: Format::R,
+        help: "Compare equal single precision : If $f0 is equal to $f1, set Coprocessor 1 condition flag 0 true else set it false",
+    },
+    Basic {
+        example: "c.eq.s 1,$f0,$f1",
+        mask: "01000110000tttttsssssfff00110010",
+        format: Format::R,
+        help: "Compare equal single precision : If $f0 is equal to $f1, set Coprocessor 1 condition flag specied by immediate to true else set it to false",
+    },
+    Basic {
+        example: "c.le.s $f0,$f1",
+        mask: "01000110000sssssfffff00000111110",
+        format: Format::R,
+        help: "Compare less or equal single precision : If $f0 is less than or equal to $f1, set Coprocessor 1 condition flag 0 true else set it false",
+    },
+    Basic {
+        example: "c.le.s 1,$f0,$f1",
+        mask: "01000110000tttttsssssfff00111110",
+        format: Format::R,
+        help: "Compare less or equal single precision : If $f0 is less than or equal to $f1, set Coprocessor 1 condition flag specified by immediate to true else set it to false",
+    },
+    Basic {
+        example: "c.lt.s $f0,$f1",
+        mask: "01000110000sssssfffff00000111100",
+        format: Format::R,
+        help: "Compare less than single precision : If $f0 is less than $f1, set Coprocessor 1 condition flag 0 true else set it false",
+    },
+    Basic {
+        example: "c.lt.s 1,$f0,$f1",
+        mask: "01000110000tttttsssssfff00111100",
+        format: Format::R,
+        help: "Compare less than single precision : If $f0 is less than $f1, set Coprocessor 1 condition flag specified by immediate to true else set it to false",
+    },
+    Basic {
+        example: "c.eq.d $f2,$f4",
+        mask: "01000110001sssssfffff00000110010",
+        format: Format::R,
+        help: "Compare equal double precision : If $f2 is equal to $f4 (double-precision), set Coprocessor 1 condition flag 0 true else set it false",
+    },
+    Basic {
+        example: "c.eq.d 1,$f2,$f4",
+        mask: "01000110001tttttsssssfff00110010",
+        format: Format::R,
+        help: "Compare equal double precision : If $f2 is equal to $f4 (double-precision), set Coprocessor 1 condition flag specified by immediate to true else set it to false",
+    },
+    Basic {
+        example: "c.le.d $f2,$f4",
+        mask: "01000110001sssssfffff00000111110",
+        format: Format::R,
+        help: "Compare less or equal double precision : If $f2 is less than or equal to $f4 (double-precision), set Coprocessor 1 condition flag 0 true else set it false",
+    },
+    Basic {
+        example: "c.le.d 1,$f2,$f4",
+        mask: "01000110001tttttsssssfff00111110",
+        format: Format::R,
+        help: "Compare less or equal double precision : If $f2 is less than or equal to $f4 (double-precision), set Coprocessor 1 condition flag specfied by immediate true else set it false",
+    },
+    Basic {
+        example: "c.lt.d $f2,$f4",
+        mask: "01000110001sssssfffff00000111100",
+        format: Format::R,
+        help: "Compare less than double precision : If $f2 is less than $f4 (double-precision), set Coprocessor 1 condition flag 0 true else set it false",
+    },
+    Basic {
+        example: "c.lt.d 1,$f2,$f4",
+        mask: "01000110001tttttsssssfff00111100",
+        format: Format::R,
+        help: "Compare less than double precision : If $f2 is less than $f4 (double-precision), set Coprocessor 1 condition flag specified by immediate to true else set it to false",
+    },
+    Basic {
+        example: "abs.s $f0,$f1",
+        mask: "0100011000000000sssssfffff000101",
+        format: Format::R,
+        help: "Floating point absolute value single precision : Set $f0 to absolute value of $f1, single precision",
+    },
+    Basic {
+        example: "abs.d $f2,$f4",
+        mask: "0100011000100000sssssfffff000101",
+        format: Format::R,
+        help: "Floating point absolute value double precision : Set $f2 to absolute value of $f4, double precision",
+    },
+    Basic {
+        example: "cvt.d.s $f2,$f1",
+        mask: "0100011000000000sssssfffff100001",
+        format: Format::R,
+        help: "Convert from single precision to double precision : Set $f2 to double precision equivalent of single precision value in $f1",
+    },
+    Basic {
+        example: "cvt.d.w $f2,$f1",
+        mask: "0100011010000000sssssfffff100001",
+        format: Format::R,
+        help: "Convert from word to double precision : Set $f2 to double precision equivalent of 32-bit integer value in $f1",
+    },
+    Basic {
+        example: "cvt.s.d $f1,$f2",
+        mask: "0100011000100000sssssfffff100000",
+        format: Format::R,
+        help: "Convert from double precision to single precision : Set $f1 to single precision equivalent of double precision value in $f2",
+    },
+    Basic {
+        example: "cvt.s.w $f0,$f1",
+        mask: "0100011010000000sssssfffff100000",
+        format: Format::R,
+        help: "Convert from word to single precision : Set $f0 to single precision equivalent of 32-bit integer value in $f2",
+    },
+    Basic {
+        example: "cvt.w.d $f1,$f2",
+        mask: "0100011000100000sssssfffff100100",
+        format: Format::R,
+        help: "Convert from double precision to word : Set $f1 to 32-bit integer equivalent of double precision value in $f2",
+    },
+    Basic {
+        example: "cvt.w.s $f0,$f1",
+        mask: "0100011000000000sssssfffff100100",
+        format: Format::R,
+        help: "Convert from single precision to word : Set $f0 to 32-bit integer equivalent of single precision value in $f1",
+    },
+    Basic {
+        example: "mov.d $f2,$f4",
+        mask: "0100011000100000sssssfffff000110",
+        format: Format::R,
+        help: "Move floating point double precision : Set double precision $f2 to double precision value in $f4",
+    },
+    Basic {
+        example: "movf.d $f2,$f4",
+        mask: "0100011000100000sssssfffff010001",
+        format: Format::R,
+        help: "Move floating point double precision : If condition flag 0 false, set double precision $f2 to double precision value in $f4",
+    },
+    Basic {
+        example: "movf.d $f2,$f4,1",
+        mask: "01000110001ttt00sssssfffff010001",
+        format: Format::R,
+        help: "Move floating point double precision : If condition flag specified by immediate is false, set double precision $f2 to double precision value in $f4",
+    },
+    Basic {
+        example: "movt.d $f2,$f4",
+        mask: "0100011000100001sssssfffff010001",
+        format: Format::R,
+        help: "Move floating point double precision : If condition flag 0 true, set double precision $f2 to double precision value in $f4",
+    },
+    Basic {
+        example: "movt.d $f2,$f4,1",
+        mask: "01000110001ttt01sssssfffff010001",
+        format: Format::R,
+        help: "Move floating point double precision : If condition flag specified by immediate is true, set double precision $f2 to double precision value in $f4e",
+    },
+    Basic {
+        example: "movn.d $f2,$f4,$t3",
+        mask: "01000110001tttttsssssfffff010011",
+        format: Format::R,
+        help: "Move floating point double precision : If $t3 is not zero, set double precision $f2 to double precision value in $f4",
+    },
+    Basic {
+        example: "movz.d $f2,$f4,$t3",
+        mask: "01000110001tttttsssssfffff010010",
+        format: Format::R,
+        help: "Move floating point double precision : If $t3 is zero, set double precision $f2 to double precision value in $f4",
+    },
+    Basic {
+        example: "mov.s $f0,$f1",
+        mask: "0100011000000000sssssfffff000110",
+        format: Format::R,
+        help: "Move floating point single precision : Set single precision $f0 to single precision value in $f1",
+    },
+    Basic {
+        example: "movf.s $f0,$f1",
+        mask: "0100011000000000sssssfffff010001",
+        format: Format::R,
+        help: "Move floating point single precision : If condition flag 0 is false, set single precision $f0 to single precision value in $f1",
+    },
+    Basic {
+        example: "movf.s $f0,$f1,1",
+        mask: "01000110000ttt00sssssfffff010001",
+        format: Format::R,
+        help: "Move floating point single precision : If condition flag specified by immediate is false, set single precision $f0 to single precision value in $f1e",
+    },
+    Basic {
+        example: "movt.s $f0,$f1",
+        mask: "0100011000000001sssssfffff010001",
+        format: Format::R,
+        help: "Move floating point single precision : If condition flag 0 is true, set single precision $f0 to single precision value in $f1e",
+    },
+    Basic {
+        example: "movt.s $f0,$f1,1",
+        mask: "01000110000ttt01sssssfffff010001",
+        format: Format::R,
+        help: "Move floating point single precision : If condition flag specified by immediate is true, set single precision $f0 to single precision value in $f1e",
+    },
+    Basic {
+        example: "movn.s $f0,$f1,$t3",
+        mask: "01000110000tttttsssssfffff010011",
+        format: Format::R,
+        help: "Move floating point single precision : If $t3 is not zero, set single precision $f0 to single precision value in $f1",
+    },
+    Basic {
+        example: "movz.s $f0,$f1,$t3",
+        mask: "01000110000tttttsssssfffff010010",
+        format: Format::R,
+        help: "Move floating point single precision : If $t3 is zero, set single precision $f0 to single precision value in $f1",
+    },
+    Basic {
+        example: "mfc1 $t1,$f1",
+        mask: "01000100000fffffsssss00000000000",
+        format: Format::R,
+        help: "Move from Coprocessor 1 (FPU) : Set $t1 to value in Coprocessor 1 register $f1",
+    },
+    Basic {
+        example: "mtc1 $t1,$f1",
+        mask: "01000100100fffffsssss00000000000",
+        format: Format::R,
+        help: "Move to Coprocessor 1 (FPU) : Set Coprocessor 1 register $f1 to value in $t1",
+    },
+    Basic {
+        example: "neg.d $f2,$f4",
+        mask: "0100011000100000sssssfffff000111",
+        format: Format::R,
+        help: "Floating point negate double precision : Set double precision $f2 to negation of double precision value in $f4",
+    },
+    Basic {
+        example: "neg.s $f0,$f1",
+        mask: "0100011000000000sssssfffff000111",
+        format: Format::R,
+        help: "Floating point negate single precision : Set single precision $f0 to negation of single precision value in $f1",
+    },
+    Basic {
+        example: "lwc1 $f1,-100($t2)",
+        mask: "110001tttttfffffssssssssssssssss",
+        format: Format::I,
+        help: "Load word into Coprocessor 1 (FPU) : Set $f1 to 32-bit value from effective memory word address",
+    },
+    Basic {
+        example: "ldc1 $f2,-100($t2)",
+        mask: "110101tttttfffffssssssssssssssss",
+        format: Format::I,
+        help: "Load double word Coprocessor 1 (FPU)) : Set $f2 to 64-bit value from effective memory doubleword address",
+    },
+    Basic {
+        example: "swc1 $f1,-100($t2)",
+        mask: "111001tttttfffffssssssssssssssss",
+        format: Format::I,
+        help: "Store word from Coprocesor 1 (FPU) : Store 32 bit value in $f1 to effective memory word address",
+    },
+    Basic {
+        example: "sdc1 $f2,-100($t2)",
+        mask: "111101tttttfffffssssssssssssssss",
+        format: Format::I,
+        help: "Store double word from Coprocessor 1 (FPU)) : Store 64 bit value in $f2 to effective memory doubleword address",
     },
 ];

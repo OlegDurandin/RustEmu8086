@@ -7,7 +7,8 @@
 //! `0x` hex, a leading `0` octal), plus MARS's eight-digit hex and unsigned decimals.
 //!
 //! `%hi(label)` and `%lo(label)` (with an optional `+n`) are an extension over MARS, as in the
-//! GNU assembler: the upper and the lower half of an address for `lui` / `addiu` / loads.
+//! GNU assembler: the upper and the lower half of an address for `lui` / `addiu` / loads. Another
+//! `%name` is a parameter of a macro.
 
 use crate::cpu::REG_NAMES;
 
@@ -18,7 +19,7 @@ pub enum Kind {
     RegName(u32),
     /// `$8`: a register by number.
     RegNum(u32),
-    /// `$f0`: a floating-point register (coprocessor 1, not supported yet).
+    /// `$f0`: a floating-point register (coprocessor 1).
     FpReg(u32),
     /// An integer (character literals included).
     Int(i32),
@@ -40,6 +41,8 @@ pub enum Kind {
     Plus,
     /// `-` between a label and a number.
     Minus,
+    /// `%name`: a parameter of a macro (in its `.macro` line and its body).
+    MacroParam,
     /// `%hi(label+offset)` (`hi`) or `%lo(...)`: resolved to an integer in the second pass.
     Reloc {
         /// The upper half (otherwise the lower).
@@ -186,6 +189,8 @@ fn classify(text: &str, col: usize) -> Result<Token, LexError> {
         r
     } else if let Some(v) = parse_int(text) {
         Kind::Int(v)
+    } else if text.len() > 1 && text.starts_with('%') {
+        Kind::MacroParam
     } else if text.starts_with('.') && DIRECTIVES.iter().any(|d| d.eq_ignore_ascii_case(text)) {
         Kind::Directive
     } else if is_identifier(text) {
@@ -313,8 +318,8 @@ pub fn tokenize(line: &str) -> Result<Vec<Token>, LexError> {
                 out.push(Token { kind: Kind::Int(v), text: v.to_string(), col: begin + 1 });
                 i = close;
             }
-            '%' if cur.is_empty() => {
-                // %hi(label) / %lo(label+n)
+            '%' if cur.is_empty() && matches!(chars.get(i + 1..i + 4), Some(['h', 'i', '('] | ['l', 'o', '('])) => {
+                // %hi(label) / %lo(label+n); another `%name` is a macro parameter.
                 let rest: String = chars[i..].iter().collect();
                 let (tok, used) = reloc(&rest, i + 1)?;
                 out.push(tok);
@@ -394,5 +399,7 @@ mod tests {
         assert_eq!(kinds("lui $t0, %hi(msg+4)")[2], Reloc { hi: true, label: "msg".into(), offset: 4 });
         assert!(tokenize("li $t0, 12x").unwrap_err().1.contains("Invalid language element: 12x"));
         assert!(tokenize("li $t0, \"abc").is_err());
+        assert_eq!(kinds("add %x, %x, $t0"), [Ident, MacroParam, MacroParam, RegName(8)]);
+        assert_eq!(kinds("li $a0, %n+4")[2..], [MacroParam, Int(4)]);
     }
 }

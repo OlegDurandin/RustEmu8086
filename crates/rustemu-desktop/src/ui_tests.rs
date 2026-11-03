@@ -1529,7 +1529,9 @@ fn mips_workspace() {
     h.get_by_label("0000FF11");
     h.get_by_label("FPU").click();
     h.run();
-    h.get_by_label_contains("not emulated yet");
+    h.get_by_label("$f31");
+    h.get_by_label("condition flags");
+    save(&mut h, "41_mips_fpu");
     h.get_by_label("DEC").click();
     h.get_by_label("GPR").click();
     h.run();
@@ -1602,4 +1604,26 @@ fn mips_panels() {
     assert!(h.query_all_by_label("Run I/O").next().is_some());
     assert!(h.query_by_label("screen").is_none());
     save(&mut h, "44_mips_panels");
+}
+
+/// A MIPS example with macros and `.include`: the included file is found among the built-in
+/// ones, the code list shows the body lines as MARS does, the program runs.
+#[test]
+fn mips_macros() {
+    use rustemu_session::Arch;
+    let mut h = harness(App::with_settings(Settings { last_file: None, ..Default::default() }));
+    h.run();
+    h.state_mut().switch_arch(Arch::Mips32);
+    let i = rustemu_ui::examples::MIPS_EXAMPLES.iter().position(|e| e.1 == "macros.s").unwrap();
+    h.state_mut().load_mips_example(i);
+    h.run();
+    h.get_by_label("▶ emulate").click();
+    h.run();
+    assert!(h.state().loaded(), "{:?}", h.state().build.messages.iter().map(|m| &m.text).collect::<Vec<_>>());
+    // print_str ("Squares: ") at line 21: the body lines of print_macros.s, substituted.
+    h.get_by_label_contains("21: <13> la $a0, text_M0");
+    save(&mut h, "42_mips_macros");
+    h.state_mut().start_run();
+    run_frames(&mut h, 20);
+    assert_eq!(h.state().session.mips().unwrap().console.text(), "Squares: 1 4 9 16 25 \n");
 }

@@ -60,33 +60,71 @@ fn int(g: &mut Rng, class: IntClass) -> i64 {
     }
 }
 
+/// Instructions whose integer operand is a condition flag of coprocessor 1 (GNU: `$fcc1`).
+fn takes_cc(mnemonic: &str) -> bool {
+    mnemonic.starts_with("c.")
+        || mnemonic.starts_with("bc1")
+        || mnemonic.starts_with("movf")
+        || mnemonic.starts_with("movt")
+}
+
 /// One instance of a form: MARS source and GNU source.
 fn instance(g: &mut Rng, mnemonic: &str, ops: &[Operand], labels: usize) -> (String, String) {
     let mut parts = Vec::new();
+    // The same operands in GNU's syntax, where they differ.
+    let mut gnu_parts = Vec::new();
     for (i, &op) in ops.iter().enumerate() {
-        parts.push(match op {
-            // The second operand of mfc0 / mtc0 is a coprocessor 0 register: GNU wants its number.
-            Operand::Reg if i == 1 && matches!(mnemonic, "mfc0" | "mtc0") => format!("${}", g.below(32)),
-            Operand::Reg => reg(g),
-            Operand::Int(c) => int(g, c).to_string(),
-            Operand::Label => format!("L{}", g.below(labels as u64)),
-            Operand::LParen => "(".into(),
-            Operand::RParen => ")".into(),
-            Operand::Plus => "+".into(),
-        });
-    }
-    let mut mars = mnemonic.to_string();
-    for (i, p) in parts.iter().enumerate() {
-        let sep = if i == 0 {
-            " "
-        } else if p == "(" || p == ")" || parts[i - 1] == "(" {
-            ""
-        } else {
-            ", "
+        let (part, gnu_part) = match op {
+            // GNU wants even registers in double operations; MARS checks them only when running.
+            Operand::FReg => {
+                let r = format!("$f{}", g.below(16) * 2);
+                (r.clone(), r)
+            }
+            Operand::Int(_) if takes_cc(mnemonic) => {
+                let cc = g.below(8);
+                (cc.to_string(), format!("$fcc{cc}"))
+            }
+            op => {
+                let p = match op {
+                    // The second operand of mfc0 / mtc0 is a coprocessor 0 register: GNU wants its number.
+                    Operand::Reg if i == 1 && matches!(mnemonic, "mfc0" | "mtc0") => format!("${}", g.below(32)),
+                    Operand::Reg => reg(g),
+                    Operand::Int(c) => int(g, c).to_string(),
+                    Operand::Label => format!("L{}", g.below(labels as u64)),
+                    Operand::LParen => "(".into(),
+                    Operand::RParen => ")".into(),
+                    Operand::Plus => "+".into(),
+                    Operand::FReg => unreachable!(),
+                };
+                (p.clone(), p)
+            }
         };
-        mars += sep;
-        mars += p;
+        parts.push(part);
+        gnu_parts.push(gnu_part);
     }
+    let join = |parts: &[String]| {
+        let mut s = mnemonic.to_string();
+        for (i, p) in parts.iter().enumerate() {
+            let sep = if i == 0 {
+                " "
+            } else if p == "(" || p == ")" || parts[i - 1] == "(" {
+                ""
+            } else {
+                ", "
+            };
+            s += sep;
+            s += p;
+        }
+        s
+    };
+    let mars = join(&parts);
+    // GNU's movf / movt always name the condition flag.
+    if (mnemonic.starts_with("movf") || mnemonic.starts_with("movt"))
+        && !gnu_parts.iter().any(|p| p.starts_with("$fcc"))
+    {
+        gnu_parts.push("$fcc0".into());
+    }
+    let gnu_text = join(&gnu_parts);
     let gnu = if mnemonic == "break" && !parts.is_empty() {
         let n: u32 = parts[0].parse().unwrap();
         format!("break {}, {}", n >> 10, n & 1023)
@@ -94,7 +132,7 @@ fn instance(g: &mut Rng, mnemonic: &str, ops: &[Operand], labels: usize) -> (Str
         // GNU's two-operand div is a macro (with a zero check); the instruction is `div $zero, rs, rt`.
         format!("{mnemonic} $zero, {}, {}", parts[0], parts[1])
     } else {
-        mars.clone()
+        gnu_text
     };
     (mars, gnu)
 }
