@@ -78,10 +78,14 @@ struct SysState {
 #[derive(Debug, Clone)]
 struct Snapshot {
     cpu: Cpu,
-    undo: Vec<(u32, u8)>,
+    /// Number of its entries at the end of [`Machine::journal`] (no allocation per step).
+    undo: usize,
     finished: Option<Finish>,
     sys: Option<Box<SysState>>,
 }
+
+/// Bytes of one journal entry.
+const ENTRY: usize = std::mem::size_of::<(u32, u8)>();
 
 /// The emulated MIPS computer.
 #[derive(Debug)]
@@ -112,8 +116,9 @@ pub struct Machine {
     /// Steps are recorded for step back (off: faster).
     pub history_enabled: bool,
     history: VecDeque<Snapshot>,
-    /// Journal bytes in the history (see [`HISTORY_BYTES`]).
-    history_bytes: usize,
+    /// The overwritten bytes of every step in the history, oldest first: each [`Snapshot`] owns
+    /// its last `undo` entries.
+    journal: VecDeque<(u32, u8)>,
     /// A step did something that cannot be undone: the history is cleared after it.
     pub(crate) barrier: bool,
     /// The program waits for input (an input `syscall` found no complete input).
@@ -154,7 +159,7 @@ impl Machine {
             breakpoints: HashSet::new(),
             history_enabled: true,
             history: VecDeque::new(),
-            history_bytes: 0,
+            journal: VecDeque::new(),
             barrier: false,
             waiting: false,
             sleep_until: None,
@@ -279,26 +284,25 @@ impl Machine {
         }
         let snap = Snapshot {
             cpu: self.cpu.clone(),
-            undo: Vec::new(),
+            undo: 0,
             finished: self.finished,
             sys: self.at_syscall().then(|| Box::new(self.sys_state())),
         };
         self.mem.set_journaling(true);
         self.barrier = false;
         let ev = self.step_inner();
-        let undo = self.mem.take_journal();
+        let undo = self.mem.drain_journal_into(&mut self.journal);
         if self.barrier {
             self.clear_history();
             return ev;
         }
         // Retrying an input syscall that still has no input changes nothing.
-        let idle = ev == Event::WaitingInput && undo.is_empty() && self.cpu == snap.cpu;
+        let idle = ev == Event::WaitingInput && undo == 0 && self.cpu == snap.cpu;
         if !idle {
-            self.history_bytes += undo.len() * std::mem::size_of::<(u32, u8)>();
             self.history.push_back(Snapshot { undo, ..snap });
-            while self.history.len() > HISTORY_DEPTH || self.history_bytes > HISTORY_BYTES {
+            while self.history.len() > HISTORY_DEPTH || self.journal.len() * ENTRY > HISTORY_BYTES {
                 let Some(old) = self.history.pop_front() else { break };
-                self.history_bytes -= old.undo.len() * std::mem::size_of::<(u32, u8)>();
+                self.journal.drain(..old.undo);
             }
         }
         ev
@@ -329,7 +333,8 @@ impl Machine {
             if ev != Event::Continue {
                 return (ev, n);
             }
-            if self.breakpoints.contains(&self.cpu.pc) {
+            // (No hashing per step when there is no breakpoint.)
+            if !self.breakpoints.is_empty() && self.breakpoints.contains(&self.cpu.pc) {
                 return (Event::Breakpoint, n + 1);
             }
         }
@@ -339,8 +344,10 @@ impl Machine {
     /// Undoes the last instruction; false when the history is empty.
     pub fn step_back(&mut self) -> bool {
         let Some(s) = self.history.pop_back() else { return false };
-        self.history_bytes -= s.undo.len() * std::mem::size_of::<(u32, u8)>();
-        self.mem.undo(&s.undo);
+        for _ in 0..s.undo {
+            let (a, v) = self.journal.pop_back().expect("the journal holds the step's entries");
+            self.mem.restore(a, v);
+        }
         self.cpu = s.cpu;
         self.finished = s.finished;
         self.sleep_until = None;
@@ -362,7 +369,7 @@ impl Machine {
     /// Forgets the step-back history.
     pub fn clear_history(&mut self) {
         self.history.clear();
-        self.history_bytes = 0;
+        self.journal.clear();
     }
 
     /// The registers before each recorded step, oldest first (the execution trace).
@@ -370,8 +377,10 @@ impl Machine {
         self.history.iter().map(|s| &s.cpu)
     }
 
-    /// The last executed instruction: the registers before it and the bytes it overwrote.
-    pub fn last_step(&self) -> Option<(&Cpu, &[(u32, u8)])> {
-        self.history.back().map(|s| (&s.cpu, &s.undo[..]))
+    /// The last executed instruction: the registers before it and the bytes it overwrote
+    /// (`(address, old value)`, in the order written).
+    pub fn last_step(&self) -> Option<(&Cpu, Vec<(u32, u8)>)> {
+        let s = self.history.back()?;
+        Some((&s.cpu, self.journal.range(self.journal.len() - s.undo..).copied().collect()))
     }
 }

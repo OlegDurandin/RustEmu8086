@@ -729,7 +729,7 @@ pub fn last_step(app: &App) -> Option<MipsStep> {
         }
     }
     let mut memory: Vec<(u32, u8, u8)> = Vec::new();
-    for &(a, old) in undo {
+    for &(a, old) in &undo {
         if !memory.iter().any(|&(x, _, _)| x == a) {
             memory.push((a, old, m.mem.peek8(a)));
         }
