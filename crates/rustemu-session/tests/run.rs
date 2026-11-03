@@ -1069,3 +1069,109 @@ fn fpu_step_back() {
     assert_eq!((f.top(), rustemu_core::fpu::to_f64(f.st(0))), (7, 1.0));
     assert_eq!(f.st_tag(1), rustemu_core::fpu::Tag::Empty);
 }
+
+#[test]
+fn host_drive_limits() {
+    use rustemu_core::dos::{HOST_MAX_CREATED, HOST_WRITE_QUOTA};
+    let dir = std::env::temp_dir().join(format!("rustemu_host_limits_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |src: &str| {
+        let prog = rustemu_asm::assemble_str(src).unwrap_or_else(|e| panic!("{e}"));
+        let mut s = Session::new();
+        s.x86_mut().unwrap().set_dos_root(dir.clone());
+        s.load_program(prog).unwrap();
+        finish(s, "")
+    };
+    // 300 writes of 64 KB: the run writes 16 MB, then the writes are short (CF clear).
+    let (s, ev) = run("org 100h
+    mov ah, 3Ch
+    xor cx, cx
+    mov dx, offset fname
+    int 21h
+    mov bx, ax
+    mov si, 300
+again:
+    mov ah, 40h
+    mov cx, 0FFFFh
+    xor dx, dx
+    int 21h
+    jc fail
+    dec si
+    jnz again
+    cmp ax, 0FFFFh
+    je fail
+    mov ax, 4C00h
+    int 21h
+fail:
+    mov ax, 4C01h
+    int 21h
+fname db 'big.dat', 0
+");
+    let m = s.x86().unwrap();
+    assert_eq!(ev, Event::Terminated(0), "{:?}", m.log);
+    assert_eq!(std::fs::metadata(dir.join("big.dat")).unwrap().len(), HOST_WRITE_QUOTA);
+    assert_eq!(m.log.iter().filter(|l| l.contains("drive C: limit")).count(), 1, "{:?}", m.log);
+
+    // A seek to 2 GB and a write: nothing written, no 2 GB file.
+    let (s, ev) = run("org 100h
+    mov ah, 3Ch
+    xor cx, cx
+    mov dx, offset fname
+    int 21h
+    mov bx, ax
+    mov ax, 4200h
+    mov cx, 7FFFh
+    mov dx, 0FFFFh
+    int 21h
+    mov ah, 40h
+    mov cx, 1
+    mov dx, offset fname
+    int 21h
+    jc fail
+    or ax, ax
+    jnz fail
+    mov ax, 4C00h
+    int 21h
+fail:
+    mov ax, 4C01h
+    int 21h
+fname db 'far.dat', 0
+");
+    assert_eq!(ev, Event::Terminated(0), "{:?}", s.x86().unwrap().log);
+    assert_eq!(std::fs::metadata(dir.join("far.dat")).unwrap().len(), 0);
+
+    // Creating files: the 1025th of the run fails with error 5 (access denied).
+    let (s, ev) = run("org 100h
+    xor si, si
+next:
+    mov ah, 3Ch
+    xor cx, cx
+    mov dx, offset fname
+    int 21h
+    jc full
+    mov bx, ax
+    mov ah, 3Eh
+    int 21h
+    inc si
+    ; the next name: aaa, aab, ..., aaz, aba, ... (letters only: other characters may name the same file)
+    inc byte ptr fname+2
+    cmp byte ptr fname+2, 'z'+1
+    jne next
+    mov byte ptr fname+2, 'a'
+    inc byte ptr fname+1
+    cmp byte ptr fname+1, 'z'+1
+    jne next
+    mov byte ptr fname+1, 'a'
+    inc byte ptr fname
+    jmp next
+full:
+    mov bx, ax
+    mov ax, 4C00h
+    int 21h
+fname db 'aaa', 0
+");
+    let m = s.x86().unwrap();
+    assert_eq!(ev, Event::Terminated(0));
+    assert_eq!((m.cpu.regs[6], m.cpu.regs[3]), (HOST_MAX_CREATED as u16, 5), "SI = files created, BX = the error");
+    std::fs::remove_dir_all(&dir).ok();
+}

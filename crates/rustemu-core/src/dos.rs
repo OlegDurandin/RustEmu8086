@@ -35,6 +35,17 @@ pub struct DateTime {
     pub hundredths: u8,
 }
 
+/// Bytes a program may write to the files of a host folder in one run (from loading it). A loop of
+/// INT 21h/40h would otherwise fill the computer's disk at about 1 GB a second; the memory drive of
+/// the browser has its own limit ([`crate::memdrive::CAPACITY`]). Past it a write writes fewer
+/// bytes, as DOS does on a full disk.
+pub const HOST_WRITE_QUOTA: u64 = 16 * 1024 * 1024;
+/// Largest size a host file may reach: a seek far past the end and then a write would make a file
+/// of gigabytes with a few bytes written.
+pub const HOST_MAX_FILE: u64 = HOST_WRITE_QUOTA;
+/// Files and folders a program may create in a host folder in one run.
+pub const HOST_MAX_CREATED: u32 = 1024;
+
 /// Drive C: of DOS programs.
 pub(crate) enum DosDrive {
     /// A host directory: files stay on disk, confined to it.
@@ -78,6 +89,12 @@ pub(crate) struct DosState {
     pub next_free: u16,
     /// Results of the current FindFirst/FindNext search: DOS name and file size.
     pub find: FindState,
+    /// Bytes written to host files in this run (see [`HOST_WRITE_QUOTA`]).
+    pub host_written: u64,
+    /// Files and folders created in the host folder in this run (see [`HOST_MAX_CREATED`]).
+    pub host_created: u32,
+    /// A limit of the host folder was reached and the log says so (once a run).
+    pub host_limit_logged: bool,
 }
 
 #[derive(Clone)]
@@ -509,7 +526,11 @@ impl Machine {
     fn host_path_op(&mut self, ah: u8, p: &Path) -> Result<(), u16> {
         let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
         let res = match ah {
-            0x39 => std::fs::create_dir(p),
+            0x39 if self.dos.host_created >= HOST_MAX_CREATED => {
+                self.host_limit("files and folders created", &format!("{HOST_MAX_CREATED} per run"));
+                return Err(E_ACCESS);
+            }
+            0x39 => std::fs::create_dir(p).inspect(|_| self.dos.host_created += 1),
             0x3A => std::fs::remove_dir(p),
             0x3B => {
                 if p.is_dir() {
@@ -588,6 +609,11 @@ impl Machine {
         let Some(t) = self.path_arg(self.cpu.sregs[DS], self.cpu.regs[DX]) else { return };
         let Some(h) = self.alloc_handle() else { return self.fail(E_TOO_MANY) };
         let mode = self.al() & 3;
+        let creates = matches!(ah, 0x3C | 0x5B) && matches!(&t, Target::Host(p) if !p.exists());
+        if creates && self.dos.host_created >= HOST_MAX_CREATED {
+            self.host_limit("files and folders created", &format!("{HOST_MAX_CREATED} per run"));
+            return self.fail(E_ACCESS);
+        }
         let r = match t {
             Target::Host(p) => match ah {
                 0x3C => File::create(&p),
@@ -611,11 +637,24 @@ impl Machine {
         };
         match r {
             Ok(f) => {
+                if creates {
+                    self.dos.host_created += 1;
+                }
                 self.dos.files.insert(h, f);
                 self.cpu.regs[AX] = h;
                 self.ok();
             }
             Err(code) => self.fail(code),
+        }
+    }
+
+    /// Notes once a run in the log that a limit of the host folder stopped the program's writes.
+    fn host_limit(&mut self, what: &str, limit: &str) {
+        if !self.dos.host_limit_logged {
+            self.dos.host_limit_logged = true;
+            self.log.push(format!(
+                "drive C: limit reached ({what}: {limit}) — writes write less or fail, as on a full disk"
+            ));
         }
     }
 
@@ -713,13 +752,34 @@ impl Machine {
                 self.ok();
             }
             _ => {
+                let budget = HOST_WRITE_QUOTA.saturating_sub(self.dos.host_written);
+                // Bytes held back by a limit of the host folder (the log says which).
+                let mut limited: Option<&str> = None;
+                let mut host_written = 0;
                 let r = match self.dos.files.get_mut(&h) {
                     None => Err(E_HANDLE),
-                    // Writing 0 bytes truncates at the current position.
-                    Some(OpenFile::Host(f)) => {
-                        if n == 0 { f.stream_position().and_then(|p| f.set_len(p)).map(|_| 0) } else { f.write(&data) }
-                            .map_err(|e| io_code(&e))
-                    }
+                    // Writing 0 bytes truncates at the current position (not past the largest size).
+                    Some(OpenFile::Host(f)) => match f.stream_position() {
+                        Ok(pos) if n == 0 => {
+                            if pos > HOST_MAX_FILE {
+                                limited = Some("size of a file");
+                                Ok(0)
+                            } else {
+                                f.set_len(pos).map(|_| 0).map_err(|e| io_code(&e))
+                            }
+                        }
+                        Ok(pos) => {
+                            let file_room = HOST_MAX_FILE.saturating_sub(pos);
+                            let k = n.min(file_room.min(budget) as usize);
+                            if k < n {
+                                limited =
+                                    Some(if (file_room as usize) < n { "size of a file" } else { "bytes written" });
+                            }
+                            let w = if k == 0 { Ok(0) } else { f.write(&data[..k]) };
+                            w.inspect(|&w| host_written = w as u64).map_err(|e| io_code(&e))
+                        }
+                        Err(e) => Err(io_code(&e)),
+                    },
                     Some(OpenFile::Mem { write: false, .. }) => Err(E_ACCESS),
                     Some(OpenFile::Mem { key, pos, .. }) => match &mut self.dos.drive {
                         Some(DosDrive::Memory(d)) => match d.write_at(key, *pos, &data) {
@@ -732,6 +792,11 @@ impl Machine {
                         _ => Err(E_HANDLE),
                     },
                 };
+                self.dos.host_written += host_written;
+                if let Some(what) = limited {
+                    let per_run = if what == "bytes written" { " per run" } else { "" };
+                    self.host_limit(what, &format!("{} MB{per_run}", HOST_WRITE_QUOTA >> 20));
+                }
                 match r {
                     Ok(w) => {
                         self.cpu.regs[AX] = w as u16;

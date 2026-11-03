@@ -90,7 +90,9 @@ File functions work in a sandbox (drive C:):
 - **in the Mac app** — the folder `~/Documents/RustEmu8086/vdrive/C`, like `vdrive\C` in Emu8086. To open it:
   *Emulator → Virtual drive → show drive C: folder*. In the **options** window (*drive C:*) you can choose the
   program's folder instead: then the program sees the files next to its source, but can also change and delete
-  them. A program cannot get outside the drive, including through symbolic links;
+  them. A program cannot get outside the drive, including through symbolic links. One run may write up to 16 MB
+  (a file up to 16 MB) and create up to 1024 files and folders: past that a write writes less (AX < CX, as on a
+  full disk), a create fails with error 5, and the **log** says which limit was reached;
 - **in the browser** — a drive in browser storage, up to 2 MB, the **drive C:** window — see
   [Web version](Web-version).
 
