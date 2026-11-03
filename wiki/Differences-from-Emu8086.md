@@ -32,7 +32,8 @@ FASM syntax. Below is where programs still diverge.
 - **DOS files are sandboxed.** On the Mac drive C: is the folder `~/Documents/RustEmu8086/vdrive/C` (like
   `vdrive\C` in Emu8086; **options** can choose the program's folder instead), in the browser — a drive in browser
   storage. There are no other drives for INT 21h: the drive letter in a path is ignored, `A:\DATA.TXT` is the same
-  file as `C:\DATA.TXT`.
+  file as `C:\DATA.TXT`. On the Mac a run may write up to 16 MB and create up to 1024 files and folders, so that a
+  loop cannot fill the computer's disk.
 - **Step back** does not go through file operations on the disk.
 - **`emu8086.inc`** is our own implementation with the same visible behaviour.
 - **VGA_STATE is not needed**: the vertical retrace bit in port 3DAh always toggles.
