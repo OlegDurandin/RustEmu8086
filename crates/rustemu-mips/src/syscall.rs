@@ -17,8 +17,9 @@
 //! the program with MARS's messages (`invalid integer input (syscall 5)`), as exceptions of the
 //! `syscall` instruction — except the errors of the file services (13, 14, 15): as in MARS, they
 //! return −1 in `$v0` and the program goes on (it is its job to check); only a bad address of the
-//! name or the buffer raises an exception. The floating-point services (2, 3, 6, 7, 43, 44) need coprocessor 1 and
-//! the dialog services (50..59) MARS's dialog windows; neither exists yet.
+//! name or the buffer raises an exception. Floating-point services (2, 3, 6, 7, 43, 44) use `$f12`
+//! and `$f0` and print numbers as Java does (`1.0E7`); the dialog services (50..59) need MARS's
+//! dialog windows, which do not exist yet.
 
 use rustemu_target::Event;
 
@@ -65,6 +66,80 @@ impl From<AccessError> for Fail {
         };
         Fail { code, message: e.message, bad: Some(e.addr) }
     }
+}
+
+/// `Float.toString` / `Double.toString` of Java (19 and later): the shortest digits that give the
+/// value back, as `1.0`, `0.001` or `1.0E7`, `1.2E-5` (scientific outside `1e-3..1e7`).
+fn java_number(digits_exp: String, negative: bool, plain: bool) -> String {
+    // `digits_exp` is Rust's shortest scientific form: `1.2345e-5`.
+    let (mantissa, exp) = digits_exp.split_once('e').unwrap_or((&digits_exp, "0"));
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let digits: String = mantissa.chars().filter(|c| c.is_ascii_digit()).collect();
+    let sign = if negative { "-" } else { "" };
+    if plain {
+        let point = exp + 1;
+        let (int, frac) = if point <= 0 {
+            ("0".to_string(), format!("{}{digits}", "0".repeat((-point) as usize)))
+        } else if point as usize >= digits.len() {
+            (format!("{digits}{}", "0".repeat(point as usize - digits.len())), String::new())
+        } else {
+            (digits[..point as usize].to_string(), digits[point as usize..].to_string())
+        };
+        let frac = if frac.is_empty() { "0".to_string() } else { frac };
+        format!("{sign}{int}.{frac}")
+    } else {
+        let rest = if digits.len() > 1 { &digits[1..] } else { "0" };
+        format!("{sign}{}.{rest}E{exp}", &digits[..1])
+    }
+}
+
+/// Java's `Float.toString`.
+pub fn java_float(x: f32) -> String {
+    if x.is_nan() {
+        return "NaN".into();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.into();
+    }
+    if x == 0.0 {
+        return if x.is_sign_negative() { "-0.0" } else { "0.0" }.into();
+    }
+    let a = x.abs();
+    java_number(format!("{a:e}"), x < 0.0, (1e-3..1e7).contains(&a))
+}
+
+/// Java's `Double.toString`.
+pub fn java_double(x: f64) -> String {
+    if x.is_nan() {
+        return "NaN".into();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.into();
+    }
+    if x == 0.0 {
+        return if x.is_sign_negative() { "-0.0" } else { "0.0" }.into();
+    }
+    let a = x.abs();
+    java_number(format!("{a:e}"), x < 0.0, (1e-3..1e7).contains(&a))
+}
+
+/// The text of a number as Java's `Float.parseFloat` / `Double.parseDouble` takes it (after
+/// `trim`): `NaN`, `Infinity` with a sign, or a decimal number with an optional exponent and an
+/// optional `f`/`d` suffix. None otherwise (hexadecimal floats are not taken).
+fn java_number_text(text: &[u8]) -> Option<String> {
+    let t = std::str::from_utf8(text).ok()?.trim_matches(|c: char| c <= ' ');
+    let unsigned = t.strip_prefix(['+', '-']).unwrap_or(t);
+    if unsigned == "NaN" {
+        return Some("NaN".into());
+    }
+    if unsigned == "Infinity" {
+        return Some(if t.starts_with('-') { "-inf" } else { "inf" }.into());
+    }
+    let t = t.strip_suffix(['f', 'F', 'd', 'D']).unwrap_or(t);
+    let ok = !t.is_empty()
+        && t.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+        && t.chars().any(|c| c.is_ascii_digit());
+    ok.then(|| t.to_string())
 }
 
 /// `Integer.parseInt(text.trim())`: optional sign, decimal digits, in range.
@@ -176,6 +251,25 @@ impl Machine {
         let (a0, a1, a2) = (self.arg(A0), self.arg(A1), self.arg(A2));
         match service {
             1 => self.print(&(a0 as i32).to_string()),
+            2 => self.print(&java_float(f32::from_bits(self.cpu.fpr[12]))),
+            3 => self.print(&java_double(self.cpu.f64(12))),
+            6 => {
+                let Some(line) = self.take_input(None) else { return Ok(Done::Block) };
+                let v: f32 = java_number_text(&line)
+                    .and_then(|t| t.parse().ok())
+                    .ok_or_else(|| Fail::syscall("invalid float input (syscall 6)".into()))?;
+                self.cpu.fpr[0] = v.to_bits();
+                Ok(Done::Continue)
+            }
+            7 => {
+                let Some(line) = self.take_input(None) else { return Ok(Done::Block) };
+                let v: f64 = java_number_text(&line)
+                    .and_then(|t| t.parse().ok())
+                    .ok_or_else(|| Fail::syscall("invalid double input (syscall 7)".into()))?;
+                let b = v.to_bits();
+                (self.cpu.fpr[0], self.cpu.fpr[1]) = (b as u32, (b >> 32) as u32);
+                Ok(Done::Continue)
+            }
             4 => {
                 let s = self.c_string(a0)?;
                 self.console.write(&s);
@@ -318,9 +412,16 @@ impl Machine {
                 self.cpu.set_reg(A0, v as u32);
                 Ok(Done::Continue)
             }
-            2 | 3 | 6 | 7 | 43 | 44 => Err(Fail::syscall(format!(
-                "syscall {service} works with floating-point registers: coprocessor 1 is not emulated yet"
-            ))),
+            43 => {
+                let v = self.stream(a0 as i32).next_float();
+                self.cpu.fpr[0] = crate::fpu::f32_bits(v);
+                Ok(Done::Continue)
+            }
+            44 => {
+                let b = crate::fpu::f64_bits(self.stream(a0 as i32).next_double());
+                (self.cpu.fpr[0], self.cpu.fpr[1]) = (b as u32, (b >> 32) as u32);
+                Ok(Done::Continue)
+            }
             50..=59 => Err(Fail::syscall(format!("syscall {service} shows a dialog window, which is not supported"))),
             _ => Err(Fail::syscall(format!("invalid or unimplemented syscall service: {service} "))),
         }
@@ -330,6 +431,24 @@ impl Machine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn java_floats() {
+        let d = |x: f64| java_double(x);
+        assert_eq!(
+            [d(1.0), d(0.1), d(-2.5), d(1e7), d(1.5e-5), d(0.001), d(1234567.0)],
+            ["1.0", "0.1", "-2.5", "1.0E7", "1.5E-5", "0.001", "1234567.0"]
+        );
+        assert_eq!(
+            [d(f64::NAN), d(f64::INFINITY), d(-0.0), d(123456789.0)],
+            ["NaN", "Infinity", "-0.0", "1.23456789E8"]
+        );
+        assert_eq!([java_float(0.1), java_float(1.0 / 3.0), java_float(3e10)], ["0.1", "0.33333334", "3.0E10"]);
+        let p = |t: &str| java_number_text(t.as_bytes());
+        assert_eq!(p(" 2.5f \n"), Some("2.5".into()));
+        assert_eq!(p("-Infinity"), Some("-inf".into()));
+        assert_eq!([p("inf"), p("nan"), p("abc"), p("")], [None, None, None, None]);
+    }
 
     #[test]
     fn java_integers() {

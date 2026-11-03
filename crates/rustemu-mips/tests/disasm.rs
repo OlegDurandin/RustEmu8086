@@ -39,6 +39,13 @@ fn instance(g: &mut Rng, example: &str) -> String {
                 format!("${}", g.below(32))
             }
             Kind::RegName(_) | Kind::RegNum(_) => format!("${}", REG_NAMES[g.below(32) as usize]),
+            Kind::FpReg(_) => format!("$f{}", g.below(32)),
+            // The condition flag of coprocessor 1 (3 bits).
+            Kind::Int(_)
+                if mnemonic.starts_with("c.") || mnemonic.starts_with("bc1") || mnemonic.starts_with("mov") =>
+            {
+                g.below(8).to_string()
+            }
             Kind::Int(v) => match IntClass::of(*v) {
                 IntClass::I5 => g.below(32).to_string(),
                 IntClass::I16U => g.below(65536).to_string(),
@@ -84,12 +91,28 @@ fn disassembly_is_the_basic_column() {
         // Words two forms share are shown as the first one, as in MARS.
         let alias = (word == 0 && ours == "nop")
             || (ours.starts_with("jalr $31,") && basic.starts_with("jalr $"))
-            || (ours == "break 0" && basic == "break");
+            || (ours == "break 0" && basic == "break")
+            // A condition flag 0 is the form without the flag (bc1t, c.eq.s, movf...).
+            || cc0_alias(&ours, &basic);
         assert!(ours == basic || alias, "{line}: {word:08x} -> {ours}, the assembler says {basic}");
         // The named notation decodes the same instruction.
         let named = disassemble(word, addr, Style::Named);
         assert_eq!(named.split(' ').next(), ours.split(' ').next());
     }
+}
+
+/// `ours` is the form without a condition flag of `basic`, whose flag is 0: `movf $31,$12` for
+/// `movf $31,$12,0`, `c.eq.s $f0,$f1` for `c.eq.s 0,$f0,$f1`, `bc1t 5` for `bc1t 0,5`.
+fn cc0_alias(ours: &str, basic: &str) -> bool {
+    let Some((m, args)) = basic.split_once(' ') else { return false };
+    let without = if let Some(rest) = args.strip_prefix("0,") {
+        format!("{m} {rest}")
+    } else if let Some(rest) = args.strip_suffix(",0") {
+        format!("{m} {rest}")
+    } else {
+        return false;
+    };
+    ours == without
 }
 
 /// Numbers of an objdump operand string: registers, decimal and hex values.
@@ -98,7 +121,11 @@ fn objdump_values(ops: &str) -> Vec<i64> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| {
-            if let Some(r) = s.strip_prefix('$') {
+            if let Some(cc) = s.strip_prefix("$fcc") {
+                cc.parse().unwrap()
+            } else if let Some(r) = s.strip_prefix("$f") {
+                r.parse().unwrap()
+            } else if let Some(r) = s.strip_prefix('$') {
                 r.parse().unwrap()
             } else if let Some(h) = s.strip_prefix("0x") {
                 i64::from_str_radix(h, 16).unwrap()
@@ -166,7 +193,7 @@ fn decoding_matches_gnu_objdump() {
             .args
             .iter()
             .map(|a| match *a {
-                Arg::Reg(r) | Arg::Cp0(r) => r as i64,
+                Arg::Reg(r) | Arg::Cp0(r) | Arg::Fpr(r) => r as i64,
                 Arg::Imm(v) => v as i64,
                 Arg::Branch(_, t) | Arg::Jump(t) => t as i64,
             })
@@ -182,9 +209,17 @@ fn decoding_matches_gnu_objdump() {
         if matches!(mnemonic.as_str(), "div" | "divu") && theirs.len() == 3 && theirs[0] == 0 {
             theirs.remove(0);
         }
-        if let Some(sub) = mnemonic.strip_prefix("neg") {
+        if let Some(sub) = mnemonic.strip_prefix("neg").filter(|_| matches!(mnemonic.as_str(), "neg" | "negu")) {
             mnemonic = format!("sub{sub}");
             theirs.insert(1, 0);
+        }
+        // objdump names condition flag 0, which the forms without a flag leave out.
+        if theirs.len() == ours.len() + 1 && ops.contains("$fcc0") {
+            if ops.starts_with("$fcc0") {
+                theirs.remove(0);
+            } else {
+                theirs.pop();
+            }
         }
         if mnemonic == "jalr" && theirs.len() == 1 {
             theirs.insert(0, 31);

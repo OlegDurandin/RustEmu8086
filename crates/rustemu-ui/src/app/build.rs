@@ -111,11 +111,19 @@ impl App {
         }
     }
 
-    /// Messages of a MIPS assembly: errors (with their places in the editor) or warnings.
-    fn mips_messages(&mut self, list: &[rustemu_mips::asm::AsmError], error: bool) {
-        let file = self.file_name();
+    /// Messages of a MIPS assembly: errors (with their places in the editor) or warnings; `files`
+    /// are the names the errors' `file` indices refer to (0: the editor's program).
+    fn mips_messages(&mut self, list: &[rustemu_mips::asm::AsmError], files: &[String], error: bool) {
+        let main = self.file_name();
         for e in list {
-            let span = (e.col > 0).then(|| {
+            // A line of an included file: shown, but not a place in the editor.
+            let file = match e.file {
+                0 => main.clone(),
+                i => files.get(i).map_or(String::new(), |f| {
+                    Path::new(f).file_name().map_or(f.clone(), |n| n.to_string_lossy().into_owned())
+                }),
+            };
+            let span = (e.col > 0 && e.file == 0).then(|| {
                 let line = self.doc.text.split('\n').nth(e.line.saturating_sub(1)).unwrap_or("");
                 let col = e.col - 1;
                 // The token at the column.
@@ -123,31 +131,65 @@ impl App {
                 (col, len.max(1))
             });
             let line = e.line as u32;
-            if error && line > 0 {
+            if error && line > 0 && e.file == 0 {
                 self.build.error_lines.push(line);
                 if let Some((col, len)) = span {
                     self.build.error_spans.push((line, col, len));
                 }
             }
             let kind = if error { "" } else { "warning: " };
+            // In a macro expansion: the lines of the calls first, as MARS writes them (12->5).
+            let calls: String = e.expansion.iter().map(|l| format!("{l}->")).collect();
+            let col = if e.col > 0 { format!(":{}", e.col) } else { String::new() };
             self.build.messages.push(Message {
-                text: match span {
-                    Some((col, _)) => format!("{file} ({line}:{}): {kind}{}", col + 1, e.message),
-                    None if line > 0 => format!("{file} ({line}): {kind}{}", e.message),
-                    None => format!("{kind}{}", e.message),
+                text: match line {
+                    0 => format!("{kind}{}", e.message),
+                    _ => format!("{file} ({calls}{line}{col}): {kind}{}", e.message),
                 },
-                loc: (line > 0).then(|| (file.clone(), line)),
+                loc: (line > 0 && e.file == 0).then(|| (main.clone(), line)),
                 span,
                 error,
             });
         }
     }
 
-    /// Assembles the editor text as a MIPS program (MARS's assembler).
+    /// The text of a file a MIPS program `.include`s (`path` as MARS resolves it, relative to the
+    /// including file): from disk, from drive C: (its folder, or memory in the browser), or one of
+    /// the built-in MIPS examples and their include files, by name.
+    fn mips_include(&self, path: &str) -> Option<String> {
+        let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+        let base = Path::new(path).file_name().map_or(path.to_string(), |n| n.to_string_lossy().into_owned());
+        if !self.front.browser {
+            if let Ok(b) = std::fs::read(path) {
+                return Some(text(&b));
+            }
+            if let Some(dir) = self.vdrive(self.doc.path.as_deref())
+                && let Ok(b) = std::fs::read(dir.join(path)).or_else(|_| std::fs::read(dir.join(&base)))
+            {
+                return Some(text(&b));
+            }
+        }
+        if let Some(d) = self.x86_session().and_then(|s| s.dos_memory_drive())
+            && let Some((_, b)) = d.files().find(|(k, _)| k.eq_ignore_ascii_case(path) || k.eq_ignore_ascii_case(&base))
+        {
+            return Some(text(b));
+        }
+        crate::examples::MIPS_EXAMPLES
+            .iter()
+            .map(|e| (e.1, e.2))
+            .chain(crate::examples::MIPS_INCLUDES.iter().copied())
+            .find(|(n, _)| n.eq_ignore_ascii_case(&base))
+            .map(|(_, t)| t.to_string())
+    }
+
+    /// Assembles the editor text as a MIPS program (MARS's assembler), with the files it includes.
     fn assemble_mips(&mut self) -> Option<rustemu_mips::asm::Program> {
         self.build.messages.clear();
         self.clear_errors();
-        let result = std::panic::catch_unwind(|| rustemu_mips::asm::assemble(&self.doc.text));
+        let name = self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rustemu_mips::asm::assemble_with(&name, &self.doc.text, &mut |p| self.mips_include(p))
+        }));
         let result = match result {
             Ok(r) => r,
             Err(payload) => return self.assembler_panicked(&*payload),
@@ -165,14 +207,15 @@ impl App {
                     span: None,
                     error: false,
                 });
-                self.mips_messages(&p.warnings, false);
+                let files: Vec<String> = p.files.iter().map(|f| f.name.clone()).collect();
+                self.mips_messages(&p.warnings, &files, false);
                 Some(p)
             }
             Err(e) => {
                 self.build.failed = true;
-                self.mips_messages(&e, true);
+                self.mips_messages(&e.errors, &e.files, true);
                 self.build.messages.push(Message {
-                    text: format!("{} error(s)", e.len()),
+                    text: format!("{} error(s)", e.errors.len()),
                     loc: None,
                     span: None,
                     error: true,
@@ -207,13 +250,27 @@ impl App {
             self.web.mips_files_synced = m.files.generation;
         }
         let name = self.file_name();
+        // The source window shows the lines of the program and of the files it includes.
+        let files: Vec<(String, Vec<String>)> = p
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let short = if i == 0 {
+                    name.clone()
+                } else {
+                    Path::new(&f.name).file_name().map_or(f.name.clone(), |n| n.to_string_lossy().into_owned())
+                };
+                (short, f.text.lines().map(str::to_string).collect())
+            })
+            .collect();
         if let Err(e) = self.session.load_mips(p, &name) {
             self.build.failed = true;
             self.notice("Load", &e);
             return;
         }
-        self.program.files = vec![(name, self.doc.text.lines().map(str::to_string).collect())];
-        self.program.index = vec![Vec::new()];
+        self.program.index = vec![Vec::new(); files.len()];
+        self.program.files = files;
         self.program.text = Some(self.doc.text.clone());
         if !same_image {
             self.clear_address_breakpoints();

@@ -13,8 +13,15 @@
 //! - `%hi(label)` / `%lo(label)` (an extension over MARS, as in GNU as): `lui $t0, %hi(x)` +
 //!   `addiu $t0, $t0, %lo(x)` (or `lw $t1, %lo(x)($t0)`) load the address of `x`.
 //!
-//! Strings are stored as UTF-8 (MARS keeps only the low byte of each character). Macros,
-//! `.include` and the floating-point instructions are not supported yet.
+//! - Macros (`.macro name (%a, %b)` … `.end_macro`) and `.include "file"`, by MARS's rules: a
+//!   macro is chosen by its name and number of arguments (the last one defined wins), its body
+//!   lines are substituted as text (MARS's `Macro.getSubstitutedLine`: each parameter token, from
+//!   the last, replaces the first occurrence of its text), its labels become `label_M<n>` with a
+//!   counter of expansions, a call of a macro being expanded is an error; `.include` replaces
+//!   its whole line with the file (relative to the including file), and including a file a
+//!   second time is MARS's "Recursive include" error.
+//!
+//! Strings are stored as UTF-8 (MARS keeps only the low byte of each character).
 
 mod basic;
 mod lexer;
@@ -29,40 +36,92 @@ pub use table::{Def, Form, Operand, Table};
 use crate::machine::{Chunk, Image};
 use crate::memory::{self, Segment};
 
-/// An error (or a warning) of the source: 1-based line and column, and MARS's message.
+/// An error (or a warning) of the source: its file, 1-based line and column, and MARS's message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsmError {
-    /// 1-based line.
+    /// The file (index into the files of [`AsmErrors`] / [`Program::files`]; 0: the program).
+    pub file: usize,
+    /// 1-based line (in a macro expansion: the line of the macro's body).
     pub line: usize,
     /// 1-based column (0: the whole line).
     pub col: usize,
     /// What is wrong.
     pub message: String,
+    /// In a macro expansion: the lines of the calls, outermost first (MARS writes them as
+    /// `line 12->5`).
+    pub expansion: Vec<usize>,
 }
 
 impl std::fmt::Display for AsmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {} column {}: {}", self.line, self.col, self.message)
+        write!(f, "line ")?;
+        for l in &self.expansion {
+            write!(f, "{l}->")?;
+        }
+        // As MARS: no column for an error of the whole line.
+        match self.col {
+            0 => write!(f, "{}: {}", self.line, self.message),
+            col => write!(f, "{} column {col}: {}", self.line, self.message),
+        }
     }
+}
+
+/// The errors of an assembly with the files their `file` indices refer to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsmErrors {
+    /// The errors, by file, line and column.
+    pub errors: Vec<AsmError>,
+    /// The names of the files (0: the program, then the included ones).
+    pub files: Vec<String>,
+}
+
+impl std::fmt::Display for AsmErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, e) in self.errors.iter().enumerate() {
+            if i > 0 {
+                writeln!(f)?;
+            }
+            match self.files.get(e.file).filter(|n| !n.is_empty()) {
+                Some(name) => write!(f, "{name}: {e}")?,
+                None => write!(f, "{e}")?,
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A source file of a program: the program itself or a file it includes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceFile {
+    /// The name (the program's as given; an included file's path as `.include` resolved it).
+    pub name: String,
+    /// The text.
+    pub text: String,
 }
 
 impl Program {
     /// The listing, as MARS's text segment: address, machine word, basic instruction and the
-    /// source line (at the first instruction of a statement); then the data lines.
-    pub fn listing(&self, source: &str) -> String {
-        let lines: Vec<&str> = source.lines().collect();
-        let src = |l: usize| lines.get(l.wrapping_sub(1)).map_or("", |s| s.trim_end());
+    /// source line (at the first instruction of a statement; for a macro expansion also the body
+    /// line, `<5> li $a0, 7`); then the data lines.
+    pub fn listing(&self) -> String {
+        let src = |file: usize, l: usize| {
+            self.files.get(file).and_then(|f| f.text.lines().nth(l.wrapping_sub(1))).map_or("", str::trim_end)
+        };
         let mut out = String::from("address    code       basic                      source\n");
         for s in &self.statements {
             for (k, (w, b)) in s.words.iter().zip(&s.basic).enumerate() {
-                let source = if k == 0 { format!("{:>4}: {}", s.line, src(s.line)) } else { String::new() };
+                let source = match (&s.expanded, s.origin) {
+                    (_, _) if k > 0 => String::new(),
+                    (Some(text), Some((_, body))) => format!("{:>4}: <{body}> {text}", s.line),
+                    _ => format!("{:>4}: {}", s.line, src(s.file, s.line)),
+                };
                 out += &format!("{:08x}   {w:08x}   {b:<26} {source}\n", s.addr + 4 * k as u32);
             }
         }
         if !self.data.is_empty() {
             out += "\ndata\n";
             for d in self.data.iter().filter(|d| d.len > 0) {
-                out += &format!("{:08x}   {:>5} bytes  {:>4}: {}\n", d.addr, d.len, d.line, src(d.line));
+                out += &format!("{:08x}   {:>5} bytes  {:>4}: {}\n", d.addr, d.len, d.line, src(d.file, d.line));
             }
         }
         out
@@ -100,8 +159,17 @@ impl Program {
 /// The machine instructions of a source statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statement {
-    /// 1-based line of the source.
+    /// Its file (index into [`Program::files`]).
+    pub file: usize,
+    /// 1-based line of the source (for a macro expansion: the line of the outermost call).
     pub line: usize,
+    /// For a macro expansion: the body line it comes from (file, 1-based line).
+    pub origin: Option<(usize, usize)>,
+    /// For a macro expansion: the body line in each macro, outermost first (`origin` is the
+    /// last): the calls of nested macros, then the line itself.
+    pub chain: Vec<(usize, usize)>,
+    /// For a macro expansion: the body line with the arguments substituted (trimmed).
+    pub expanded: Option<String>,
     /// Address of its first instruction.
     pub addr: u32,
     /// The instructions (one, or the expansion of a pseudo-instruction).
@@ -113,8 +181,14 @@ pub struct Statement {
 /// Data a source line put into memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataLine {
-    /// 1-based line.
+    /// Its file (index into [`Program::files`]).
+    pub file: usize,
+    /// 1-based line (for a macro expansion: the line of the outermost call).
     pub line: usize,
+    /// For a macro expansion: the body line it comes from (file, 1-based line).
+    pub origin: Option<(usize, usize)>,
+    /// For a macro expansion: the body line in each macro, outermost first.
+    pub chain: Vec<(usize, usize)>,
     /// Address of its first byte (after alignment).
     pub addr: u32,
     /// Number of bytes (a `.space` too).
@@ -147,6 +221,8 @@ pub struct Program {
     pub symbols: Vec<Symbol>,
     /// Warnings (MARS's: a `.byte` value out of range, `.set` ignored).
     pub warnings: Vec<AsmError>,
+    /// The source files: the program (0), then the included ones in the order of `.include`.
+    pub files: Vec<SourceFile>,
 }
 
 /// A data directive: the size of its elements.
@@ -187,11 +263,68 @@ impl DataKind {
 
 /// A statement waiting for the second pass.
 struct Pending {
-    line: usize,
+    place: Place,
     tokens: Vec<Token>,
     form: &'static Form,
     addr: u32,
 }
+
+/// Where the line being assembled comes from.
+#[derive(Debug, Clone, Default)]
+struct Place {
+    /// Its file and 1-based line (in a macro expansion: of the body line).
+    file: usize,
+    line: usize,
+    /// The macro calls being expanded, outermost first: (file, line) of each call.
+    calls: Vec<(usize, usize)>,
+    /// In a macro expansion: the body line after substitution.
+    text: Option<String>,
+}
+
+impl Place {
+    /// The source line a statement belongs to: the outermost call of a macro expansion.
+    fn statement(&self) -> (usize, usize) {
+        self.calls.first().copied().unwrap_or((self.file, self.line))
+    }
+
+    /// The body line of a macro expansion.
+    fn origin(&self) -> Option<(usize, usize)> {
+        (!self.calls.is_empty()).then_some((self.file, self.line))
+    }
+
+    /// The body line in each macro of an expansion, outermost first.
+    fn chain(&self) -> Vec<(usize, usize)> {
+        match self.calls.len() {
+            0 => Vec::new(),
+            _ => self.calls[1..].iter().copied().chain([(self.file, self.line)]).collect(),
+        }
+    }
+}
+
+/// A line of the program after the `.include`s.
+struct SrcLine {
+    file: usize,
+    line: usize,
+    text: String,
+}
+
+/// A macro: its body is lines `from + 1 .. to` of the program.
+struct Macro {
+    name: String,
+    params: Vec<String>,
+    /// Index of the `.macro` line among the program's lines.
+    from: usize,
+    /// Index of the `.end_macro` line.
+    to: usize,
+    /// The labels defined in the body (renamed `label_M<n>` in each expansion).
+    labels: Vec<String>,
+}
+
+/// The most lines all macro expansions of a program may produce (a macro calling another
+/// several times, which calls another... grows exponentially).
+pub const MAX_EXPANDED_LINES: usize = 250_000;
+/// The deepest nesting of macro calls and of `.include`s.
+pub const MAX_NESTING: usize = 64;
 
 /// Index of the user / kernel address space.
 const USER: usize = 0;
@@ -213,11 +346,26 @@ struct Asm {
     last_data: Option<DataKind>,
     data: BTreeMap<u32, u8>,
     data_lines: Vec<DataLine>,
-    forward: Vec<(u32, u32, Token, usize)>,
+    forward: Vec<(u32, u32, Token, Place)>,
     pending: Vec<Pending>,
-    line: usize,
+    /// Where the current line comes from.
+    place: Place,
     /// Address of the first byte the current data line stored.
     first_write: Option<u32>,
+    /// The program's lines after the `.include`s.
+    lines: Vec<SrcLine>,
+    /// Index of the current line among `lines` (in an expansion: of the body line).
+    index: usize,
+    /// The macros defined so far.
+    macros: Vec<Macro>,
+    /// The macro being defined (between `.macro` and `.end_macro`).
+    defining: Option<Macro>,
+    /// Expansions so far: the `n` of `label_M<n>`.
+    counter: usize,
+    /// Indices of the lines of the macro calls being expanded (MARS's loop check).
+    call_stack: Vec<usize>,
+    /// Lines produced by macro expansions so far.
+    expanded_lines: usize,
 }
 
 impl Asm {
@@ -239,17 +387,42 @@ impl Asm {
             data_lines: Vec::new(),
             forward: Vec::new(),
             pending: Vec::new(),
-            line: 0,
+            place: Place::default(),
             first_write: None,
+            lines: Vec::new(),
+            index: 0,
+            macros: Vec::new(),
+            defining: None,
+            counter: 0,
+            call_stack: Vec::new(),
+            expanded_lines: 0,
+        }
+    }
+
+    fn report(&self, col: usize, message: impl Into<String>) -> AsmError {
+        AsmError {
+            file: self.place.file,
+            line: self.place.line,
+            col,
+            message: message.into(),
+            expansion: self.place.calls.iter().map(|c| c.1).collect(),
         }
     }
 
     fn error(&mut self, col: usize, message: impl Into<String>) {
-        self.errors.push(AsmError { line: self.line, col, message: message.into() });
+        let e = self.report(col, message);
+        self.errors.push(e);
     }
 
     fn warning(&mut self, col: usize, message: impl Into<String>) {
-        self.warnings.push(AsmError { line: self.line, col, message: message.into() });
+        let w = self.report(col, message);
+        self.warnings.push(w);
+    }
+
+    /// A data line of what the current line stored.
+    fn data_line(&self, addr: u32, len: u32, unit: u8) -> DataLine {
+        let (file, line) = self.place.statement();
+        DataLine { file, line, origin: self.place.origin(), chain: self.place.chain(), addr, len, unit }
     }
 
     fn data_addr(&self) -> u32 {
@@ -267,6 +440,9 @@ impl Asm {
             Ok(t) => t,
             Err((col, m)) => return self.error(col, m),
         };
+        if self.defining.is_some() {
+            return self.macro_body(&tokens);
+        }
         // .eqv substitution (not of the name being defined).
         let defining = tokens.first().is_some_and(|t| t.kind == Kind::Directive && t.text.eq_ignore_ascii_case(".eqv"));
         let mut i = if defining { 2 } else { 0 };
@@ -291,8 +467,18 @@ impl Asm {
         }
         let Some(first) = tokens.first().cloned() else { return };
         if first.kind == Kind::Directive {
-            self.directive(&first, &tokens[1..]);
-        } else if self.in_data {
+            return self.directive(&first, &tokens[1..]);
+        }
+        // A macro call: `name arg arg`, or `name (arg, arg)`.
+        let mut call = tokens.clone();
+        if call.len() > 2 && call[1].kind == Kind::LParen && call.last().is_some_and(|t| t.kind == Kind::RParen) {
+            call.pop();
+            call.remove(1);
+        }
+        if let Some(m) = self.find_macro(&call) {
+            return self.expand(m, &call);
+        }
+        if self.in_data {
             match self.last_data {
                 Some(kind) => self.store(kind, &tokens),
                 None => self
@@ -310,20 +496,154 @@ impl Asm {
         self.symbols.insert(label.text.clone(), (addr, data));
     }
 
+    // ---- macros ----
+
+    /// A line between `.macro` and `.end_macro`: only its label (renamed in each expansion),
+    /// `.end_macro` and `.eqv` count now, as in MARS (whose tokenizer does `.eqv` in every line
+    /// before assembling).
+    fn macro_body(&mut self, tokens: &[Token]) {
+        let eqv = |t: &Token| t.kind == Kind::Directive && t.text.eq_ignore_ascii_case(".eqv");
+        if let Some(p) = [0, 2].into_iter().find(|&p| tokens.get(p).is_some_and(eqv)) {
+            self.directive(&tokens[p].clone(), &tokens[p + 1..]);
+        }
+        if let [label, Token { kind: Kind::Colon, .. }, ..] = tokens
+            && label.kind == Kind::Ident
+        {
+            self.defining.as_mut().unwrap().labels.push(label.text.clone());
+            return;
+        }
+        match tokens.first() {
+            Some(d) if d.kind == Kind::Directive && d.text.eq_ignore_ascii_case(".end_macro") => {
+                if tokens.len() > 1 {
+                    return self.error(d.col, "invalid text after .END_MACRO");
+                }
+                let mut m = self.defining.take().unwrap();
+                m.to = self.index;
+                self.macros.push(m);
+            }
+            Some(d) if d.kind == Kind::Directive && d.text.eq_ignore_ascii_case(".macro") => {
+                self.begin_macro(d, &tokens[1..]);
+            }
+            _ => {}
+        }
+    }
+
+    /// `.macro name (%a, %b)`: begins a definition (MARS's checks and messages).
+    fn begin_macro(&mut self, d: &Token, args: &[Token]) {
+        let Some(name) = args.first() else {
+            return self.error(d.col, format!("\"{}\" directive requires at least one argument.", d.text));
+        };
+        if name.kind != Kind::Ident || Table::get().forms(&name.text).is_some() {
+            return self.error(name.col, format!("Invalid Macro name \"{}\"", name.text));
+        }
+        if self.defining.is_some() {
+            return self.error(d.col, "Nested macros are not allowed");
+        }
+        self.defining = Some(Macro {
+            name: name.text.clone(),
+            params: Vec::new(),
+            from: self.index,
+            to: self.index,
+            labels: Vec::new(),
+        });
+        for a in &args[1..] {
+            if matches!(a.kind, Kind::LParen | Kind::RParen) {
+                continue;
+            }
+            if !is_param(a) {
+                return self.error(a.col, format!("Invalid macro argument '{}'", a.text));
+            }
+            self.defining.as_mut().unwrap().params.push(a.text.clone());
+        }
+    }
+
+    /// The macro a statement calls: its name and number of arguments match; of several, the one
+    /// defined last.
+    fn find_macro(&self, call: &[Token]) -> Option<usize> {
+        let name = &call.first()?.text;
+        self.macros
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.name == *name && m.params.len() + 1 == call.len())
+            .max_by_key(|(_, m)| m.from)
+            .map(|(i, _)| i)
+    }
+
+    /// Expands macro `m` called by `call` (its name and arguments): each body line, substituted,
+    /// is assembled as if it were written here.
+    fn expand(&mut self, m: usize, call: &[Token]) {
+        let counter = self.counter;
+        self.counter += 1;
+        if self.call_stack.contains(&self.index) {
+            return self.error(0, "Detected a macro expansion loop (recursive reference). ");
+        }
+        if self.call_stack.len() >= MAX_NESTING {
+            return self.error(call[0].col, format!("macro calls nested deeper than {MAX_NESTING}"));
+        }
+        let (from, to) = (self.macros[m].from, self.macros[m].to);
+        if self.expanded_lines + (to - from) > MAX_EXPANDED_LINES {
+            return self
+                .error(call[0].col, format!("macro expansions would make more than {MAX_EXPANDED_LINES} lines"));
+        }
+        self.expanded_lines += to - from;
+        let (index, place) = (self.index, self.place.clone());
+        self.call_stack.push(index);
+        for i in from + 1..to {
+            let (file, line) = (self.lines[i].file, self.lines[i].line);
+            self.index = i;
+            let mut calls = place.calls.clone();
+            calls.push((place.file, place.line));
+            self.place = Place { file, line, calls, text: None };
+            let text = self.substitute(m, &self.lines[i].text.clone(), call, counter);
+            self.place.text = Some(text.trim().to_string());
+            self.line(&text);
+        }
+        self.call_stack.pop();
+        self.index = index;
+        self.place = place;
+    }
+
+    /// A body line of macro `m` with the arguments of `call` and the renamed labels, exactly as
+    /// MARS's `getSubstitutedLine`: the tokens from the last one, each replacing the first
+    /// occurrence of its text in the line.
+    fn substitute(&mut self, m: usize, text: &str, call: &[Token], counter: usize) -> String {
+        let Ok(tokens) = tokenize(text) else { return text.to_string() };
+        let mut s = text.to_string();
+        let replace_first = |s: &mut String, from: &str, to: &str| {
+            if let Some(p) = s.find(from) {
+                s.replace_range(p..p + from.len(), to);
+            }
+        };
+        for t in tokens.iter().rev() {
+            if is_param(t) {
+                match self.macros[m].params.iter().position(|p| *p == t.text) {
+                    Some(k) => {
+                        let arg = call[k + 1].text.clone();
+                        replace_first(&mut s, &t.text, &arg);
+                    }
+                    None => self.error(t.col, "Unknown macro parameter"),
+                }
+            } else if self.macros[m].labels.contains(&t.text) {
+                replace_first(&mut s, &t.text, &format!("{}_M{counter}", t.text));
+            }
+        }
+        s
+    }
+
     fn instruction(&mut self, tokens: Vec<Token>) {
         let m = &tokens[0];
+        let unknown = |s: &Asm, m: &Token| {
+            if s.macros.iter().any(|d| d.name == m.text) {
+                format!("forward reference or invalid parameters for macro \"{}\"", m.text)
+            } else {
+                format!("\"{}\" is not a recognized operator", m.text)
+            }
+        };
         if m.kind != Kind::Ident {
-            return self.error(m.col, format!("\"{}\" is not a recognized operator", m.text));
-        }
-        if let Some(fp) = tokens.iter().find(|t| matches!(t.kind, Kind::FpReg(_))) {
-            return self.error(fp.col, "floating-point instructions (coprocessor 1) are not supported yet");
+            return self.error(m.col, unknown(self, m));
         }
         let Some(forms) = Table::get().forms(&m.text) else {
-            let mnemonic = m.text.to_ascii_lowercase();
-            if mnemonic.contains('.') || mnemonic.starts_with("bc1") || mnemonic.ends_with("c1") {
-                return self.error(m.col, "floating-point instructions (coprocessor 1) are not supported yet");
-            }
-            return self.error(m.col, format!("\"{}\" is not a recognized operator", m.text));
+            return self.error(m.col, unknown(self, m));
         };
         let form = match table::choose(&tokens[1..], forms) {
             Ok(f) => f,
@@ -338,7 +658,7 @@ impl Asm {
             return self.error(m.col, format!("\"{}\" is not a valid text segment address", addr as i32));
         }
         self.text_addr[self.text_space] = addr.wrapping_add(form.words() * 4);
-        self.pending.push(Pending { line: self.line, tokens, form, addr });
+        self.pending.push(Pending { place: self.place.clone(), tokens, form, addr });
     }
 
     fn need_data(&mut self, d: &Token) -> bool {
@@ -389,7 +709,7 @@ impl Asm {
                 } else {
                     let start = self.data_addr();
                     if self.check_data(start, n as u32, d.col) {
-                        self.data_lines.push(DataLine { line: self.line, addr: start, len: n as u32, unit: 1 });
+                        self.data_lines.push(self.data_line(start, n as u32, 1));
                         self.set_data_addr(start.wrapping_add(n as u32));
                     }
                 }
@@ -418,14 +738,21 @@ impl Asm {
             }
             ".eqv" => match args {
                 [n, rest @ ..] if n.kind == Kind::Ident && !rest.is_empty() => {
+                    // As GNU's .eqv: a name keeps its value (the same one again is fine, as
+                    // when a macro's body defines it).
+                    let texts = |v: &[Token]| v.iter().map(|t| t.text.clone()).collect::<Vec<_>>();
+                    if self.eqv.get(&n.text).is_some_and(|old| texts(old) != texts(rest)) {
+                        return self.error(n.col, format!("\"{}\" is already defined", n.text));
+                    }
                     self.eqv.insert(n.text.clone(), rest.to_vec());
                 }
                 _ => self.error(d.col, "Too few operands for .eqv directive."),
             },
             ".set" => self.warning(d.col, "MARS currently ignores the .set directive."),
-            ".macro" | ".end_macro" | ".include" => {
-                self.error(d.col, format!("\"{}\": macros and .include are not supported yet", d.text))
-            }
+            ".macro" => self.begin_macro(d, args),
+            ".end_macro" => self.error(d.col, ".END_MACRO without .MACRO"),
+            // Without a quoted name (with one the line was replaced by the file).
+            ".include" => self.error(d.col, format!("\"{}\" directive recognized but not yet implemented.", d.text)),
             _ => {
                 let Some(kind) = DataKind::of(&name) else {
                     return self
@@ -530,7 +857,7 @@ impl Asm {
         // One data line for what this source line stored.
         if let Some(begin) = self.first_write {
             let len = self.data_addr().wrapping_sub(begin);
-            self.data_lines.push(DataLine { line: self.line, addr: begin, len, unit: kind.size() as u8 });
+            self.data_lines.push(self.data_line(begin, len, kind.size() as u8));
         }
     }
 
@@ -576,7 +903,7 @@ impl Asm {
                     let known = self.symbols.get(&t.text).map(|s| s.0);
                     let Some(at) = self.write(known.unwrap_or(0) as u64, len, t.col) else { return false };
                     if known.is_none() {
-                        self.forward.push((at, len, t.clone(), self.line));
+                        self.forward.push((at, len, t.clone(), self.place.clone()));
                     }
                     true
                 }
@@ -633,6 +960,10 @@ impl Asm {
                 Kind::RegName(r) | Kind::RegNum(r) => {
                     values.push(*r as i64);
                     format!("${r}")
+                }
+                Kind::FpReg(r) => {
+                    values.push(*r as i64);
+                    format!("$f{r}")
                 }
                 Kind::Int(v) => {
                     values.push(*v as i64);
@@ -703,9 +1034,20 @@ impl Asm {
 
     /// Builds the instructions of a statement.
     fn build(&mut self, p: &Pending) -> Option<Statement> {
-        self.line = p.line;
+        // As MARS: an error now is reported at the body line, without the calls (they are over).
+        self.place = Place { calls: Vec::new(), ..p.place.clone() };
         let ops: Vec<Token> = p.tokens[1..].iter().map(|t| self.resolve(t)).collect::<Option<_>>()?;
-        let mut st = Statement { line: p.line, addr: p.addr, words: Vec::new(), basic: Vec::new() };
+        let (file, line) = p.place.statement();
+        let mut st = Statement {
+            file,
+            line,
+            origin: p.place.origin(),
+            chain: p.place.chain(),
+            expanded: p.place.text.clone(),
+            addr: p.addr,
+            words: Vec::new(),
+            basic: Vec::new(),
+        };
         match &p.form.def {
             Def::Basic(b) => {
                 // Branch and jump labels stay labels: they are encoded relative to the address.
@@ -819,15 +1161,92 @@ fn chunks_of(bytes: impl Iterator<Item = (u32, u8)>, code: bool) -> Vec<Chunk> {
     out
 }
 
-/// Assembles a MARS program.
-pub fn assemble(source: &str) -> Result<Program, Vec<AsmError>> {
-    let mut asm = Asm::new();
-    for (i, line) in source.lines().enumerate() {
-        asm.line = i + 1;
-        asm.line(line);
+/// Whether a token is a macro parameter: `%name`, or (SPIM's style) `$name` that is not a
+/// register.
+fn is_param(t: &Token) -> bool {
+    t.kind == Kind::MacroParam || (t.kind == Kind::Ident && t.text.starts_with('$'))
+}
+
+/// The lines of `files[file]` with its `.include`s replaced by the files they name (MARS's
+/// `Tokenizer.processIncludes`): a line with `.include "name"` anywhere is replaced as a whole;
+/// a relative name is taken from the folder of the including file; a file already included
+/// (`seen`) is a "Recursive include" error, as is in MARS any second include of a file.
+fn include_lines(
+    files: &mut Vec<SourceFile>,
+    file: usize,
+    read: &mut dyn FnMut(&str) -> Option<String>,
+    seen: &mut Vec<String>,
+    out: &mut Vec<SrcLine>,
+    depth: usize,
+) -> Result<(), AsmError> {
+    let text = files[file].text.clone();
+    for (i, line) in text.lines().enumerate() {
+        let tokens = tokenize(line).unwrap_or_default();
+        let include = tokens.windows(2).find(|w| {
+            w[0].kind == Kind::Directive && w[0].text.eq_ignore_ascii_case(".include") && w[1].kind == Kind::Str
+        });
+        let Some([_, name]) = include else {
+            out.push(SrcLine { file, line: i + 1, text: line.to_string() });
+            continue;
+        };
+        let error = |message: String| AsmError { file, line: i + 1, col: name.col, message, expansion: Vec::new() };
+        let name = &name.text[1..name.text.len() - 1];
+        let path = match std::path::Path::new(&files[file].name).parent() {
+            Some(dir) if !std::path::Path::new(name).is_absolute() && !dir.as_os_str().is_empty() => {
+                dir.join(name).to_string_lossy().into_owned()
+            }
+            _ => name.to_string(),
+        };
+        if seen.contains(&path) {
+            return Err(error(format!("Recursive include of file {path}")));
+        }
+        if depth >= MAX_NESTING {
+            return Err(error(format!("include files nested deeper than {MAX_NESTING}")));
+        }
+        seen.push(path.clone());
+        let Some(text) = read(&path) else {
+            return Err(error(format!("Error reading include file {path}")));
+        };
+        files.push(SourceFile { name: path, text });
+        include_lines(files, files.len() - 1, read, seen, out, depth + 1)?;
     }
-    for (at, len, t, line) in std::mem::take(&mut asm.forward) {
-        asm.line = line;
+    Ok(())
+}
+
+/// Assembles a MARS program without `.include` files (see [`assemble_with`]).
+pub fn assemble(source: &str) -> Result<Program, Vec<AsmError>> {
+    assemble_with("", source, &mut |_| None).map_err(|e| e.errors)
+}
+
+/// Assembles MARS program `source` of file `name`; `read` gives the text of a file `.include`
+/// names (its path: relative to the folder of the including file, joined to it), None when
+/// there is no such file.
+pub fn assemble_with(
+    name: &str,
+    source: &str,
+    read: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<Program, AsmErrors> {
+    let mut files = vec![SourceFile { name: name.to_string(), text: source.to_string() }];
+    let mut lines = Vec::new();
+    let names = |files: &[SourceFile]| files.iter().map(|f| f.name.clone()).collect();
+    if let Err(e) = include_lines(&mut files, 0, read, &mut Vec::new(), &mut lines, 0) {
+        return Err(AsmErrors { errors: vec![e], files: names(&files) });
+    }
+    let mut asm = Asm::new();
+    asm.lines = lines;
+    for i in 0..asm.lines.len() {
+        asm.index = i;
+        asm.place = Place { file: asm.lines[i].file, line: asm.lines[i].line, calls: Vec::new(), text: None };
+        let text = asm.lines[i].text.clone();
+        asm.line(&text);
+    }
+    if let Some(m) = asm.defining.take() {
+        let l = &asm.lines[m.from];
+        asm.place = Place { file: l.file, line: l.line, calls: Vec::new(), text: None };
+        asm.error(0, "Macro started but not ended (no .end_macro directive)");
+    }
+    for (at, len, t, place) in std::mem::take(&mut asm.forward) {
+        asm.place = Place { calls: Vec::new(), ..place };
         match asm.symbols.get(&t.text) {
             Some(&(v, _)) => {
                 for i in 0..len {
@@ -840,8 +1259,8 @@ pub fn assemble(source: &str) -> Result<Program, Vec<AsmError>> {
     let pending = std::mem::take(&mut asm.pending);
     let statements: Vec<Statement> = pending.iter().filter_map(|p| asm.build(p)).collect();
     if !asm.errors.is_empty() {
-        asm.errors.sort_by_key(|e| (e.line, e.col));
-        return Err(asm.errors);
+        asm.errors.sort_by_key(|e| (e.file, e.line, e.col));
+        return Err(AsmErrors { errors: asm.errors, files: names(&files) });
     }
     let mut statements = statements;
     statements.sort_by_key(|s| s.addr);
@@ -862,5 +1281,6 @@ pub fn assemble(source: &str) -> Result<Program, Vec<AsmError>> {
         data: asm.data_lines,
         symbols,
         warnings: asm.warnings,
+        files,
     })
 }

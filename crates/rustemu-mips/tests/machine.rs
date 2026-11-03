@@ -265,9 +265,9 @@ fn unsupported_services() {
         run(&mut m),
         Event::Error("Runtime exception at 0x00400004: invalid or unimplemented syscall service: 99 ".into())
     );
-    let mut m = machine(&sys(2), &[]);
+    let mut m = machine(&sys(55), &[]);
     let Event::Error(e) = run(&mut m) else { panic!() };
-    assert!(e.contains("coprocessor 1"));
+    assert!(e.contains("dialog window"), "{e}");
     let mut m = machine(&[i(0x0F, 0, A0, 0)].iter().chain(&sys(4)).copied().collect::<Vec<_>>(), &[]);
     let Event::Error(e) = run(&mut m) else { panic!() };
     assert_eq!(e, "Runtime exception at 0x00400008: address out of range 0x00000000", "printing from address 0");

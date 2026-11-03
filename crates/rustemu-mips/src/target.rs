@@ -37,9 +37,14 @@ struct Snapshot {
 
 /// Number of registers in [`REGISTERS`] before PC: 32 by name, 32 by number.
 const GPR_ENTRIES: usize = 64;
+/// Index of `$f0` among the registers of [`Target::registers`].
+pub const FPR: usize = 67;
+/// Index of the condition flags of coprocessor 1 (a byte) among the registers of [`Target::registers`].
+pub const FCC: usize = FPR + 32;
 
 /// Registers of debugger expressions: `$zero`..`$ra` (indices 0..32), `$0`..`$31` (32..64),
-/// then PC, HI, LO.
+/// then PC, HI, LO (64..67), the floating-point registers `$f0`..`$f31` (67..99) and the 8 condition
+/// flags of coprocessor 1 as one byte, `FCC` (99; bit n is flag n).
 static REGISTERS: std::sync::LazyLock<Vec<Register>> = std::sync::LazyLock::new(|| {
     let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
     let mut v: Vec<Register> =
@@ -48,6 +53,8 @@ static REGISTERS: std::sync::LazyLock<Vec<Register>> = std::sync::LazyLock::new(
     v.push(Register { name: "PC", bits: 32, kind: RegKind::Pointer });
     v.push(Register { name: "HI", bits: 32, kind: RegKind::General });
     v.push(Register { name: "LO", bits: 32, kind: RegKind::General });
+    v.extend((0..32).map(|i| Register { name: leak(format!("$f{i}")), bits: 32, kind: RegKind::General }));
+    v.push(Register { name: "FCC", bits: 8, kind: RegKind::General });
     v
 });
 
@@ -243,6 +250,8 @@ impl Target for Machine {
             64 => self.cpu.pc,
             65 => self.cpu.hi,
             66 => self.cpu.lo,
+            FPR..FCC => self.cpu.fpr[index - FPR],
+            FCC => self.cpu.fcc as u32,
             _ => 0,
         }) as u64
     }
@@ -255,6 +264,8 @@ impl Target for Machine {
             64 => self.cpu.pc = v,
             65 => self.cpu.hi = v,
             66 => self.cpu.lo = v,
+            FPR..FCC => self.cpu.fpr[index - FPR] = v,
+            FCC => self.cpu.fcc = v as u8,
             _ => {}
         }
     }
@@ -346,6 +357,10 @@ mod tests {
         assert_eq!(t.register(i(t, "$0")), 0, "$zero stays 0");
         t.set_register(i(t, "HI"), 9);
         assert_eq!(t.mips().unwrap().cpu.hi, 9);
+        t.set_register(i(t, "$f3"), 1.5f32.to_bits() as u64);
+        assert_eq!(t.mips().unwrap().cpu.fpr[3], 0x3fc0_0000);
+        t.set_register(i(t, "fcc"), 0x81);
+        assert!(t.mips().unwrap().cpu.fcc(7) && t.mips().unwrap().cpu.fcc(0));
         assert_eq!((t.pc_name(), t.pc_text()), ("PC", "0x00400004".to_string()));
     }
 

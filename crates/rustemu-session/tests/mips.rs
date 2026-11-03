@@ -92,11 +92,13 @@ fn examples_run() {
         ("strings.s", "Hello, World\n", "Type a line: Hello, World\nUpper case: HELLO, WORLD\nCharacters: 12"),
         ("sort.s", "", "1 5 7 14 23 32 34 62 "),
         ("exception.s", "", "overflow caught, going on\n42"),
+        ("macros.s", "", "Squares: 1 4 9 16 25 \n"),
     ];
     for (file, input, expected) in cases {
         let text = std::fs::read_to_string(dir.join(file)).unwrap();
         let mut s = Session::new_mips();
-        s.load_mips_source(file, &text).unwrap_or_else(|e| panic!("{e}"));
+        // By its path: macros.s includes a file next to it.
+        s.load_mips_source(&dir.join(file).to_string_lossy(), &text).unwrap_or_else(|e| panic!("{e}"));
         let m = s.mips_mut().unwrap();
         m.instant_waits = true;
         m.push_text(input);
@@ -115,4 +117,32 @@ fn examples_run() {
     assert_eq!(a.lines().count(), 5);
     assert!(a.lines().all(|l| l.parse::<u32>().is_ok_and(|v| v < 100)), "{a}");
     assert_eq!(a, out(()));
+}
+
+#[test]
+fn floating_point_registers_in_expressions() {
+    let mut s = Session::new_mips();
+    s.load_mips_source("fp.s", ".data\nx: .float 1.5\n.text\nlwc1 $f2, x\nc.le.s 3, $f2, $f2\n").unwrap();
+    s.target.run(3);
+    let ev = |s: &Session, e: &str| s.compile(e).map(|x| x.eval(&*s.target));
+    assert_eq!(ev(&s, "$f2"), Ok(0x3fc0_0000), "the bits of 1.5");
+    assert_eq!(ev(&s, "fcc"), Ok(8), "condition flag 3");
+}
+
+/// Stepping through a macro of an included file shows its body lines in that file.
+#[test]
+fn macro_bodies_in_included_files() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mips");
+    let path = dir.join("macros.s");
+    let mut s = Session::new_mips();
+    s.load_mips_source(&path.to_string_lossy(), &std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..6 {
+        let v = s.view_at(s.target.pc(), true).unwrap();
+        seen.push((v.file, v.line));
+        s.target.step();
+    }
+    assert_eq!(seen[0], (0, 21), "the call of print_str first");
+    assert!(seen.contains(&(1, 13)), "then la $a0, text in print_macros.s: {seen:?}");
+    assert_eq!(seen[5], (0, 9), "for (line 22) runs square: the body line of for");
 }

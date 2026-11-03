@@ -323,7 +323,11 @@ pub const MIPS_EXAMPLES: &[(&str, &str, &str)] = &[
     mips_example!("bubble sort", "sort.s"),
     mips_example!("random numbers and sbrk", "random.s"),
     mips_example!("exception handler", "exception.s"),
+    mips_example!("macros and .include", "macros.s"),
 ];
+
+/// Files the MIPS examples `.include` (not examples of their own): name, text.
+pub const MIPS_INCLUDES: &[(&str, &str)] = &[("print_macros.s", include_str!("../../../examples/mips/print_macros.s"))];
 
 /// File -> New in the MIPS workspace.
 pub const MIPS_TEMPLATE: &str = "\

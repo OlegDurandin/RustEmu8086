@@ -59,7 +59,7 @@ The source column shows a line at its first instruction; the next ones of the sa
 | Window | What it shows |
 |---|---|
 | emulator | the run buttons, the registers and the code: address, machine word, **basic** instruction, source line; click ○ to set a breakpoint |
-| registers | in groups, one at a time, with **PC** always under their tabs: **GPR** — all 32 general purpose registers in pairs (`$zero $at`, `$v0 $v1`…; hover a name for its number and use), **Special** — PC, HI, LO, **CP0** — BadVAddr, Status, Cause, EPC (read only; the last exception's code is shown), **FPU** — not emulated yet. Changed ones are red; *HEX / DEC* switches the notation; a click changes a value while the program is paused (`$zero` is always 0) |
+| registers | in groups, one at a time, with **PC** always under their tabs: **GPR** — all 32 general purpose registers in pairs (`$zero $at`, `$v0 $v1`…; hover a name for its number and use), **Special** — PC, HI, LO, **CP0** — BadVAddr, Status, Cause, EPC (read only; the last exception's code is shown), **FPU** — `$f0..$f31` in pairs, each pair also as a double, and the 8 condition flags (a click changes one); DEC shows the numbers, HEX their bits. Changed ones are red; *HEX / DEC* switches the notation; a click changes a value while the program is paused (`$zero` is always 0) |
 | Run I/O | what the program prints, and a line to type its input: **Enter** (or *send*) gives the line to the program |
 | ALU | the last arithmetic, logic, comparison, shift, multiplication or division instruction: its operands and result (or HI and LO) in hex, binary, unsigned and signed, an overflow; loads, stores, branches and writes to `$zero` (`nop`) are not shown |
 | memory | words, 16 bytes a row; buttons *.text*, *.data*, *heap*, *$gp*, *$sp*, *PC*, *.kdata*; the address field takes hex (`0x10010000`) or an expression (`$sp`, `array + 8`). Addresses outside every segment are shown as `········` — reading them is an error, not a zero. While the program is paused a click on a word changes it (hex `0x…` or decimal, Enter) |
@@ -69,7 +69,8 @@ The source column shows a line at its first instruction; the next ones of the sa
 The 8086's own windows — the screen, flags, FPU, the stack window, virtual devices, drive C:, the DEBUG.EXE
 console and the emu8086.inc library — are not shown in the MIPS workspace.
 
-In the debugger and the watch window registers are written as in the source: `$t0`, `$8`, `$sp + 4`; labels give
+In the debugger and the watch window registers are written as in the source: `$t0`, `$8`, `$sp + 4`, `$f12` (its bits), `fcc`
+(the condition flags as a byte); labels give
 their address, `[label]` and `dword [label]` the value in memory.
 
 ## Tablet
@@ -91,7 +92,8 @@ one, and *EN / RU* the language:
 - **system calls** — every `syscall` service of MARS by number: arguments, results, notes, an example; the ones not
   supported yet are grey;
 - **directives** — `.text`, `.data`, `.word`, `.asciiz`, `.align`, `.eqv`…;
-- **registers & memory** — the 32 registers with their numbers and conventions, PC / HI / LO, MARS's memory map.
+- **registers & memory** — the 32 registers with their numbers and conventions, PC / HI / LO, the `$f`
+  registers and condition flags of coprocessor 1, MARS's memory map.
 
 In the editor, hovering over an instruction, a directive or a `syscall` shows a summary (the service of a
 `syscall` is taken from the `li $v0, n` before it); F1 or ⌘-click opens the article.
@@ -103,11 +105,40 @@ forces it. See [Command line](Command-line).
 
 ## What is supported
 
-- The integer instructions of MARS (77) and its pseudo-instructions, directives `.text .data .ktext .kdata .word
-  .half .byte .ascii .asciiz .space .align .extern .globl .eqv .set`, `%hi` / `%lo`.
-- System calls 1, 4, 5, 8–17, 30–36, 40–42: printing, reading, `sbrk`, exit, files (on drive C:, shared with DOS
+- The instructions of MARS — 77 integer and those of coprocessor 1 — and its pseudo-instructions, directives
+  `.text .data .ktext .kdata .word .half .byte .float .double .ascii .asciiz .space .align .extern .globl .eqv .set`, `%hi` / `%lo`.
+- System calls 1–17, 30–36, 40–44: printing (floats and doubles too), reading, `sbrk`, exit, files (on drive C:, shared with DOS
   programs: its folder on the Mac, the **drive C:** window in the browser, where they are kept and can be downloaded), time, `sleep`, random numbers.
 - Exceptions (overflow, unaligned access, addresses outside the segments, traps) and a handler at `0x80000180`.
+- Floating point as in MARS: `float` in one register, `double` in an even register and the next one (an odd
+  one stops the program, as in MARS), roundings, conversions, comparisons into 8 condition flags. Checked against
+  MARS on random programs: registers, flags, memory and errors are the same.
+- Macros and `.include`, by MARS's rules (see below).
 
-Not yet: floating point (coprocessor 1) and its system calls, dialogs (50–59), macros (`.macro`) and `.include`,
-MARS's memory-mapped devices.
+Not yet: dialogs (50–59), MARS's memory-mapped devices.
+
+## Macros and .include
+
+```asm
+.include "print_macros.s"        # print_int, print_str, done
+
+.macro for (%reg, %from, %to, %body)
+        add  %reg, $zero, %from
+loop:
+        %body ()
+        add  %reg, %reg, 1
+        ble  %reg, %to, loop
+.end_macro
+```
+
+- `.macro name (%a, %b)` … `.end_macro`; a call is `name (x, y)` or `name x y`. Parameters start with `%` (SPIM's
+  `$a` also works); an argument is one token — a register, a number, a label, a string.
+- A macro is defined before it is used. Macros with the same name and a different number of parameters are
+  different; of two with the same number the later one is used.
+- A label in the body becomes `label_M0`, `label_M1`… in each expansion, so a loop can be expanded many times.
+- `.include "file"` replaces its line with the file; a relative name is taken from the folder of the including file.
+  In the app the file is also looked up on drive C: and among the files of the built-in examples
+  (`print_macros.s` — see the *macros and .include* example). Including the same file twice is an error, as in MARS.
+- The code list shows each line of an expansion as MARS does: `21: <13> la $a0, text_M0` — line 21 calls the
+  macro, 13 is the line of its body. Stepping enters the body (in the included file too); errors in an expansion
+  are reported as `line 21->13`.
