@@ -364,6 +364,17 @@ db (3 > 2), (2 == 2), (1 != 1), !0, (1 && 2), (0 || 3), 2 ^^ 2
 db 1 | 2 == 3, 5 ? 7 : 9, 0 ? 7 : 9, 6 & 3, 1 << 3 | 1, -1 < 0
 ",
     ),
+    (
+        // `times n` alone is nothing; a second TIMES replaces the first.
+        "bare_times",
+        "bits 16
+times 2
+x: times 3
+times 2 times 3 nop
+times 2 ; a comment
+nop
+",
+    ),
 ];
 
 #[test]

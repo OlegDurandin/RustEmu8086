@@ -191,7 +191,7 @@ pub fn parse_tokens(toks: &[Token]) -> Result<Stmt, PErr> {
     }
 
     let Some(Tok::Ident(word)) = p.advance() else {
-        return Err((toks[p.pos - 1].col, format!("unexpected {}", describe(&toks[p.pos - 1].tok))));
+        return Err(unexpected(&p));
     };
     let u = word.to_ascii_uppercase();
 
@@ -428,11 +428,19 @@ pub fn parse_line_nasm(line: &str) -> Result<Stmt, PErr> {
     finish(&p, Stmt { label, kind, colon: true })
 }
 
+/// The error for the token just taken where an instruction or a directive should be (the end
+/// of the line when there is none).
+fn unexpected(p: &Parser) -> PErr {
+    match p.pos.checked_sub(1).and_then(|i| p.toks.get(i)) {
+        Some(t) => (t.col, format!("unexpected {}", describe(&t.tok))),
+        None => (p.col(), "instruction or directive expected".into()),
+    }
+}
+
 /// The statement after the label of a NASM line.
 fn nasm_kind(p: &mut Parser) -> Result<StmtKind, PErr> {
     let Some(Tok::Ident(word)) = p.advance() else {
-        let t = &p.toks[p.pos - 1];
-        return Err((t.col, format!("unexpected {}", describe(&t.tok))));
+        return Err(unexpected(p));
     };
     let u = word.to_ascii_uppercase();
     if let Some(&(_, size)) = DATA_DIRS.iter().find(|(d, _)| *d == u) {
@@ -453,8 +461,15 @@ fn nasm_kind(p: &mut Parser) -> Result<StmtKind, PErr> {
     Ok(match u.as_str() {
         "TIMES" => {
             let n = p.expr()?;
-            let inner = nasm_kind(p)?;
-            StmtKind::Times(n, Box::new(inner))
+            // As NASM: `times n` alone assembles to nothing, and a second TIMES replaces the
+            // first (`times 2 times 3 nop` is three NOPs).
+            if p.at_end() {
+                return Ok(StmtKind::Ignored);
+            }
+            match nasm_kind(p)? {
+                inner @ StmtKind::Times(..) => inner,
+                inner => StmtKind::Times(n, Box::new(inner)),
+            }
         }
         "ORG" => StmtKind::Org(p.expr()?),
         "BITS" => {
