@@ -825,7 +825,7 @@ pub const SYSCALLS: &[Syscall] = &[
         name: "open file",
         input: "$a0 = address of the file name (zero-ended), $a1 = flags: 0 read, 1 write (create), 9 append (create), $a2 = mode (ignored)",
         output: "$v0 = file descriptor (3 and up), −1 on an error",
-        note: "An error (a missing file, a refused name) does not stop the program: check $v0; Run I/O shows the reason. Files are in drive C:'s folder on the Mac and in memory in the browser; names with .. or absolute paths are refused. Descriptors 0, 1 and 2 are the console.",
+        note: "An error (a missing file, a refused name) does not stop the program: check $v0; Run I/O shows the reason. Files are on drive C:, shared with DOS programs (its folder on the Mac, the drive C: window in the browser); names with .. or absolute paths are refused. Descriptors 0, 1 and 2 are the console.",
         supported: true,
         example: ".data\nname: .asciiz \"out.txt\"\n.text\nla   $a0, name\nli   $a1, 1\nli   $a2, 0\nli   $v0, 13\nsyscall\nmove $s0, $v0",
     },

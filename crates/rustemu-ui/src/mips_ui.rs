@@ -26,6 +26,8 @@ pub struct MipsState {
     pub decimal: bool,
     /// The group of registers shown.
     pub group: RegGroup,
+    /// A word of the memory window being edited: its address and the text typed.
+    pub mem_edit: Option<(u32, String)>,
 }
 
 /// The registers the panel shows, one group at a time.
@@ -146,7 +148,10 @@ fn reg_cell(app: &mut App, ui: &mut Ui, r: &Reg) {
     if editing {
         let (_, text) = app.mips.edit.as_mut().unwrap();
         let resp = ui.add(egui::TextEdit::singleline(text).font(font.clone()).desired_width(88.0));
-        resp.request_focus();
+        // Focus once: asking again every frame would cancel Enter.
+        if !resp.has_focus() && !resp.lost_focus() {
+            resp.request_focus();
+        }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             app.mips.edit = None;
         } else if resp.lost_focus() {
@@ -512,47 +517,96 @@ pub fn memory_ui(app: &mut App, ui: &mut Ui) {
     });
     let base = app.view.mem_view_addr & !0xF;
     let font = FontId::monospace(12.5);
+    // A word clicked while the program is paused is edited in place (Enter writes it).
+    let editable = app.cpu_editable();
+    let mut start_edit = None;
+    let mut write = None;
     let r = ui
         .vertical(|ui| {
-            let t = &*app.session.target;
+            ui.spacing_mut().item_spacing.x = 0.0;
             for row in 0..MEM_ROWS {
                 let a = base.wrapping_add(row * 16);
-                let mut job = egui::text::LayoutJob::default();
-                let fmt = |c: Color32| egui::TextFormat { font_id: font.clone(), color: c, ..Default::default() };
                 let txt = ui.visuals().text_color();
                 let weak = ui.visuals().weak_text_color();
-                job.append(&format!("{a:08x}  "), 0.0, fmt(weak));
-                let mut chars = String::new();
-                for w in 0..4u32 {
-                    let wa = a.wrapping_add(w * 4);
-                    if Segment::of(wa).is_none() {
-                        job.append("········ ", 0.0, fmt(weak));
-                        chars.push_str("    ");
-                        continue;
+                let text = |s: String, c: Color32| RichText::new(s).font(font.clone()).color(c);
+                ui.horizontal(|ui| {
+                    ui.label(text(format!("{a:08x}  "), weak));
+                    let mut chars = String::new();
+                    for w in 0..4u32 {
+                        let wa = a.wrapping_add(w * 4);
+                        if Segment::of(wa).is_none() {
+                            ui.label(text("········ ".into(), weak));
+                            chars.push_str("    ");
+                            continue;
+                        }
+                        let bytes = app.session.target.read_bytes(wa, 4);
+                        let v = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                        chars.extend(bytes.iter().map(|&b| if (32..127).contains(&b) { b as char } else { '.' }));
+                        if let Some((at, edit)) = app.mips.mem_edit.as_mut().filter(|(at, _)| *at == wa) {
+                            let r = ui.add(egui::TextEdit::singleline(edit).font(font.clone()).desired_width(72.0));
+                            r.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("word at 0x{wa:08x}"))
+                            });
+                            // Focus once: asking again every frame would cancel Enter.
+                            if !r.has_focus() && !r.lost_focus() {
+                                r.request_focus();
+                            }
+                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                write = Some(None);
+                            } else if r.lost_focus() {
+                                write = Some(Some((*at, edit.clone())));
+                            }
+                            ui.label(text(" ".into(), weak));
+                            continue;
+                        }
+                        let col = if wa == pc {
+                            crate::colors::info(ui)
+                        } else if wa == sp {
+                            crate::colors::warn(ui)
+                        } else if v == 0 {
+                            weak
+                        } else {
+                            txt
+                        };
+                        let word = ui.add(egui::Label::new(text(format!("{v:08x} "), col)).sense(egui::Sense::click()));
+                        let word = word.on_hover_text(if editable {
+                            format!("0x{wa:08x} = {} — click to change", v as i32)
+                        } else {
+                            format!("0x{wa:08x} = {}", v as i32)
+                        });
+                        if editable && word.clicked() {
+                            start_edit = Some((wa, format!("0x{v:08x}")));
+                        }
                     }
-                    let bytes = t.read_bytes(wa, 4);
-                    let v = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                    let col = if wa == pc {
-                        crate::colors::info(ui)
-                    } else if wa == sp {
-                        crate::colors::warn(ui)
-                    } else if v == 0 {
-                        weak
-                    } else {
-                        txt
+                    let label = match Segment::of(a) {
+                        None => "  unmapped".to_string(),
+                        Some(_) => format!(" {chars}"),
                     };
-                    job.append(&format!("{v:08x} "), 0.0, fmt(col));
-                    chars.extend(bytes.iter().map(|&b| if (32..127).contains(&b) { b as char } else { '.' }));
-                }
-                let label = match Segment::of(a) {
-                    None => "  unmapped".to_string(),
-                    Some(_) => format!(" {chars}"),
-                };
-                job.append(&label, 0.0, fmt(weak));
-                ui.add(egui::Label::new(job).extend());
+                    ui.label(text(label, weak));
+                });
             }
         })
         .response;
+    if let Some(e) = start_edit {
+        app.mips.mem_edit = Some(e);
+    }
+    match write {
+        Some(Some((addr, text))) => {
+            app.mips.mem_edit = None;
+            match parse_value(&text) {
+                Some(v) if app.cpu_editable() => {
+                    for (i, b) in v.to_le_bytes().into_iter().enumerate() {
+                        app.session.target.write8(addr + i as u32, b);
+                    }
+                    app.status = format!("[{}] = {} (changed by hand)", hex(addr), hex(v));
+                }
+                Some(_) => {}
+                None => app.status = format!("'{text}' is not a 32-bit value"),
+            }
+        }
+        Some(None) => app.mips.mem_edit = None,
+        None => {}
+    }
     // The wheel moves a row at a time over the 4 GiB address space.
     if r.hovered() {
         let dy = ui.input(|i| i.smooth_scroll_delta.y);
@@ -569,7 +623,7 @@ pub fn memory_ui(app: &mut App, ui: &mut Ui) {
         if ui.small_button("⏷ page").clicked() {
             app.view.mem_view_addr = base.wrapping_add(MEM_ROWS * 16);
         }
-        ui.weak("words, little-endian · blue = PC, yellow = $sp · ········ = unmapped");
+        ui.weak("words, little-endian · blue = PC, yellow = $sp · ········ = unmapped · click a word to change it");
     });
 }
 
