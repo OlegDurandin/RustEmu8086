@@ -70,8 +70,14 @@ impl Group {
     }
 }
 
-/// Share of the width of each default column.
-const COLUMN_WIDTHS: [f32; 3] = [0.26, 0.42, 0.32];
+/// Share of the width of each default column: the 8086's screen takes a wide one, MIPS's Run I/O
+/// console a narrow one, leaving room to the emulator's code list with its source column.
+fn column_widths(app: &App) -> [f32; 3] {
+    match app.arch() {
+        rustemu_session::Arch::I8086 => [0.26, 0.42, 0.32],
+        rustemu_session::Arch::Mips32 => [0.25, 0.53, 0.22],
+    }
+}
 
 /// The workspace of the panels layout: tabs of the open tools.
 pub fn panels_ui(app: &mut App, ui: &mut Ui, host: &mut dyn Host) {
@@ -149,7 +155,7 @@ fn sync(tree: &mut Tree<Tool>, app: &mut App) {
     }
     for tool in Tool::ALL.into_iter().filter(|t| t.group().is_some()) {
         if app.windows.is_open(tool) && tree.tiles.find_pane(&tool).is_none() {
-            insert(tree, tool);
+            insert(tree, tool, column_widths(app));
         }
     }
 }
@@ -184,7 +190,7 @@ fn tabs_of(tree: &Tree<Tool>, group: Group, except: TileId) -> Option<TileId> {
 /// Adds a tab for `tool`: next to the tools of its group, or as a new group where the default
 /// layout has it. A new tab becomes the visible one of its group, except the source (opened on
 /// every emulate), which does not hide the editor.
-fn insert(tree: &mut Tree<Tool>, tool: Tool) {
+fn insert(tree: &mut Tree<Tool>, tool: Tool, widths: [f32; 3]) {
     let Some(group) = tool.group() else { return };
     let pane = tree.tiles.insert_pane(tool);
     if let Some(tabs) = tabs_of(tree, group, pane) {
@@ -237,7 +243,7 @@ fn insert(tree: &mut Tree<Tool>, tool: Tool) {
         Some(Tile::Container(Container::Linear(l))) if l.dir == egui_tiles::LinearDir::Horizontal => root,
         _ => {
             let h = tree.tiles.insert_horizontal_tile(vec![root]);
-            let width = group_of(&tree.tiles, root).map_or(COLUMN_WIDTHS[0], |g| COLUMN_WIDTHS[g.column()]);
+            let width = group_of(&tree.tiles, root).map_or(widths[0], |g| widths[g.column()]);
             if let Some(Tile::Container(Container::Linear(l))) = tree.tiles.get_mut(h) {
                 l.shares.set_share(root, width);
             }
@@ -252,7 +258,7 @@ fn insert(tree: &mut Tree<Tool>, tool: Tool) {
     let at = columns.iter().take_while(|c| c.is_some_and(|c| c <= group.column())).count();
     if let Some(Tile::Container(Container::Linear(l))) = tree.tiles.get_mut(horizontal) {
         l.children.insert(at, tabs);
-        l.shares.set_share(tabs, COLUMN_WIDTHS[group.column()]);
+        l.shares.set_share(tabs, widths[group.column()]);
     }
 }
 

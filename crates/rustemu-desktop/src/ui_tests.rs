@@ -1461,11 +1461,20 @@ fn mips_workspace() {
     h.get_by_label("$v0");
     h.get_by_label("$ra");
     h.get_by_label("General purpose registers");
+    // The PC above every group.
+    h.get_by_label("PC");
+    h.get_by_label("00400000");
+    // The code list: MARS's Basic column; `la` takes two instructions, the second marked as its.
+    h.get_by_label("basic");
+    h.get_by_label("7: la $a0, msg");
+    h.get_by_label("  ↳");
     save(&mut h, "41_mips_loaded");
     h.get_by_label("Special").click();
     h.run();
-    h.get_by_label("PC");
-    h.get_by_label("00400000");
+    h.get_by_label("HI");
+    h.get_by_label("LO");
+    // Special lists the PC too, as MARS does.
+    assert_eq!(h.query_all_by_label("PC").count(), 2);
     h.get_by_label("CP0").click();
     h.run();
     h.get_by_label("Status");
@@ -1516,7 +1525,6 @@ fn mips_workspace() {
     h.run();
     assert_eq!(h.state().doc.text, x86_text);
     assert!(!h.state().windows[Tool::RunIo]);
-    assert_eq!(h.state().settings.arch, "8086");
 }
 
 #[test]

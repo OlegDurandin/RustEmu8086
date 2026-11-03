@@ -1,5 +1,5 @@
 //! The tools of the MIPS workspace, as MARS shows the machine: the registers grouped by their use
-//! (PC, HI and LO first), the Run I/O console with a line to type the program's input, the flat
+//! (the PC always under their tabs), the Run I/O console with a line to type the program's input, the flat
 //! 32-bit memory (addresses outside every segment are shown as unmapped, not as zeros) and the
 //! code list — address, machine word, instruction and source line.
 
@@ -79,6 +79,8 @@ struct Reg {
     hint: String,
     now: u32,
     prev: u32,
+    /// The PC above the groups: while Special (which lists it too) is shown, it is edited there.
+    pinned: bool,
 }
 
 /// The registers of a group (empty for the FPU).
@@ -93,15 +95,23 @@ fn group_regs(group: RegGroup, now: &Cpu, prev: &Cpu) -> Vec<Reg> {
                 hint: format!("${r}: {}", role(REG_NAMES[r])),
                 now: now.regs[r],
                 prev: prev.regs[r],
+                pinned: false,
             })
             .collect(),
         RegGroup::Special => [
-            (PC, "PC", "program counter: the next instruction", now.pc, prev.pc),
+            (PC, "PC", "program counter: the address of the next instruction", now.pc, prev.pc),
             (HI, "HI", "mult: the high word; div: the remainder", now.hi, prev.hi),
             (LO, "LO", "mult: the low word; div: the quotient", now.lo, prev.lo),
         ]
         .into_iter()
-        .map(|(i, name, hint, now, prev)| Reg { index: Some(i), name: name.into(), hint: hint.into(), now, prev })
+        .map(|(i, name, hint, now, prev)| Reg {
+            index: Some(i),
+            name: name.into(),
+            hint: hint.into(),
+            now,
+            prev,
+            pinned: false,
+        })
         .collect(),
         RegGroup::Cp0 => [
             (cp0::VADDR, "BadVAddr", "the address of the last address exception"),
@@ -116,6 +126,7 @@ fn group_regs(group: RegGroup, now: &Cpu, prev: &Cpu) -> Vec<Reg> {
             hint: format!("CP0 ${r}: {hint} (mfc0 / mtc0)"),
             now: now.cp0[r],
             prev: prev.cp0[r],
+            pinned: false,
         })
         .collect(),
         RegGroup::Fpu => Vec::new(),
@@ -129,7 +140,9 @@ fn reg_cell(app: &mut App, ui: &mut Ui, r: &Reg) {
     let color = if changed { crate::colors::error(ui) } else { ui.visuals().strong_text_color() };
     let shown = |v: u32| if app.mips.decimal { (v as i32).to_string() } else { format!("{v:08X}") };
     ui.label(RichText::new(&r.name).font(font.clone()).color(ui.visuals().weak_text_color())).on_hover_text(&r.hint);
-    let editing = r.index.is_some() && app.mips.edit.as_ref().is_some_and(|(i, _)| Some(*i) == r.index);
+    let editing = r.index.is_some()
+        && app.mips.edit.as_ref().is_some_and(|(i, _)| Some(*i) == r.index)
+        && !(r.pinned && app.mips.group == RegGroup::Special);
     if editing {
         let (_, text) = app.mips.edit.as_mut().unwrap();
         let resp = ui.add(egui::TextEdit::singleline(text).font(font.clone()).desired_width(88.0));
@@ -169,8 +182,8 @@ fn reg_cell(app: &mut App, ui: &mut Ui, r: &Reg) {
     }
 }
 
-/// The registers, one group at a time (GPR, Special, CP0, FPU), as pairs in two columns. Changed
-/// ones are red; values can be changed while the program is paused.
+/// The registers: the PC, then one group at a time (GPR, Special, CP0, FPU) as pairs in two
+/// columns. Changed ones are red; values can be changed while the program is paused.
 pub fn registers_ui(app: &mut App, ui: &mut Ui) {
     let Some((now, prev)) = cpus(app) else {
         ui.weak("no MIPS machine");
@@ -180,6 +193,19 @@ pub fn registers_ui(app: &mut App, ui: &mut Ui) {
         for (g, name, title) in RegGroup::ALL {
             ui.selectable_value(&mut app.mips.group, g, name).on_hover_text(title);
         }
+    });
+    // The PC under the tabs whatever the group is: it is what every step changes. Special has it
+    // too, with HI and LO, as MARS lists them.
+    ui.horizontal(|ui| {
+        let pc = Reg {
+            index: Some(PC),
+            name: "PC".into(),
+            hint: "program counter: the address of the next instruction".into(),
+            now: now.pc,
+            prev: prev.pc,
+            pinned: true,
+        };
+        reg_cell(app, ui, &pc);
     });
     let group = app.mips.group;
     let title = RegGroup::ALL.iter().find(|g| g.0 == group).map_or("", |g| g.2);
@@ -263,6 +289,93 @@ fn parse_value(text: &str) -> Option<u32> {
         return u32::from_str_radix(h, 16).ok();
     }
     t.parse::<i64>().ok().filter(|v| (-(1i64 << 31)..1i64 << 32).contains(v)).map(|v| v as u32)
+}
+
+/// The ALU window: the last arithmetic, logic, comparison, shift, multiplication or division
+/// instruction ([`rustemu_mips::cpu::AluTrace`]) with its operands and result in every base.
+pub fn alu_ui(app: &mut App, ui: &mut Ui) {
+    let Some(t) = app.session.mips().and_then(|m| m.cpu.alu) else {
+        ui.weak("No arithmetic or logic instruction executed yet.");
+        return;
+    };
+    let text = disassemble(t.word, t.pc, Style::Named);
+    let mnemonic = text.split_whitespace().next().unwrap_or("").to_string();
+    let ago = app.session.target.instr_count().saturating_sub(t.instr);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(&text).strong().monospace().size(15.0));
+        ui.weak(format!("at {}", hex(t.pc)));
+        if let Some(v) = app.session.view_at(t.pc, false) {
+            let line = format!(
+                "{}  {}",
+                crate::debugger::file_line(app, v.file, v.line),
+                crate::debugger::source_text(app, v.file, v.line)
+            );
+            if ui.link(RichText::new(line).monospace()).clicked() {
+                crate::debugger::show_location(app, v.file, v.line);
+            }
+        }
+        if ago > 0 {
+            ui.weak(format!("({ago} instructions ago)"));
+        }
+    });
+    let reg = |r: u32| format!("${}", REG_NAMES[r as usize & 31]);
+    let (rs, rt, rd) = (t.word >> 21 & 31, t.word >> 16 & 31, t.word >> 11 & 31);
+    let imm = t.word >> 26 != 0 && t.word >> 26 != 0x1C;
+    let m = mnemonic.as_str();
+    // (label, value)
+    let mut rows: Vec<(String, u32)> = Vec::new();
+    match m {
+        "sll" | "srl" | "sra" => rows.extend([(reg(rt), t.a), ("shift amount".into(), t.b)]),
+        "sllv" | "srlv" | "srav" => rows.extend([(reg(rt), t.a), (format!("{} & 31", reg(rs)), t.b)]),
+        "clz" | "clo" => rows.push((reg(rs), t.a)),
+        _ if imm => rows.extend([(reg(rs), t.a), ("immediate".into(), t.b)]),
+        _ => rows.extend([(reg(rs), t.a), (reg(rt), t.b)]),
+    }
+    let operands = rows.len();
+    match (m, t.hi) {
+        ("div" | "divu", Some(hi)) => rows.extend([("LO (quotient)".into(), t.result), ("HI (remainder)".into(), hi)]),
+        ("mul", Some(hi)) => rows.extend([(reg(rd), t.result), ("HI".into(), hi), ("LO".into(), t.result)]),
+        (_, Some(hi)) => rows.extend([("HI".into(), hi), ("LO".into(), t.result)]),
+        _ if t.overflow => rows.push(("result (not written)".into(), t.result)),
+        _ => rows.push((reg(if imm { rt } else { rd }), t.result)),
+    }
+    let font = FontId::monospace(13.0);
+    egui::Grid::new("mips_alu").num_columns(5).spacing([14.0, 3.0]).striped(true).show(ui, |ui| {
+        for h in ["", "hex", "binary", "unsigned", "signed"] {
+            ui.label(RichText::new(h).weak());
+        }
+        ui.end_row();
+        for (i, (name, v)) in rows.into_iter().enumerate() {
+            let style = |s: String| {
+                let t = RichText::new(s).font(font.clone());
+                if i >= operands { t.strong() } else { t }
+            };
+            ui.label(RichText::new(name).weak());
+            ui.label(style(hex(v)));
+            ui.label(style(crate::inspect::bin(v, 32)));
+            ui.label(style(v.to_string()));
+            ui.label(if (v as i32) < 0 { style((v as i32).to_string()) } else { RichText::new("") });
+            ui.end_row();
+        }
+    });
+    let note = match m {
+        _ if t.overflow => {
+            "Signed overflow: the arithmetic overflow exception was raised and the destination kept its value."
+        }
+        "add" | "addi" | "sub" => "Signed: an overflow raises an exception.",
+        "addu" | "addiu" | "subu" => "No overflow check: the result wraps around.",
+        "slt" | "slti" => "1 when the first is less than the second as signed numbers, else 0.",
+        "sltu" | "sltiu" => "1 when the first is less than the second as unsigned numbers, else 0.",
+        "div" | "divu" if t.b == 0 => "Division by zero: no exception, HI and LO are unpredictable (MARS leaves them).",
+        "madd" | "maddu" => "HI:LO = HI:LO + product.",
+        "msub" | "msubu" => "HI:LO = HI:LO − product.",
+        "andi" | "ori" | "xori" => "The immediate is zero-extended.",
+        _ => "",
+    };
+    if !note.is_empty() {
+        ui.add_space(4.0);
+        ui.weak(note);
+    }
 }
 
 /// The Run I/O console: the program's output, the input it has not read yet, and a line to type
@@ -482,8 +595,17 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
         .spacing([10.0, 1.0])
         .striped(true)
         .show(ui, |ui| {
-            for col in ["", "address", "code", "instruction", "source"] {
-                ui.label(RichText::new(col).small().weak());
+            for (col, hint) in [
+                ("", ""),
+                ("address", ""),
+                ("code", "the machine word"),
+                ("basic", "the machine instruction, as MARS's Basic column: a pseudo-instruction of the source (li, la, move, blt…) becomes one or more of them"),
+                ("source", "the source line the instruction comes from"),
+            ] {
+                let r = ui.label(RichText::new(col).small().weak());
+                if !hint.is_empty() {
+                    r.on_hover_text(hint);
+                }
             }
             ui.end_row();
             let t = &*app.session.target;
@@ -525,19 +647,28 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
                 let text = if m.mem.has_code(a) { disassemble(word, a, Style::Named) } else { String::new() };
                 let ins = ui.add(egui::Label::new(strong(text)).sense(egui::Sense::click()));
                 let line = app.session.line_at_addr(a).filter(|(f, _)| *f == 0).map(|(_, l)| l);
-                let src = match (line, source) {
-                    (Some(l), Some(lines)) if app.session.addr_of_line(0, l) == Some(a) => {
-                        // Short: a long line would stretch the window.
-                        let text = lines.get(l as usize - 1).map_or("", |s| s.trim());
-                        let mut text: String = text.chars().take(32).collect();
-                        if text.len() < lines.get(l as usize - 1).map_or(0, |s| s.trim().len()) {
+                let line_text = |l: u32| source.and_then(|lines| lines.get(l as usize - 1)).map_or("", |s| s.trim());
+                match line {
+                    Some(l) if app.session.addr_of_line(0, l) == Some(a) => {
+                        // Short, with single spaces: a long line would stretch the window.
+                        let full = line_text(l).split_whitespace().collect::<Vec<_>>().join(" ");
+                        let mut text: String = full.chars().take(36).collect();
+                        if text.len() < full.len() {
                             text.push('…');
                         }
-                        format!("{l}: {text}")
+                        ui.label(RichText::new(format!("{l}: {text}")).font(font.clone()).weak());
                     }
-                    _ => String::new(),
-                };
-                ui.label(RichText::new(src).font(font.clone()).weak());
+                    // A pseudo-instruction assembled into several instructions: this is not its first.
+                    Some(l) => {
+                        ui.label(RichText::new("  ↳").font(font.clone()).weak()).on_hover_text(format!(
+                            "line {l} ({}) continues: a pseudo-instruction becomes several machine instructions",
+                            line_text(l)
+                        ));
+                    }
+                    None => {
+                        ui.label("");
+                    }
+                }
                 ui.end_row();
                 if addr.clicked() || ins.clicked() {
                     select = Some(a);

@@ -39,14 +39,14 @@ Each tab has one main area and its context.
   - **Last step** — the last executed instruction and its line, what it changed (`BL 0Fh → 0Eh`,
     `BX 000Fh → 000Eh`, `CF 0 → 1`, bytes written to memory), and on the right the line of the next instruction.
     *Why did this happen?* explains the flags (`SUB 0Fh − 01h = 0Eh`, `ZF = 0 (result is not 0)` …),
-    *Open ALU details* opens the ALU details;
+    *Open ALU details* opens the ALU window over the tab;
   - **Code** — *Source* (the source, the default), *Mixed* (every source line above its instructions),
     *Assembly*. The last executed line has a blue bar, the next one (CS:IP) an amber arrow; tapping the left margin
     sets a breakpoint;
   - **CPU** — AX–DX in one cell each: the word on top (AX 001F), its bytes below (AH 00 │ AL 1F); SP BP SI DI,
     CS DS ES SS and IP, all nine flags;
-  - the **Watch, Breakpoints, Call stack, Trace, ALU, Debug log** buttons open one tool under the code (tapping
-    again closes it). If Output does not fit next to the CPU (a 10–11″ iPad in landscape, a narrow window), it
+  - the **Watch, Breakpoints, Call stack, Trace, Debug log** buttons open one tool under the code (tapping
+    again closes it); **ALU** opens the ALU window over the tab. If Output does not fit next to the CPU (a 10–11″ iPad in landscape, a narrow window), it
     becomes such a button too.
 - **Memory** — a hex editor (segment, go to address, search for bytes or text, input in HEX or ASCII, 8/16/32
   bytes per row), a byte inspector, the segment registers, the stack, a map of the 1 MB of memory.
@@ -91,7 +91,8 @@ after *Hide* it does not come back until the next wait).
   from a floppy, writing the boot sector and a `.bin` file, a new floppy — as in the *virtual drive* menu of the
   Emu8086 interface;
 - windows: **Drive C: files** (in the browser), Virtual devices, Variables, Symbol table, Listing, ALU, Stop on
-  condition; **Debug log** — the DEBUG.EXE-style console on the Debugger tab;
+  condition; **Debug log** — the DEBUG.EXE-style console on the Debugger tab (in the MIPS workspace the menu has
+  only its windows: no drive, devices, FPU, debug log or reference);
 - tools: Reference, Calculator, Base converter, ASCII codes;
 - *Desktop layout* — switch to the Emu8086 interface; **Options** — the assembler syntax (auto / Emu8086 / NASM)
   and *all options…*; About.
