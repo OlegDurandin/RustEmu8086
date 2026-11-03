@@ -67,6 +67,73 @@ mod web {
         on_leave.forget();
     }
 
+    /// After a panic (a bug of the application) the page cannot go on: wasm stops there. The
+    /// editor text is stored as the draft of the next visit, and a message over the canvas says
+    /// what happened, with links to reload the page and to report the error. eframe's own panic
+    /// hook (which logs to the console) runs first.
+    fn on_panic() {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            previous(info);
+            let saved = crate::layout::CRASH_DRAFT
+                .with(|d| d.borrow().clone())
+                .zip(local_storage())
+                .is_some_and(|((key, value), s)| s.set_item(key, &value).is_ok());
+            show_crash(&info.to_string(), saved);
+        }));
+    }
+
+    /// The message over the canvas after a panic.
+    fn show_crash(error: &str, saved: bool) {
+        let Some(window) = web_sys::window() else { return };
+        let Some(document) = window.document() else { return };
+        let Some(body) = document.body() else { return };
+        let element = |tag: &str, text: &str| {
+            let e = document.create_element(tag).ok()?;
+            e.set_text_content(Some(text));
+            Some(e)
+        };
+        let Some(panel) = element("div", "") else { return };
+        // The loading message's place and style (index.html).
+        panel.set_id("rustemu_status");
+        let _ = panel.set_attribute("style", "background: rgba(11, 18, 32, 0.92); z-index: 10;");
+        let kept = if saved {
+            "Your program is kept: it opens again when the page is reloaded."
+        } else {
+            "Your program could not be kept (no browser storage): copy it before reloading if you still can."
+        };
+        let parts = [
+            element("strong", "RustEmu8086 stopped because of an error of its own."),
+            element("div", kept),
+            element("pre", error),
+        ];
+        for p in parts.into_iter().flatten() {
+            let _ = panel.append_child(&p);
+        }
+        let location = window.location();
+        let here = format!("{}{}", location.pathname().unwrap_or_default(), location.search().unwrap_or_default());
+        let report = format!(
+            "https://github.com/OlegDurandin/RustEmu8086/issues/new?title={}&body={}",
+            js_sys::encode_uri_component("Error in the web version"),
+            js_sys::encode_uri_component(&format!("```\n{error}\n```\n\nWhat I was doing:\n"))
+        );
+        let links = element("div", "");
+        for (text, href) in [("Reload the page", here), ("Report the error", report)] {
+            if let (Some(links), Some(a)) = (&links, element("a", text)) {
+                let _ = a.set_attribute("href", &href);
+                let _ = a.set_attribute("style", "color: #60a5fa; margin: 0 12px;");
+                if text.starts_with("Report") {
+                    let _ = a.set_attribute("target", "_blank");
+                }
+                let _ = links.append_child(&a);
+            }
+        }
+        if let Some(links) = links {
+            let _ = panel.append_child(&links);
+        }
+        let _ = body.append_child(&panel);
+    }
+
     fn store_layout(tablet: bool) {
         if let Some(s) = local_storage() {
             let _ = s.set_item(LAYOUT_KEY, if tablet { "tablet" } else { "desktop" });
@@ -175,6 +242,8 @@ mod web {
         let storage_ok = storage_works();
         wasm_bindgen_futures::spawn_local(async move {
             let runner = eframe::WebRunner::new();
+            // After eframe's hook is in place: ours runs after it.
+            on_panic();
             save_on_leave(&window, &runner, storage_ok);
             open_links(&window, &runner);
             let started = runner

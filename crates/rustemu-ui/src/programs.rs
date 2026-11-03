@@ -180,6 +180,14 @@ impl App {
 
     /// Writes the draft of the shown workspace.
     fn persist_draft(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Some((key, draft)) = self.draft_record() {
+            self.put(storage, key, draft);
+        }
+    }
+
+    /// The draft of the shown workspace as it is stored: its key and value. The web page keeps
+    /// a copy, to store it when the application stops on a panic.
+    pub fn draft_record(&self) -> Option<(&'static str, String)> {
         let draft = Draft {
             name: self.doc.name.clone(),
             program: self.doc.program.clone(),
@@ -188,9 +196,7 @@ impl App {
             saved: (self.doc.saved_text != self.doc.text).then(|| self.doc.saved_text.clone()),
             from_link: self.from_link(),
         };
-        if let Ok(draft) = ron::ser::to_string(&draft) {
-            self.put(storage, draft_key(self.arch()), draft);
-        }
+        Some((draft_key(self.arch()), ron::ser::to_string(&draft).ok()?))
     }
 
     /// Restores "my programs" and the editor of the last visit (the browser).
