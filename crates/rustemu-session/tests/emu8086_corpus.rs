@@ -114,7 +114,7 @@ fn all_examples_run() {
                 Event::Continue => {}
             }
         }
-        for l in &s.x86().unwrap().log {
+        for l in s.x86().unwrap().log.lines() {
             problems.push(format!("{name}: {l}"));
         }
         let out: String =
