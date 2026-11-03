@@ -9,6 +9,7 @@
 #![warn(missing_docs)]
 
 pub mod code;
+mod detect;
 pub mod expr;
 pub mod mips;
 pub mod step;
@@ -16,6 +17,7 @@ pub mod x86;
 
 use std::collections::HashMap;
 
+pub use detect::detect_arch;
 use rustemu_asm::{LineInfo, Program, SymbolKind};
 use rustemu_core::Machine;
 use rustemu_core::machine::PROGRAM_SEG;

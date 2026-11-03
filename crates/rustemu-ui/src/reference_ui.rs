@@ -1,10 +1,17 @@
-//! Reference window (Help menu, F1): instructions, interrupts, directives, the NASM syntax guide
-//! and the quick reference.
+//! Reference window (Help menu, F1): for the 8086 instructions, interrupts, directives, the NASM
+//! syntax guide and the quick reference; for MIPS32 instructions (with their forms and what the
+//! pseudo-instructions become, from the assembler's table), system calls, directives and registers.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use egui::{Align, FontId, RichText, Ui};
 
-use crate::highlight::{Palette, highlight};
-use crate::reference::{self as r, DIRECTIVES, Group, INSTRUCTIONS, INTERRUPTS, Lang, NASM_GUIDE, Topic};
+use crate::highlight::{Palette, highlight, highlight_mips};
+use crate::reference::{
+    self as r, DIRECTIVES, Group, INSTRUCTIONS, INTERRUPTS, Lang, MIPS_DIRECTIVES, MIPS_INSTRUCTIONS, MipsGroup,
+    NASM_GUIDE, SYSCALLS, Topic,
+};
 
 /// Tabs of the reference window.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -20,6 +27,10 @@ pub enum Tab {
     Nasm,
     /// The quick reference (help text).
     Quick,
+    /// MIPS: the services of `syscall`.
+    Syscalls,
+    /// MIPS: the registers and the memory map.
+    Registers,
 }
 
 /// State of the reference window: the tab, the search and the article shown.
@@ -27,6 +38,8 @@ pub enum Tab {
 pub struct RefState {
     /// Bring the reference to the front (the panels layout shows it as a tab).
     pub raise: bool,
+    /// The MIPS32 reference is shown (otherwise the 8086's); follows the workspace.
+    pub mips: bool,
     /// The tab.
     pub tab: Tab,
     /// The search text.
@@ -43,12 +56,8 @@ impl RefState {
     /// Opens the window at the article `t`.
     pub fn show(&mut self, t: Topic) {
         self.raise = true;
-        self.tab = match t {
-            Topic::Instr(_) => Tab::Instructions,
-            Topic::Directive(_) => Tab::Directives,
-            Topic::Int(..) => Tab::Interrupts,
-            Topic::Nasm(_) => Tab::Nasm,
-        };
+        self.mips = t.is_mips();
+        self.tab = tab_of(t);
         self.topic = Some(t);
         self.search.clear();
         self.scroll = true;
@@ -61,20 +70,53 @@ impl RefState {
     }
 }
 
+/// The tab of an article.
+fn tab_of(t: Topic) -> Tab {
+    match t {
+        Topic::Instr(_) | Topic::MipsInstr(_) => Tab::Instructions,
+        Topic::Directive(_) | Topic::MipsDirective(_) => Tab::Directives,
+        Topic::Int(..) => Tab::Interrupts,
+        Topic::Nasm(_) => Tab::Nasm,
+        Topic::Syscall(_) => Tab::Syscalls,
+    }
+}
+
 pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
     let l = st.lang;
     ui.horizontal(|ui| {
-        for (t, n) in [
-            (Tab::Instructions, l.pick("instructions", "инструкции")),
-            (Tab::Interrupts, l.pick("interrupts", "прерывания")),
-            (Tab::Directives, l.pick("directives", "директивы")),
-            (Tab::Nasm, l.pick("NASM syntax", "синтаксис NASM")),
-            (Tab::Quick, l.pick("quick reference", "шпаргалка")),
-        ] {
+        // The processor; its own tabs.
+        let mips = st.mips;
+        ui.selectable_value(&mut st.mips, false, "8086").on_hover_text("Intel 8086 (Emu8086)");
+        ui.selectable_value(&mut st.mips, true, "MIPS32").on_hover_text("MIPS32 (MARS)");
+        if st.mips != mips {
+            st.tab = Tab::Instructions;
+            st.search.clear();
+        }
+        ui.separator();
+        let tabs: &[(Tab, &str)] = if st.mips {
+            &[
+                (Tab::Instructions, l.pick("instructions", "инструкции")),
+                (Tab::Syscalls, l.pick("system calls", "системные вызовы")),
+                (Tab::Directives, l.pick("directives", "директивы")),
+                (Tab::Registers, l.pick("registers & memory", "регистры и память")),
+            ]
+        } else {
+            &[
+                (Tab::Instructions, l.pick("instructions", "инструкции")),
+                (Tab::Interrupts, l.pick("interrupts", "прерывания")),
+                (Tab::Directives, l.pick("directives", "директивы")),
+                (Tab::Nasm, l.pick("NASM syntax", "синтаксис NASM")),
+                (Tab::Quick, l.pick("quick reference", "шпаргалка")),
+            ]
+        };
+        if !tabs.iter().any(|(t, _)| *t == st.tab) {
+            st.tab = Tab::Instructions;
+        }
+        for &(t, n) in tabs {
             ui.selectable_value(&mut st.tab, t, n);
         }
         ui.separator();
-        if st.tab != Tab::Quick {
+        if !matches!(st.tab, Tab::Quick | Tab::Registers) {
             ui.add(
                 egui::TextEdit::singleline(&mut st.search).hint_text(l.pick("search", "поиск")).desired_width(160.0),
             );
@@ -92,6 +134,12 @@ pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
         });
         return;
     }
+    if st.tab == Tab::Registers {
+        egui::ScrollArea::vertical().id_salt("ref_registers").auto_shrink([false, false]).show(ui, |ui| {
+            registers_article(ui, l);
+        });
+        return;
+    }
     let scroll = std::mem::take(&mut st.scroll);
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
@@ -101,6 +149,9 @@ pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
                 .auto_shrink([false, false])
                 .max_height(ui.available_height())
                 .show(ui, |ui| match st.tab {
+                    Tab::Instructions if st.mips => mips_instruction_list(st, ui, scroll),
+                    Tab::Directives if st.mips => mips_directive_list(st, ui, scroll),
+                    Tab::Syscalls => syscall_list(st, ui, scroll),
                     Tab::Instructions => instruction_list(st, ui, scroll),
                     Tab::Interrupts => interrupt_list(st, ui, scroll),
                     Tab::Nasm => nasm_list(st, ui, scroll),
@@ -109,14 +160,9 @@ pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
         });
         ui.separator();
         ui.vertical(|ui| {
-            let topic = st.topic.filter(|t| {
-                matches!(
-                    (t, st.tab),
-                    (Topic::Instr(_), Tab::Instructions)
-                        | (Topic::Directive(_), Tab::Directives | Tab::Nasm)
-                        | (Topic::Int(..), Tab::Interrupts)
-                        | (Topic::Nasm(_), Tab::Nasm)
-                )
+            // (The NASM tab lists NASM directives too.)
+            let topic = st.topic.filter(|&t| {
+                t.is_mips() == st.mips && (tab_of(t) == st.tab || (st.tab == Tab::Nasm && tab_of(t) == Tab::Directives))
             });
             let salt = match topic {
                 Some(Topic::Int(i, _)) => format!("int{i}"),
@@ -128,6 +174,10 @@ pub(crate) fn reference_ui(st: &mut RefState, ui: &mut Ui) {
                     Some(Topic::Directive(i)) => directive_article(ui, i, l),
                     Some(Topic::Int(i, f)) => interrupt_article(ui, i, f, scroll, l),
                     Some(Topic::Nasm(i)) => nasm_article(ui, i, l),
+                    Some(Topic::MipsInstr(i)) => mips_instruction_article(ui, i, l),
+                    Some(Topic::MipsDirective(i)) => mips_directive_article(ui, i, l),
+                    Some(Topic::Syscall(i)) => syscall_article(ui, i, l),
+                    None if st.mips => mips_intro(ui, st.tab, l),
                     // The guide opens at its overview.
                     None if st.tab == Tab::Nasm => nasm_article(ui, 0, l),
                     None => intro(ui, st.tab, l),
@@ -284,7 +334,7 @@ fn nasm_article(ui: &mut Ui, i: usize, l: Lang) {
     }
     if !s.example.is_empty() {
         section(ui, l.pick("Example", "Пример"));
-        code_block(ui, s.example, l);
+        code_block(ui, s.example, l, false);
     }
 }
 
@@ -341,7 +391,7 @@ fn instruction_article(ui: &mut Ui, i: usize, l: Lang) {
     section(ui, l.pick("Flags", "Флаги"));
     flags_table(ui, e.flags, l);
     section(ui, l.pick("Example", "Пример"));
-    code_block(ui, e.example_in(l), l);
+    code_block(ui, e.example_in(l), l, false);
 }
 
 /// The flags table of an instruction (O D I T S Z A P C with their effect).
@@ -376,11 +426,16 @@ pub fn flags_table(ui: &mut Ui, flags: &str, l: Lang) {
     ));
 }
 
-fn code_block(ui: &mut Ui, code: &str, l: Lang) {
+fn code_block(ui: &mut Ui, code: &str, l: Lang, mips: bool) {
     let pal = Palette::for_theme(ui.visuals().dark_mode);
+    let job = if mips {
+        highlight_mips(code, FontId::monospace(12.5), &pal)
+    } else {
+        highlight(code, FontId::monospace(12.5), &pal)
+    };
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.horizontal_top(|ui| {
-            ui.add(egui::Label::new(highlight(code, FontId::monospace(12.5), &pal)));
+            ui.add(egui::Label::new(job));
             ui.add_space(16.0);
             if ui
                 .small_button(l.pick("copy", "копировать"))
@@ -401,7 +456,7 @@ fn directive_article(ui: &mut Ui, i: usize, l: Lang) {
     ui.add_space(6.0);
     ui.label(d.description_in(l));
     section(ui, l.pick("Example", "Пример"));
-    code_block(ui, d.example_in(l), l);
+    code_block(ui, d.example_in(l), l, false);
 }
 
 fn interrupt_article(ui: &mut Ui, i: usize, func: Option<u16>, scroll: bool, l: Lang) {
@@ -411,7 +466,7 @@ fn interrupt_article(ui: &mut Ui, i: usize, func: Option<u16>, scroll: bool, l: 
     ui.label(int.description_in(l));
     if int.functions.is_empty() {
         section(ui, l.pick("Example", "Пример"));
-        code_block(ui, &format!("int {:02X}h", int.number), l);
+        code_block(ui, &format!("int {:02X}h", int.number), l, false);
         return;
     }
     ui.weak(format!("{} {}.", l.pick("The function number is passed in", "Номер функции передаётся в"), int.selector));
@@ -439,10 +494,275 @@ fn interrupt_article(ui: &mut Ui, i: usize, func: Option<u16>, scroll: bool, l: 
                     }
                 }
             });
-            code_block(ui, t.example, l);
+            code_block(ui, t.example, l, false);
         });
         if sel && scroll {
             ui.scroll_to_rect(resp.response.rect.expand(8.0), Some(Align::TOP));
         }
     }
+}
+
+// ---- MIPS32 -------------------------------------------------------------------------------------
+
+fn mips_instruction_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
+    let l = st.lang;
+    for g in MipsGroup::ALL {
+        let items: Vec<usize> = (0..MIPS_INSTRUCTIONS.len())
+            .filter(|&i| MIPS_INSTRUCTIONS[i].group == g)
+            .filter(|&i| {
+                let e = &MIPS_INSTRUCTIONS[i];
+                let mut texts = vec![e.name, e.summary_in(l)];
+                texts.extend(e.aliases);
+                matches(&st.search, &texts)
+            })
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        ui.label(RichText::new(g.title_in(l)).strong());
+        for i in items {
+            let e = &MIPS_INSTRUCTIONS[i];
+            let name = std::iter::once(e.name).chain(e.aliases.iter().copied()).collect::<Vec<_>>().join(" / ");
+            list_item(st, ui, Topic::MipsInstr(i), RichText::new(name).monospace(), scroll);
+        }
+        ui.add_space(4.0);
+    }
+}
+
+fn mips_directive_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
+    for (i, d) in MIPS_DIRECTIVES.iter().enumerate() {
+        if matches(&st.search, &[d.name, d.summary_in(st.lang)]) {
+            list_item(st, ui, Topic::MipsDirective(i), RichText::new(d.name).monospace(), scroll);
+        }
+    }
+}
+
+fn syscall_list(st: &mut RefState, ui: &mut Ui, scroll: bool) {
+    let l = st.lang;
+    for (i, s) in SYSCALLS.iter().enumerate() {
+        let t = s.text_in(l);
+        if !matches(&st.search, &[t.name, s.name, &s.code.to_string()]) {
+            continue;
+        }
+        let text = RichText::new(format!("{:>2}  {}", s.code, t.name)).monospace();
+        // The services the emulator does not perform yet are grey.
+        let text = if s.supported { text } else { text.weak() };
+        list_item(st, ui, Topic::Syscall(i), text, scroll);
+    }
+}
+
+fn mips_intro(ui: &mut Ui, tab: Tab, l: Lang) {
+    ui.label(match tab {
+        Tab::Instructions => l.pick(
+            "MIPS32 instructions as MARS assembles them: the machine instructions and the pseudo-instructions the assembler turns into them. Each article lists the forms and what they become.",
+            "Инструкции MIPS32 так, как их собирает MARS: машинные инструкции и псевдоинструкции, которые ассемблер в них превращает. В каждой статье — формы и во что они собираются.",
+        ),
+        Tab::Syscalls => l.pick(
+            "The services of syscall: put the number in $v0, the arguments in $a0..$a3, then execute syscall. Grey ones are not supported yet.",
+            "Сервисы syscall: номер — в $v0, аргументы — в $a0..$a3, затем syscall. Серые пока не поддерживаются.",
+        ),
+        _ => l.pick("Directives of the MARS assembler.", "Директивы ассемблера MARS."),
+    });
+    ui.add_space(6.0);
+    ui.weak(l.pick(
+        "In the editor: hover over an instruction, a directive or a syscall to see a summary; press F1 or ⌘-click to open its article here.",
+        "В редакторе: наведите мышь на инструкцию, директиву или syscall — появится краткое описание; F1 или ⌘-клик открывает статью здесь.",
+    ));
+}
+
+/// What the assembler makes of an example form: its machine instructions (None when it does not
+/// assemble alone). Cached: the forms are drawn every frame.
+fn expansion(example: &str) -> Option<Vec<String>> {
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, Option<Vec<String>>>> = RefCell::new(HashMap::new());
+    }
+    CACHE.with(|c| {
+        c.borrow_mut()
+            .entry(example.to_string())
+            .or_insert_with(|| {
+                // The forms branch to `label`.
+                let p = rustemu_mips::asm::assemble(&format!(".text\n{example}\nlabel:\n")).ok()?;
+                let st = p.statements.first()?;
+                Some(
+                    st.words
+                        .iter()
+                        .enumerate()
+                        .map(|(k, &w)| {
+                            rustemu_mips::disasm::disassemble(
+                                w,
+                                st.addr + 4 * k as u32,
+                                rustemu_mips::disasm::Style::Named,
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .clone()
+    })
+}
+
+fn mips_instruction_article(ui: &mut Ui, i: usize, l: Lang) {
+    let e = &MIPS_INSTRUCTIONS[i];
+    ui.horizontal(|ui| {
+        ui.heading(RichText::new(e.name).monospace());
+        ui.weak(e.group.title_in(l));
+    });
+    also(ui, e.aliases, l);
+    ui.label(RichText::new(e.summary_in(l)).strong());
+    ui.add_space(6.0);
+    ui.label(e.description_in(l));
+    section(ui, l.pick("Forms", "Формы"));
+    ui.weak(l.pick(
+        "As MARS's table writes them; a pseudo-instruction shows the machine instructions it becomes.",
+        "Как их записывает таблица MARS; у псевдоинструкции показано, в какие машинные инструкции она собирается.",
+    ));
+    let table = rustemu_mips::asm::Table::get();
+    egui::Grid::new(("mips_forms", i)).striped(true).spacing([16.0, 3.0]).show(ui, |ui| {
+        for name in std::iter::once(e.name).chain(e.aliases.iter().copied()) {
+            for f in table.forms(name).unwrap_or_default() {
+                ui.monospace(&f.example);
+                match &f.def {
+                    rustemu_mips::asm::Def::Basic(_) => {
+                        ui.weak(l.pick("machine instruction", "машинная инструкция"));
+                    }
+                    rustemu_mips::asm::Def::Pseudo { .. } => {
+                        let text =
+                            expansion(&f.example).map_or_else(|| "?".to_string(), |v| format!("→ {}", v.join("; ")));
+                        ui.label(RichText::new(text).monospace().color(ui.visuals().hyperlink_color));
+                    }
+                }
+                ui.end_row();
+            }
+        }
+    });
+    section(ui, l.pick("Example", "Пример"));
+    code_block(ui, e.example_in(l), l, true);
+}
+
+fn mips_directive_article(ui: &mut Ui, i: usize, l: Lang) {
+    let d = &MIPS_DIRECTIVES[i];
+    ui.heading(RichText::new(d.name).monospace());
+    ui.label(RichText::new(d.summary_in(l)).strong());
+    ui.add_space(6.0);
+    ui.label(d.description_in(l));
+    section(ui, l.pick("Example", "Пример"));
+    code_block(ui, d.example_in(l), l, true);
+}
+
+fn syscall_article(ui: &mut Ui, i: usize, l: Lang) {
+    let s = &SYSCALLS[i];
+    let t = s.text_in(l);
+    ui.heading(RichText::new(format!("syscall {}", s.code)).monospace());
+    ui.label(RichText::new(t.name).strong());
+    if !s.supported {
+        ui.colored_label(
+            crate::colors::warn(ui),
+            l.pick(
+                "Not supported yet: the program stops with an error.",
+                "Пока не поддерживается: программа останавливается с ошибкой.",
+            ),
+        );
+    }
+    ui.add_space(6.0);
+    egui::Grid::new(("syscall", s.code)).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+        ui.weak("$v0");
+        ui.monospace(s.code.to_string());
+        ui.end_row();
+        for (k, v) in [(l.pick("arguments", "аргументы"), t.input), (l.pick("result", "результат"), t.output)]
+        {
+            if !v.is_empty() {
+                ui.weak(k);
+                ui.label(v);
+                ui.end_row();
+            }
+        }
+    });
+    if !t.note.is_empty() {
+        ui.add_space(6.0);
+        ui.label(t.note);
+    }
+    if !t.example.is_empty() {
+        section(ui, l.pick("Example", "Пример"));
+        code_block(ui, t.example, l, true);
+    }
+}
+
+/// The registers (number, name, use), PC / HI / LO and the memory map of MARS.
+fn registers_article(ui: &mut Ui, l: Lang) {
+    ui.heading(l.pick("Registers", "Регистры"));
+    ui.label(l.pick(
+        "32 general purpose registers of 32 bits. Write them by name ($t0) or number ($8); the use of each is a convention of the MIPS calling standard, except $zero, which is always 0.",
+        "32 регистра общего назначения по 32 бита. Их пишут по имени ($t0) или номеру ($8); назначение каждого — соглашение о вызовах MIPS, кроме $zero, который всегда равен 0.",
+    ));
+    ui.add_space(6.0);
+    egui::Grid::new("mips_regs_ref").striped(true).spacing([16.0, 3.0]).show(ui, |ui| {
+        for h in [l.pick("number", "номер"), l.pick("name", "имя"), l.pick("use", "назначение")] {
+            ui.label(RichText::new(h).strong());
+        }
+        ui.end_row();
+        for (n, name) in rustemu_mips::cpu::REG_NAMES.iter().enumerate() {
+            ui.monospace(format!("${n}"));
+            ui.monospace(format!("${name}"));
+            ui.label(r::register_role(n, l));
+            ui.end_row();
+        }
+        for (name, en, ru) in [
+            (
+                "PC",
+                "program counter: the address of the next instruction",
+                "счётчик команд: адрес следующей инструкции",
+            ),
+            ("HI", "mult: the high word; div: the remainder", "mult: старшее слово; div: остаток"),
+            ("LO", "mult: the low word; div: the quotient", "mult: младшее слово; div: частное"),
+        ] {
+            ui.label("");
+            ui.monospace(name);
+            ui.label(l.pick(en, ru));
+            ui.end_row();
+        }
+    });
+    ui.add_space(4.0);
+    ui.label(l.pick(
+        "Procedures: arguments in $a0..$a3, results in $v0 (and $v1); jal puts the return address in $ra, jr $ra returns. A procedure keeps $s0..$s7, $sp, $fp and $ra as they were (saving them on the stack when it uses them); $t0..$t9 may change.",
+        "Процедуры: аргументы — в $a0..$a3, результат — в $v0 (и $v1); jal кладёт адрес возврата в $ra, jr $ra возвращает. Процедура сохраняет $s0..$s7, $sp, $fp и $ra (кладёт их в стек, если использует); $t0..$t9 могут измениться.",
+    ));
+    section(ui, l.pick("Memory (as MARS lays it out)", "Память (как её размечает MARS)"));
+    egui::Grid::new("mips_memory_ref").striped(true).spacing([16.0, 3.0]).show(ui, |ui| {
+        for (addr, en, ru) in [
+            (
+                "0x00400000",
+                ".text: the program's instructions; execution starts here",
+                ".text: инструкции программы; выполнение начинается здесь",
+            ),
+            ("0x10000000", "global area (.extern)", "глобальная область (.extern)"),
+            ("0x10008000", "$gp points here", "сюда указывает $gp"),
+            ("0x10010000", ".data: the program's data", ".data: данные программы"),
+            (
+                "0x10040000",
+                "heap: the blocks of sbrk (syscall 9), growing up",
+                "куча: блоки sbrk (syscall 9), растёт вверх",
+            ),
+            ("0x7FFFEFFC", "$sp at the start: the stack grows down", "$sp в начале: стек растёт вниз"),
+            ("0x80000000", ".ktext: kernel code", ".ktext: код ядра"),
+            (
+                "0x80000180",
+                "the exception handler, when there is code there",
+                "обработчик исключений, если там есть код",
+            ),
+            ("0x90000000", ".kdata: kernel data", ".kdata: данные ядра"),
+            (
+                "0xFFFF0000",
+                "memory-mapped devices of MARS (not emulated yet)",
+                "устройства MARS в памяти (пока не эмулируются)",
+            ),
+        ] {
+            ui.monospace(addr);
+            ui.label(l.pick(en, ru));
+            ui.end_row();
+        }
+    });
+    ui.weak(l.pick(
+        "Words are little-endian. Reading or writing outside these segments, or a word at an address that is not a multiple of 4, raises an address error exception.",
+        "Слова хранятся младшим байтом вперёд. Чтение или запись вне этих сегментов, а также слово по адресу, не кратному 4, вызывают исключение address error.",
+    ));
 }

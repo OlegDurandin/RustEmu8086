@@ -349,31 +349,36 @@ fn context_menu(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput, t
     });
 }
 
-/// MIPS: the value of a register or label, or the forms of an instruction with MARS's
-/// descriptions.
-fn mips_hover(app: &App, word: &str, out: &egui::text_edit::TextEditOutput) {
+/// MIPS: the value of a register or label, or the reference article of an instruction (with its
+/// forms), a directive or the service of a `syscall`; ⌘-click opens the article.
+fn mips_hover(app: &mut App, word: &str, ci: usize, out: &egui::text_edit::TextEditOutput, cmd_click: bool) {
     if let Some(text) = value_hover(app, word) {
         out.response.response.clone().on_hover_ui_at_pointer(|ui| {
             ui.label(RichText::new(text).monospace());
         });
         return;
     }
-    let Some(forms) = rustemu_mips::asm::Table::get().forms(word) else { return };
+    let Some(topic) = crate::reference::mips_topic_at(&app.doc.text, ci) else { return };
+    let (title, details) = topic.tooltip(app.reference.lang);
+    let forms = match topic {
+        crate::reference::Topic::MipsInstr(_) => rustemu_mips::asm::Table::get().forms(word).unwrap_or_default(),
+        _ => &[],
+    };
     out.response.response.clone().on_hover_ui_at_pointer(|ui| {
+        ui.set_max_width(460.0);
+        ui.label(RichText::new(title).strong().monospace());
+        ui.label(details);
         for f in forms.iter().take(6) {
-            let help = match &f.def {
-                rustemu_mips::asm::Def::Basic(b) => b.help,
-                rustemu_mips::asm::Def::Pseudo { help, .. } => help.as_str(),
-            };
-            ui.label(RichText::new(&f.example).monospace().strong());
-            if !help.is_empty() {
-                ui.label(help);
-            }
+            ui.label(RichText::new(&f.example).monospace());
         }
         if forms.len() > 6 {
             ui.weak(format!("and {} more forms", forms.len() - 6));
         }
+        ui.weak("F1 or ⌘-click: open the reference");
     });
+    if cmd_click {
+        app.reference.show(topic);
+    }
 }
 
 /// Value of a register or program variable under the mouse while a program is loaded.
@@ -444,7 +449,7 @@ fn hover_help(app: &mut App, ui: &Ui, out: &egui::text_edit::TextEditOutput) {
     let line_text = app.doc.text.lines().nth(line - 1).unwrap_or("").to_ascii_lowercase();
     let cmd_click = out.response.clicked() && ui.input(|i| i.modifiers.command);
     if app.session.mips().is_some() {
-        return mips_hover(app, &word, out);
+        return mips_hover(app, &word, ci, out, cmd_click);
     }
     if line_text.contains("include") && line_text.contains("emu8086") {
         out.response.response.clone().on_hover_ui_at_pointer(|ui| {

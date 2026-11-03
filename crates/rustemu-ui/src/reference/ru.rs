@@ -1,11 +1,11 @@
 //! The language of the reference and its Russian text. The English text is in the entries
 //! themselves; the Russian one is looked up by name (instructions, directives), by number
-//! (interrupts and functions) or by position (NASM guide). A missing translation falls back to
+//! (interrupts and functions, system calls, registers) or by position (NASM guide). A missing translation falls back to
 //! English (the tests check that there is none).
 
 use serde::{Deserialize, Serialize};
 
-use super::{Directive, Function, Group, Instr, Interrupt, NASM_GUIDE};
+use super::{Directive, Function, Group, Instr, Interrupt, MipsDirective, MipsGroup, MipsInstr, NASM_GUIDE, Syscall};
 
 /// Language of the reference window and of the editor tooltips.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
@@ -235,5 +235,98 @@ pub fn syntax_in(form: &'static str, lang: Lang) -> std::borrow::Cow<'static, st
     match WORDS.iter().find(|(en, _)| form.contains(en)) {
         Some((en, ru)) if lang == Lang::Ru => form.replace(en, ru).into(),
         _ => form.into(),
+    }
+}
+
+impl MipsInstr {
+    pub(super) fn ru(&self) -> Option<&'static Text> {
+        text(super::ru_mips::INSTRUCTIONS, self.name)
+    }
+    /// The summary in `lang` (English when there is no translation).
+    pub fn summary_in(&self, lang: Lang) -> &'static str {
+        choose(lang, self.summary, self.ru().map(|t| t.summary))
+    }
+    /// The article in `lang`.
+    pub fn description_in(&self, lang: Lang) -> &'static str {
+        choose(lang, self.description, self.ru().map(|t| t.description))
+    }
+    /// The example in `lang` (comments translated).
+    pub fn example_in(&self, lang: Lang) -> &'static str {
+        choose(lang, self.example, self.ru().map(|t| t.example))
+    }
+}
+
+impl MipsDirective {
+    pub(super) fn ru(&self) -> Option<&'static Text> {
+        text(super::ru_mips::DIRECTIVES, self.name)
+    }
+    /// The summary in `lang` (English when there is no translation).
+    pub fn summary_in(&self, lang: Lang) -> &'static str {
+        choose(lang, self.summary, self.ru().map(|t| t.summary))
+    }
+    /// The article in `lang`.
+    pub fn description_in(&self, lang: Lang) -> &'static str {
+        choose(lang, self.description, self.ru().map(|t| t.description))
+    }
+    /// The example in `lang` (comments translated).
+    pub fn example_in(&self, lang: Lang) -> &'static str {
+        choose(lang, self.example, self.ru().map(|t| t.example))
+    }
+}
+
+/// A system call in `lang`.
+pub struct SyscallText {
+    /// Name.
+    pub name: &'static str,
+    /// Arguments.
+    pub input: &'static str,
+    /// Results.
+    pub output: &'static str,
+    /// What else to know.
+    pub note: &'static str,
+    /// Example code.
+    pub example: &'static str,
+}
+
+impl Syscall {
+    pub(super) fn ru(&self) -> Option<&'static super::ru_mips::SysText> {
+        super::ru_mips::SYSCALLS.iter().find(|s| s.code == self.code)
+    }
+    /// The texts of the service in `lang`.
+    pub fn text_in(&self, lang: Lang) -> SyscallText {
+        let ru = self.ru();
+        SyscallText {
+            name: choose(lang, self.name, ru.map(|s| s.name)),
+            input: choose(lang, self.input, ru.map(|s| s.input)),
+            output: choose(lang, self.output, ru.map(|s| s.output)),
+            note: choose(lang, self.note, ru.map(|s| s.note)),
+            example: choose(lang, self.example, ru.map(|s| s.example)),
+        }
+    }
+}
+
+/// What general purpose register `r` (0..31) is for, in `lang`.
+pub fn register_role(r: usize, lang: Lang) -> &'static str {
+    match lang {
+        Lang::En => super::REGISTER_ROLES[r],
+        Lang::Ru => super::ru_mips::REGISTER_ROLES[r],
+    }
+}
+
+impl MipsGroup {
+    /// Title of the group in `lang`.
+    pub fn title_in(self, lang: Lang) -> &'static str {
+        let (en, ru) = match self {
+            MipsGroup::Arithmetic => ("Arithmetic", "Арифметика"),
+            MipsGroup::Logic => ("Logic", "Логика"),
+            MipsGroup::Shift => ("Shifts and rotations", "Сдвиги и вращения"),
+            MipsGroup::Compare => ("Comparisons and bit counts", "Сравнения и подсчёт битов"),
+            MipsGroup::Move => ("Constants and moves", "Константы и пересылки"),
+            MipsGroup::Memory => ("Loads and stores", "Загрузка и сохранение"),
+            MipsGroup::Branch => ("Branches", "Условные переходы"),
+            MipsGroup::Jump => ("Jumps and calls", "Переходы и вызовы"),
+            MipsGroup::System => ("System, traps, exceptions", "Система, ловушки, исключения"),
+        };
+        lang.pick(en, ru)
     }
 }

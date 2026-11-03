@@ -2,7 +2,7 @@
 
 **English** · [Русский](Командная-строка)
 
-`rustemu` assembles, runs and disassembles programs without windows — handy for checking assignments and for
+`rustemu` assembles, runs and disassembles programs — for the 8086 and for [MIPS32](MIPS32) — without windows — handy for checking assignments and for
 scripts.
 
 Where to get it:
@@ -38,6 +38,7 @@ rustemu run sum.asm --trace                  # every instruction with registers
 | `--input <text>` | keyboard input (`\n` is Enter); without it — stdin |
 | `--args <text>` | DOS command-line parameters (PSP:80h) |
 | `--max <n>` | instruction limit (default 100 000 000) |
+| `--regs` | print the registers at the end (to stderr) |
 | `--screen` | print the final text screen instead of the output stream |
 | `--trace` | print every executed instruction |
 | `--timer-irq` | enable IRQ0 (INT 08h / 1Ch) 18.2 times a second |
@@ -60,6 +61,29 @@ A trace line looks like this:
 ```sh
 rustemu disasm hello.com
 rustemu disasm boot.bin --org 7C00
+```
+
+## MIPS32 programs
+
+`.s` files, and sources written for MIPS (registers like `$t0`, `syscall`), are assembled and run as MIPS32 programs
+in the MARS dialect; `--arch mips` or `--arch 8086` says it explicitly.
+
+```sh
+rustemu asm sort.s -l -s                     # check; listing (.lst, MARS's text segment) + symbols
+rustemu asm sort.s -o sort.bin               # the text segment as binary (MARS's dump .text)
+rustemu run sum.s --input '100\n'            # Run I/O input; \n = Enter
+rustemu run fibonacci.s --regs               # print the registers at the end
+rustemu run hello.s --trace                  # every instruction with $v0 $a0 $t0 $t1 $sp
+rustemu disasm sort.bin --arch mips          # from 0x00400000; --org for another address
+rustemu disasm sort.bin --arch mips --mars   # MARS's basic notation: $8, branch offsets
+```
+
+The exit code is the code of `exit2` (syscall 17), 0 after `exit` (syscall 10) or when the program runs past its
+last instruction; an exception without a handler prints the error and returns 5. File services (13–16) work in
+the program's folder. A trace line:
+
+```
+00400004  3c011001  lui $at, 0x1001              v0=00000004 a0=00000000 t0=00000000 t1=00000000 sp=7fffeffc
 ```
 
 `rustemu` without arguments prints a short help.

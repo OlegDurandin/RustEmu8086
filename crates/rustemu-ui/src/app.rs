@@ -24,7 +24,8 @@ mod session;
 mod shortcuts;
 mod storage;
 
-pub use arch::{OpenAs, Workspace, detect_arch};
+pub use arch::{OpenAs, Workspace};
+pub use rustemu_session::detect_arch;
 
 /// Assembler syntax (options window).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]

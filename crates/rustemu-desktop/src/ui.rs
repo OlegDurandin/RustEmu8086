@@ -199,8 +199,18 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
         ui.menu_button("Help", |ui| {
             use rustemu_ui::reference_ui::Tab;
             if app.arch() != Arch::I8086 {
-                // The reference describes the 8086 (BIOS, DOS, Emu8086's directives).
-                if ui.button("MARS documentation (MIPS)").clicked() {
+                for (tab, label) in [
+                    (Tab::Instructions, "MIPS instructions (F1)"),
+                    (Tab::Syscalls, "System calls (syscall)"),
+                    (Tab::Directives, "Assembler directives"),
+                    (Tab::Registers, "Registers and memory"),
+                ] {
+                    if ui.button(label).clicked() {
+                        app.reference.mips = true;
+                        app.reference.show_tab(tab);
+                    }
+                }
+                if ui.button("MARS documentation (web)").clicked() {
                     rustemu_ui::platform::open_url(rustemu_ui::app::MARS_URL);
                 }
                 ui.separator();
@@ -209,6 +219,7 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
                 }
                 return;
             }
+            app.reference.mips = false;
             for (tab, label) in [
                 (Tab::Instructions, "Instruction set (F1)"),
                 (Tab::Interrupts, "BIOS and DOS interrupts"),
@@ -376,9 +387,12 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
         if ui.button("🔧 options").clicked() {
             app.dialogs.options = !app.dialogs.options;
         }
-        if app.arch() == Arch::I8086
-            && ui.button("❓ help").on_hover_text("Instructions, interrupts, directives (F1)").clicked()
-        {
+        let hint = match app.arch() {
+            Arch::I8086 => "Instructions, interrupts, directives (F1)",
+            Arch::Mips32 => "Instructions, system calls, directives, registers (F1)",
+        };
+        if ui.button("❓ help").on_hover_text(hint).clicked() {
+            app.reference.mips = app.arch() == Arch::Mips32;
             app.windows[Tool::Reference] = !app.windows[Tool::Reference];
         }
         if ui.button("ℹ about").clicked() {

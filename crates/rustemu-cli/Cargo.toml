@@ -12,3 +12,4 @@ path = "src/main.rs"
 rustemu-core.workspace = true
 rustemu-asm.workspace = true
 rustemu-session.workspace = true
+rustemu-mips.workspace = true
