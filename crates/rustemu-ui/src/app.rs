@@ -560,6 +560,8 @@ pub struct Web {
     pub drive_preview: Option<String>,
     /// "delete all" in the "drive C:" window waits for confirmation.
     pub drive_confirm_clear: bool,
+    /// [`rustemu_mips::files::Files::generation`] of the MIPS files last copied to drive C:.
+    pub(crate) mips_files_synced: u64,
 }
 
 /// What the front end sets: its kind and its look.
