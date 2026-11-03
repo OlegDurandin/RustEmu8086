@@ -98,6 +98,9 @@ pub struct Machine {
     pub heap: u32,
     /// Files of the program (syscalls 13..16).
     pub files: Files,
+    /// Why the last file service returned −1 (MARS keeps this message to itself; the interface
+    /// shows it).
+    pub file_error: Option<String>,
     /// Random generators by stream number (syscalls 40..44).
     pub(crate) random: BTreeMap<i32, JavaRandom>,
     /// How the program ended, once it has.
@@ -144,6 +147,7 @@ impl Machine {
             input: VecDeque::new(),
             heap: memory::HEAP_BASE,
             files: Files::new(storage),
+            file_error: None,
             random: BTreeMap::new(),
             finished: None,
             loaded: false,
@@ -168,6 +172,7 @@ impl Machine {
         self.input.clear();
         self.heap = memory::HEAP_BASE;
         self.files.reset();
+        self.file_error = None;
         self.random.clear();
         self.finished = None;
         self.loaded = false;
