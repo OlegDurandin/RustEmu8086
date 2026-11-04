@@ -18,6 +18,7 @@ use crate::console::Console;
 use crate::cpu::{Cpu, Step};
 use crate::files::{Files, Storage};
 use crate::memory::{self, Memory, Segment};
+use crate::mmio::{DeviceState, DigitalLab, DisplayUndo, KeyboardDisplay, LabState};
 use crate::random::JavaRandom;
 
 /// Instructions step back can undo.
@@ -74,6 +75,15 @@ struct SysState {
     waiting: bool,
 }
 
+/// The keyboard and display before a step that changed them.
+#[derive(Debug, Clone)]
+struct DeviceUndo {
+    state: DeviceState,
+    lab: LabState,
+    /// How to undo the step's change of the display text.
+    display: Option<DisplayUndo>,
+}
+
 /// One instruction of the history.
 #[derive(Debug, Clone)]
 struct Snapshot {
@@ -82,6 +92,8 @@ struct Snapshot {
     undo: usize,
     finished: Option<Finish>,
     sys: Option<Box<SysState>>,
+    /// The keyboard and display before the step, when the step changed them.
+    device: Option<Box<DeviceUndo>>,
 }
 
 /// Bytes of one journal entry.
@@ -107,6 +119,10 @@ pub struct Machine {
     pub file_error: Option<String>,
     /// Random generators by stream number (syscalls 40..44).
     pub(crate) random: BTreeMap<i32, JavaRandom>,
+    /// MARS's keyboard and display in memory-mapped I/O.
+    pub mmio: KeyboardDisplay,
+    /// MARS's Digital Lab Sim in memory-mapped I/O.
+    pub lab: DigitalLab,
     /// How the program ended, once it has.
     pub finished: Option<Finish>,
     /// A program is loaded.
@@ -154,6 +170,8 @@ impl Machine {
             files: Files::new(storage),
             file_error: None,
             random: BTreeMap::new(),
+            mmio: KeyboardDisplay::new(),
+            lab: DigitalLab::default(),
             finished: None,
             loaded: false,
             breakpoints: HashSet::new(),
@@ -184,6 +202,8 @@ impl Machine {
         self.clear_history();
         self.waiting = false;
         self.sleep_until = None;
+        self.mmio.reset(&mut self.mem);
+        self.lab.reset();
     }
 
     /// Loads a program after a reset.
@@ -280,26 +300,36 @@ impl Machine {
         if !self.history_enabled {
             self.mem.set_journaling(false);
             self.barrier = false;
-            return self.step_inner();
+            let ev = self.step_inner();
+            if self.mmio.undo.is_some() {
+                self.mmio.undo = None;
+            }
+            return ev;
         }
         let snap = Snapshot {
             cpu: self.cpu.clone(),
             undo: 0,
             finished: self.finished,
             sys: self.at_syscall().then(|| Box::new(self.sys_state())),
+            device: None,
         };
+        let (device, lab) = (self.mmio.state, self.lab.state);
         self.mem.set_journaling(true);
         self.barrier = false;
         let ev = self.step_inner();
         let undo = self.mem.drain_journal_into(&mut self.journal);
         if self.barrier {
+            self.mmio.undo = None;
             self.clear_history();
             return ev;
         }
         // Retrying an input syscall that still has no input changes nothing.
         let idle = ev == Event::WaitingInput && undo == 0 && self.cpu == snap.cpu;
         if !idle {
-            self.history.push_back(Snapshot { undo, ..snap });
+            let display = self.mmio.undo.take();
+            let device = (display.is_some() || self.mmio.state != device || self.lab.state != lab)
+                .then(|| Box::new(DeviceUndo { state: device, lab, display }));
+            self.history.push_back(Snapshot { undo, device, ..snap });
             while self.history.len() > HISTORY_DEPTH || self.journal.len() * ENTRY > HISTORY_BYTES {
                 let Some(old) = self.history.pop_front() else { break };
                 self.journal.drain(..old.undo);
@@ -309,6 +339,27 @@ impl Machine {
     }
 
     fn step_inner(&mut self) -> Event {
+        let ev = match self.lab.take_interrupt().or_else(|| self.mmio.take_interrupt()) {
+            // MARS takes an interrupt in place of the instruction.
+            Some(code) => {
+                let pc = self.cpu.pc;
+                let e = self.cpu.raise(&self.mem, code, "External Interrupt".into(), pc, None, false);
+                if e.handled { Event::Continue } else { Event::Error(e.report()) }
+            }
+            None => self.execute(),
+        };
+        // (Nothing to do for the devices in most steps.)
+        if self.mmio.is_transmitting() || self.lab.is_counting() || self.mem.mmio.any() {
+            let status = self.cpu.cp0[crate::cpu::cp0::STATUS];
+            let fetched = ev != Event::WaitingInput;
+            self.mmio.after_instruction(&mut self.mem, status, fetched);
+            let text = fetched && Segment::of(self.cpu.pc) == Some(Segment::Text);
+            self.lab.after_instruction(&mut self.mem, status, text);
+        }
+        ev
+    }
+
+    fn execute(&mut self) -> Event {
         match self.cpu.step(&mut self.mem) {
             Step::Ok => Event::Continue,
             Step::DroppedOff => {
@@ -319,6 +370,19 @@ impl Machine {
             Step::Exception(e) => Event::Error(e.report()),
             Step::Syscall => self.syscall(),
         }
+    }
+
+    /// Clicks key `key` (0..15) of the Digital Lab Sim's hexadecimal keyboard (see
+    /// [`crate::mmio::DigitalLab::click`]).
+    pub fn lab_click(&mut self, key: u8) {
+        let status = self.cpu.cp0[crate::cpu::cp0::STATUS];
+        self.lab.click(&mut self.mem, status, key);
+    }
+
+    /// Types a key on MARS's MMIO keyboard (see [`crate::mmio`]).
+    pub fn mmio_key(&mut self, char: u8) {
+        let status = self.cpu.cp0[crate::cpu::cp0::STATUS];
+        self.mmio.key(&mut self.mem, status, char);
     }
 
     /// Runs up to `budget` instructions, stopping at breakpoints and events.
@@ -351,6 +415,13 @@ impl Machine {
         self.cpu = s.cpu;
         self.finished = s.finished;
         self.sleep_until = None;
+        if let Some(d) = s.device {
+            self.mmio.state = d.state;
+            self.lab.state = d.lab;
+            if let Some(u) = d.display {
+                self.mmio.undo_display(u);
+            }
+        }
         if let Some(sys) = s.sys {
             self.console.truncate(sys.console_len);
             self.input = sys.input;

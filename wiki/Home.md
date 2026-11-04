@@ -27,7 +27,7 @@ the stack and the screen are all in view, and you can step back when you go too 
 | [emu8086.inc library](Emu8086-inc-library) | `PRINT`, `SCAN_NUM`, `PRINT_NUM` and other macros |
 | [BIOS and DOS interrupts](BIOS-and-DOS-interrupts) | which INT 10h, 16h, 21h, 13h… functions are supported |
 | [Virtual devices](Virtual-devices) | traffic lights, robot, thermometer, LED display, stepper motor, printer |
-| [MIPS32](MIPS32) | the second processor: MARS syntax, `syscall`, Run I/O, its own workspace |
+| [MIPS32](MIPS32) | the second processor: MARS syntax, `syscall`, Run I/O, floating point, macros, memory-mapped devices, its own workspace |
 | [Editor](Editor) | highlighting, hints, search, bookmarks |
 | [Keyboard shortcuts](Keyboard-shortcuts) | everything on one page |
 

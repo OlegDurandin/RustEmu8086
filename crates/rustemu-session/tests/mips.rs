@@ -119,6 +119,41 @@ fn examples_run() {
     assert_eq!(a, out(()));
 }
 
+/// The examples of the memory-mapped devices: the keyboard echoes to the display, the bitmap draws.
+#[test]
+fn device_examples_run() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mips");
+    let text = std::fs::read_to_string(dir.join("keyboard_display.s")).unwrap();
+    let mut s = Session::new_mips();
+    s.load_mips_source("keyboard_display.s", &text).unwrap();
+    assert_eq!(s.target.run(5000), Event::Budget, "polls the keyboard");
+    for &k in b"hi!\x1bok" {
+        s.mips_mut().unwrap().mmio_key(k);
+        s.target.run(200);
+    }
+    assert_eq!(s.mips().unwrap().mmio.text(), b"OK");
+
+    let text = std::fs::read_to_string(dir.join("bitmap.s")).unwrap();
+    let mut s = Session::new_mips();
+    s.load_mips_source("bitmap.s", &text).unwrap();
+    s.mips_mut().unwrap().history_enabled = false;
+    assert_eq!(s.target.run(10_000_000), Event::Terminated(0));
+    let m = s.mips().unwrap();
+    let pixel = |x: u32, y: u32| m.mem.peek32(0x1001_0000 + 4 * (y * 512 + x));
+    assert_eq!((pixel(0, 0), pixel(511, 255), pixel(256, 128)), (0x80, 0x00ff_ff80, 0x00ff_ffff));
+
+    let text = std::fs::read_to_string(dir.join("digital_lab.s")).unwrap();
+    let mut s = Session::new_mips();
+    s.load_mips_source("digital_lab.s", &text).unwrap();
+    s.target.run(500);
+    s.mips_mut().unwrap().lab_click(0xa);
+    s.target.run(20_000);
+    let m = s.mips().unwrap();
+    assert_eq!(m.lab.segments()[0], 0x06, "one press");
+    assert_eq!(m.lab.segments()[1] & 0x7f, 0x77, "key a");
+    assert!(m.mem.peek32(0x9000_0000) > 100, "counter interrupts");
+}
+
 #[test]
 fn floating_point_registers_in_expressions() {
     let mut s = Session::new_mips();

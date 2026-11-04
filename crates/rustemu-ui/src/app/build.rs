@@ -472,6 +472,19 @@ impl App {
         if self.arch() == Arch::Mips32 {
             self.windows[Tool::RunIo] = true;
             self.mips.focus_request = true;
+            let (keyboard, lab) = self.session.mips_program.as_ref().map_or((false, false), |p| {
+                crate::mips_devices::devices_used(p.statements.iter().flat_map(|s| s.words.iter().copied()))
+            });
+            if keyboard {
+                self.windows[Tool::MmioDisplay] = true;
+                self.devices.focus_request = true;
+                self.mips.focus_request = false;
+            }
+            if lab {
+                self.windows[Tool::DigitalLab] = true;
+            }
+            self.devices.typed.clear();
+            self.devices.queue.clear();
         } else {
             self.windows[Tool::Screen] = true;
             self.screen.focus_request = true;

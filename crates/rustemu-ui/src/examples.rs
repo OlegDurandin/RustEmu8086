@@ -324,6 +324,9 @@ pub const MIPS_EXAMPLES: &[(&str, &str, &str)] = &[
     mips_example!("random numbers and sbrk", "random.s"),
     mips_example!("exception handler", "exception.s"),
     mips_example!("macros and .include", "macros.s"),
+    mips_example!("keyboard and display (MMIO)", "keyboard_display.s"),
+    mips_example!("bitmap display", "bitmap.s"),
+    mips_example!("digital lab sim", "digital_lab.s"),
 ];
 
 /// Files the MIPS examples `.include` (not examples of their own): name, text.

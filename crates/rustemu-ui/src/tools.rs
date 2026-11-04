@@ -75,6 +75,12 @@ pub enum Tool {
     Programs,
     /// The MIPS console (MARS's Run I/O): what the program prints, a line to type its input.
     RunIo,
+    /// MARS's Keyboard and Display MMIO Simulator (MIPS).
+    MmioDisplay,
+    /// MARS's Bitmap Display: words of memory as pixels (MIPS).
+    Bitmap,
+    /// MARS's Digital Lab Sim: seven-segment displays, a hexadecimal keyboard, a counter (MIPS).
+    DigitalLab,
 }
 
 /// What a tool is, apart from its window and body.
@@ -93,7 +99,7 @@ struct Spec {
 
 impl Tool {
     /// Number of tools (the size of [`Windows`]).
-    pub const COUNT: usize = 30;
+    pub const COUNT: usize = 33;
 
     /// All tools; panels are placed in this order by the default layout, windows drawn in it.
     pub const ALL: [Tool; Tool::COUNT] = [
@@ -110,6 +116,9 @@ impl Tool {
         Tool::Fpu,
         Tool::Screen,
         Tool::RunIo,
+        Tool::MmioDisplay,
+        Tool::Bitmap,
+        Tool::DigitalLab,
         Tool::Vars,
         Tool::Stack,
         Tool::Console,
@@ -141,12 +150,16 @@ impl Tool {
             Tool::Library => (None, "emu8086.inc", Some(Text), true, false),
             Tool::Reference => (None, "reference", Some(Text), true, false),
             Tool::Emulator => (Some("emulator"), "emulator", Some(Emulator), false, true),
-            Tool::Memory => (Some("memory"), "memory", Some(Inspect), true, true),
+            // Floating in both layouts: as a tab it took the emulator's column.
+            Tool::Memory => (Some("memory"), "memory", None, true, true),
             Tool::Watch => (Some("watch"), "watch", Some(Inspect), false, true),
             Tool::Alu => (Some("alu"), "ALU", Some(Inspect), false, true),
             Tool::Fpu => (Some("fpu"), "FPU", Some(Inspect), false, true),
             Tool::Screen => (Some("screen"), "screen", Some(Screen), true, true),
             Tool::RunIo => (Some("run_io"), "Run I/O", Some(Screen), false, true),
+            Tool::MmioDisplay => (Some("mmio"), "keyboard and display", Some(Screen), true, true),
+            Tool::Bitmap => (Some("bitmap"), "bitmap display", Some(Screen), false, true),
+            Tool::DigitalLab => (Some("digital_lab"), "digital lab sim", Some(Screen), false, true),
             Tool::Vars => (Some("vars"), "variables", Some(Aside), true, true),
             Tool::Stack => (Some("stack"), "stack", Some(Aside), true, true),
             Tool::Console => (Some("console"), "debug log", Some(Aside), true, true),
@@ -224,6 +237,13 @@ impl Tool {
                 unique(at("original source code", 700.0, 540.0), "source_window").default_size([700.0, 300.0])
             }
             Tool::RunIo => unique(at("Run I/O", 1024.0, 64.0), "run_io_window").default_size([400.0, 300.0]),
+            Tool::MmioDisplay => at("Keyboard and Display MMIO Simulator", 980.0, 120.0).default_size([560.0, 480.0]),
+            Tool::Bitmap => at("Bitmap Display", 520.0, 100.0).default_width(540.0),
+            Tool::DigitalLab => at("Digital Lab Sim", 600.0, 420.0).resizable(false),
+            // In the panels layout it floats over them: low on the right, away from the emulator's registers.
+            Tool::Memory if app.panels() => {
+                unique(at("memory", 640.0, 430.0), "memory_panels_window").default_size([600.0, 380.0])
+            }
             Tool::Memory => at("memory", 80.0, 420.0),
             Tool::Stack => at("stack", 680.0, 110.0),
             Tool::Vars => at("variables", 300.0, 300.0),
@@ -306,6 +326,9 @@ pub fn tool_ui(app: &mut App, ui: &mut Ui, tool: Tool, host: &mut dyn Host) {
         Tool::Reference => crate::reference_ui::reference_ui(&mut app.reference, ui),
         Tool::Programs => crate::programs::programs_ui(app, ui),
         Tool::RunIo => crate::mips_ui::console_ui(app, ui),
+        Tool::MmioDisplay => crate::mips_devices::keyboard_display_ui(app, ui),
+        Tool::Bitmap => crate::mips_devices::bitmap_ui(app, ui),
+        Tool::DigitalLab => crate::mips_devices::digital_lab_ui(app, ui),
         Tool::Ascii => crate::utility::ascii_ui(ui),
         Tool::Converter => crate::utility::converter_ui(&mut app.converter_text, ui),
         Tool::Calculator => crate::calc::calc_ui(&mut app.calculator, ui),
@@ -400,7 +423,7 @@ impl Windows {
     }
 }
 
-const KEYS: [&str; 26] = [
+const KEYS: [&str; 29] = [
     "emulator",
     "screen",
     "source",
@@ -427,6 +450,9 @@ const KEYS: [&str; 26] = [
     "programs",
     "about",
     "run_io",
+    "mmio",
+    "bitmap",
+    "digital_lab",
 ];
 
 impl Serialize for Windows {

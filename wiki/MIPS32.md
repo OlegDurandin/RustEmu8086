@@ -64,6 +64,7 @@ The source column shows a line at its first instruction; the next ones of the sa
 | ALU | the last arithmetic, logic, comparison, shift, multiplication or division instruction: its operands and result (or HI and LO) in hex, binary, unsigned and signed, an overflow; loads, stores, branches and writes to `$zero` (`nop`) are not shown |
 | memory | words, 16 bytes a row; buttons *.text*, *.data*, *heap*, *$gp*, *$sp*, *PC*, *.kdata*; the address field takes hex (`0x10010000`) or an expression (`$sp`, `array + 8`). Addresses outside every segment are shown as `········` — reading them is an error, not a zero. While the program is paused a click on a word changes it (hex `0x…` or decimal, Enter) |
 | variables | the data labels, in the size of their data (`.byte` / `.asciiz` — bytes, `.half`, `.word`) |
+| Keyboard and Display MMIO Simulator, Bitmap Display, Digital Lab Sim | MARS's tools for memory-mapped devices (the *tools* menu of the emulator window; see below) |
 | source, listing, symbol table, watch, breakpoints, call stack, stop on condition | as for the 8086; the listing is MARS's text segment: address, code, basic instruction, source |
 
 The 8086's own windows — the screen, flags, FPU, the stack window, virtual devices, drive C:, the DEBUG.EXE
@@ -114,8 +115,10 @@ forces it. See [Command line](Command-line).
   one stops the program, as in MARS), roundings, conversions, comparisons into 8 condition flags. Checked against
   MARS on random programs: registers, flags, memory and errors are the same.
 - Macros and `.include`, by MARS's rules (see below).
+- MARS's memory-mapped devices: the Keyboard and Display MMIO Simulator, the Bitmap Display and the Digital Lab
+  Sim (see below).
 
-Not yet: dialogs (50–59), MARS's memory-mapped devices.
+Not yet: dialogs (50–59), MARS's settings (delayed branching…).
 
 ## Macros and .include
 
@@ -142,3 +145,59 @@ loop:
 - The code list shows each line of an expansion as MARS does: `21: <13> la $a0, text_M0` — line 21 calls the
   macro, 13 is the line of its body. Stepping enters the body (in the included file too); errors in an expansion
   are reported as `line 21->13`.
+
+## Memory-mapped devices
+
+The *tools* menu of the emulator window (and *Windows* in the Emulator menu, ⋮ on the tablet) opens MARS's
+tools for input and output through memory. They are always connected: a program can use them without a click on
+"Connect to MIPS". A program that reaches the devices (its code builds an address with `lui …, 0xffff`) opens the
+keyboard and display, or the Digital Lab Sim, at **emulate**.
+
+**Keyboard and Display MMIO Simulator** — four words at `0xffff0000`:
+
+| address | register |
+|---|---|
+| `0xffff0000` | receiver control: bit 0 — a key is ready, bit 1 — interrupt enable |
+| `0xffff0004` | receiver data: the key (reading it clears the ready bit) |
+| `0xffff0008` | transmitter control: bit 0 — the display is ready, bit 1 — interrupt enable |
+| `0xffff000c` | transmitter data: the character to display |
+
+Click the KEYBOARD area and type: each key goes to the receiver. A character stored to the transmitter while the
+display is ready appears after the delay (*Delay length*, 5 instructions by default; without *DAD* at once), then
+the display is ready again. *Delay* chooses a fixed delay or, as in MARS, a random one: uniform from 1 to the
+length, or `floor(abs(N(0,1) * length) + 1)`. Character 12 clears the display; character 7 makes it a terminal of
+the window's size and puts the cursor at the column in bits 20..31 and the row in bits 8..19 of the stored word.
+With bit 1 of a control register set (and Status bit 0, as after the start), a key, or the display becoming ready,
+interrupts the program: the handler at `0x80000180` gets code 0 in Cause with bit 8 (keyboard) or 9 (display), and
+`eret` returns. *Reset* clears the display and makes the transmitter ready. See the *keyboard and display (MMIO)*
+example.
+
+As in MARS, the device holds one key: a key typed before the program has read the previous one replaces it. When
+several keys arrive at once (fast typing, a paste) the window gives them to the program one by one, each after
+the previous one has been read.
+
+**Bitmap Display** — words of memory as pixels, row by row from the base address (`0x10010000`, static data, by
+default), each `0x00RRGGBB`. The window sets the unit (one word) and the display size in pixels: 512 x 256 with
+1 x 1 units shows 512 x 256 words. It shows memory as it is now — after a step back too; MARS paints a unit when
+the program writes it. See the *bitmap display* example.
+
+**Digital Lab Sim** — bytes from `0xffff0010`: two seven-segment displays, a 4 x 4 hexadecimal keyboard and a
+counter.
+
+| address | |
+|---|---|
+| `0xffff0010`, `0xffff0011` | the right and the left display: bit 0 — segment a … bit 6 — g, bit 7 — the point |
+| `0xffff0012` | the row to scan (1, 2, 4, 8); bits 4..7 enable the keyboard interrupt |
+| `0xffff0013` | non-zero: the counter's interrupt |
+| `0xffff0014` | the key found in that row: row bit + column bit << 4 (key 2 — `0x41`), 0 if none |
+
+A click presses a key; the next click (on any key) releases it. The counter interrupts after every 31 of MARS's
+notices: instructions fetched from `.text` (not the handler's in `.ktext`) and loads and stores at
+`0xffff0010..13`. Its interrupt (Cause bit 10) and the keyboard's (bit 11) come whenever the program is not in the
+handler — Status's interrupt enable does not matter — and these Cause bits stay set, as in MARS. A load at
+`0xffff0010` lights the display too; a word or halfword stored there is seen at its first byte only. See the
+*digital lab sim* example.
+
+The keyboard and display and the Digital Lab Sim are checked against MARS's own tools: the same display text,
+segments, registers and interrupts for programs that poll, take interrupts, use the terminal and get keys or
+clicks at given instructions.

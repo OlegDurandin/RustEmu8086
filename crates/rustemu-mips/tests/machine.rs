@@ -352,3 +352,104 @@ fn backspace_edits_the_line() {
     m.run(100);
     assert_eq!(m.cpu.regs[S0 as usize], 13);
 }
+
+#[test]
+fn step_back_over_the_mmio_display() {
+    // A terminal (bell), characters, a form feed: every step undone gives the same display as
+    // when it was first reached.
+    let src = r#"
+        .text
+main:   li   $t1, 0xffff0000
+        li   $a0, 'A'
+        jal  send
+        li   $a0, 0x00100107
+        jal  send
+        li   $a0, 'B'
+        jal  send
+        li   $a0, 12
+        jal  send
+        li   $a0, 'C'
+        jal  send
+wait:   lw   $t3, 8($t1)
+        beqz $t3, wait
+        li   $v0, 10
+        syscall
+send:   lw   $t3, 8($t1)
+        andi $t3, $t3, 1
+        beqz $t3, send
+        sw   $a0, 12($t1)
+        jr   $ra
+"#;
+    let p = rustemu_mips::asm::assemble(src).unwrap();
+    let mut m = Machine::new();
+    m.mmio.terminal_size = (4, 3);
+    m.load(&p.image).unwrap();
+    let mut seen = Vec::new();
+    loop {
+        seen.push((m.mmio.text().to_vec(), m.mmio.cursor_text(), m.mem.read_bytes(0xffff_0000, 16), m.cpu.pc));
+        if m.step() != Event::Continue {
+            break;
+        }
+    }
+    assert_eq!(m.mmio.text(), b"C   \n    \n    ", "a form feed clears the terminal");
+    while m.step_back() {
+        let now = (m.mmio.text().to_vec(), m.mmio.cursor_text(), m.mem.read_bytes(0xffff_0000, 16), m.cpu.pc);
+        assert_eq!(now, seen.pop().unwrap());
+    }
+    assert!(m.mmio.text().is_empty());
+}
+
+#[test]
+fn keys_typed_on_the_mmio_keyboard() {
+    let src = r#"
+        .text
+main:   li   $t1, 0xffff0000
+loop:   lw   $t2, 0($t1)
+        andi $t2, $t2, 1
+        beqz $t2, loop
+        lw   $a0, 4($t1)
+        li   $v0, 1
+        syscall
+"#;
+    let p = rustemu_mips::asm::assemble(src).unwrap();
+    let mut m = Machine::new();
+    m.load(&p.image).unwrap();
+    assert_eq!(m.run(1000), Event::Budget, "polls without a key");
+    m.mmio_key(b'7');
+    assert_eq!(m.run(1000), Event::Terminated(0));
+    assert_eq!(m.console.text(), "55");
+    assert_eq!(m.mem.peek32(0xffff_0000), 0, "reading the data cleared ready");
+}
+
+#[test]
+fn step_back_over_the_digital_lab() {
+    let src = r#"
+        .text
+main:   li   $t0, 0xffff0010
+        li   $t1, 0x06
+        sb   $t1, 0($t0)
+        li   $t1, 1
+        sb   $t1, 3($t0)
+loop:   addi $s0, $s0, 1
+        j    loop
+"#;
+    let p = rustemu_mips::asm::assemble(src).unwrap();
+    let mut m = Machine::new();
+    m.load(&p.image).unwrap();
+    m.run(5);
+    m.lab_click(7);
+    let mut seen = Vec::new();
+    for _ in 0..100 {
+        seen.push((m.lab.segments(), m.lab.is_counting(), m.cpu.pc));
+        m.step();
+    }
+    assert_eq!(m.lab.segments(), [0, 0x06]);
+    assert!(m.cpu.cp0[13] & 0x400 != 0, "a counter interrupt was taken (no handler: the program stopped)");
+    while let Some(s) = seen.pop() {
+        if !m.step_back() {
+            break;
+        }
+        assert_eq!((m.lab.segments(), m.lab.is_counting(), m.cpu.pc), s);
+    }
+    assert_eq!(m.lab.pressed(), Some(7), "a click is not undone");
+}

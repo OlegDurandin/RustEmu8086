@@ -289,7 +289,7 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         ui.close();
     }
     ui.separator();
-    // Only the windows of the workspace's processor (the 8086's drive, devices, ALU... not in MIPS).
+    // Only the windows of the workspace's processor (the 8086's drive, devices, FPU... not in MIPS).
     let x86 = app.session.x86().is_some();
     if x86 {
         // Drive C: (its files in the browser, its folder on the desktop) and the floppies, as in
@@ -304,6 +304,9 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         (Tool::Symbols, "Symbol table", true),
         (Tool::Listing, "Listing", true),
         (Tool::Alu, "ALU", true),
+        (Tool::MmioDisplay, "Keyboard and Display", true),
+        (Tool::Bitmap, "Bitmap Display", true),
+        (Tool::DigitalLab, "Digital Lab Sim", true),
         (Tool::Fpu, "FPU", true),
         (Tool::StopCondition, "Stop on condition", true),
     ];
