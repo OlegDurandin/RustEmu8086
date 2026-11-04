@@ -43,6 +43,8 @@ rustemu run sum.asm --trace                  # every instruction with registers
 | `--trace` | print every executed instruction |
 | `--timer-irq` | enable IRQ0 (INT 08h / 1Ch) 18.2 times a second |
 | `--keys <text>` | MIPS: keys of MARS's MMIO keyboard (`\n` is Enter) |
+| `--delayed-branching`, `--self-modifying`, `--start-at-main`, `--no-pseudo`, `--warnings-are-errors` | MIPS (also `asm`): MARS's settings, its options `db`, `smc`, `sm`, `np`, `we` |
+| `--memory <config>` | MIPS (also `asm`): MARS's memory configuration: `Default`, `CompactDataAtZero`, `CompactTextAtZero` (its `mc`) |
 
 The exit code of `rustemu run` is the program's exit code (AL in INT 21h, function 4Ch), so scripts can check the
 result:
@@ -74,6 +76,8 @@ rustemu asm sort.s -l -s                     # check; listing (.lst, MARS's text
 rustemu asm sort.s -o sort.bin               # the text segment as binary (MARS's dump .text)
 rustemu run sum.s --input '100\n'            # Run I/O input; \n = Enter
 rustemu run keyboard_display.s --keys 'hi\n' --max 500000   # keys of the MMIO keyboard
+rustemu run sort.s --delayed-branching     # MARS's settings, as its db (see MIPS32)
+rustemu asm sort.s --memory CompactTextAtZero -o sort.bin   # the text segment from address 0
 rustemu run fibonacci.s --regs               # print the registers at the end
 rustemu run hello.s --trace                  # every instruction with $v0 $a0 $t0 $t1 $sp
 rustemu disasm sort.bin --arch mips          # from 0x00400000; --org for another address

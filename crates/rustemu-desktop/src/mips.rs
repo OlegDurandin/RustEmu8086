@@ -20,6 +20,13 @@ pub(crate) fn emulator_ui(app: &mut App, ui: &mut Ui) {
             ui.checkbox(&mut w[Tool::DigitalLab], "Digital Lab Sim");
             ui.checkbox(&mut w[Tool::MmioDisplay], "Keyboard and Display MMIO Simulator");
         });
+        egui::containers::menu::MenuButton::new("settings").config(rustemu_ui::mars_settings::menu_config()).ui(
+            ui,
+            |ui| {
+                ui.set_min_width(340.0);
+                rustemu_ui::mars_settings::settings_ui(app, ui);
+            },
+        );
         ui.menu_button("help", |ui| {
             use rustemu_ui::reference_ui::Tab;
             for (tab, label) in [
@@ -39,6 +46,7 @@ pub(crate) fn emulator_ui(app: &mut App, ui: &mut Ui) {
         });
     });
     stale_banner(app, ui);
+    rustemu_ui::mars_settings::changed_banner(app, ui);
     controls(app, ui, |_, _| {});
     ui.separator();
     ui.horizontal_top(|ui| {

@@ -31,12 +31,16 @@ pub fn options_menu(app: &mut App, ui: &mut Ui) {
         ui.radio_value(&mut app.settings.layout, Layout::Panels, "panels");
         ui.separator();
     }
-    // The MIPS assembler has one syntax, MARS's.
+    // The MIPS assembler has one syntax, MARS's, and MARS's settings.
     if app.arch() == rustemu_session::Arch::I8086 {
         ui.label(RichText::new("assembler syntax").weak());
         ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(AUTO_SYNTAX);
         ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
         ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
+    } else {
+        egui::containers::menu::SubMenuButton::new("MARS settings")
+            .config(crate::mars_settings::menu_config())
+            .ui(ui, |ui| crate::mars_settings::settings_ui(app, ui));
     }
     // The tablet layout has a theme of its own.
     if app.front.fixed_theme.is_none() {
@@ -172,6 +176,11 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
                 });
                 ui.end_row();
+                if app.arch() != rustemu_session::Arch::I8086 {
+                    ui.label("MARS settings");
+                    ui.vertical(|ui| crate::mars_settings::settings_ui(app, ui));
+                    ui.end_row();
+                }
                 ui.label("editor font size");
                 ui.add(egui::Slider::new(&mut app.settings.font_size, 10.0..=24.0).text("pt"));
                 ui.end_row();

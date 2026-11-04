@@ -1,7 +1,8 @@
 //! The MIPS32 processor as MARS simulates it: the integer instruction set of MARS (77 basic
 //! instructions: arithmetic with and without overflow, HI/LO multiply and divide, shifts, logic,
 //! loads and stores including `lwl`/`lwr`/`swl`/`swr` and `ll`/`sc`, branches, jumps, traps,
-//! `syscall`, `break`, coprocessor 0 and `eret`), without branch delay slots (MARS's default).
+//! `syscall`, `break`, coprocessor 0 and `eret`). Branches take effect at once (MARS's default) or,
+//! with delayed branching, after the instruction that follows them (see [`Delay`]).
 //!
 //! Exceptions follow MARS: Cause gets the exception code, EPC the address of the instruction,
 //! BadVAddr the refused address, Status its exception level bit; when the exception handler
@@ -11,7 +12,8 @@
 //! Coprocessor 1 (floating point) is in [`crate::fpu`]. External interrupts of the keyboard and
 //! display ([`crate::mmio`]) are raised by the machine before an instruction.
 
-use crate::memory::{self, Access, AccessError, Memory, hex};
+use crate::memory::{Access, AccessError, Memory, hex};
+use crate::settings::Layout;
 
 /// Register names in number order (`$0` is `$zero`).
 pub const REG_NAMES: [&str; 32] = [
@@ -120,6 +122,21 @@ pub enum Step {
     Exception(Exception),
 }
 
+/// A taken branch or jump waiting for its delay slot, with delayed branching (MARS's
+/// `DelayedBranch`): registered by the branch, triggered at the end of that step, taken at the
+/// end of the next one (the delay slot). A branch in a delay slot keeps the first target and
+/// postpones it by one instruction, as in MARS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Delay {
+    /// No branch pending.
+    #[default]
+    Cleared,
+    /// A branch to this address was taken by the current instruction.
+    Registered(u32),
+    /// The next instruction is the delay slot; then execution goes to this address.
+    Triggered(u32),
+}
+
 /// The processor state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cpu {
@@ -142,6 +159,10 @@ pub struct Cpu {
     pub instr_count: u64,
     /// The last operation of the arithmetic and logic unit (for the ALU window; None until one).
     pub alu: Option<AluTrace>,
+    /// Delayed branching (MARS's setting): branches and jumps take effect after their delay slot.
+    pub delayed_branching: bool,
+    /// The branch waiting for its delay slot.
+    pub delay: Delay,
 }
 
 /// An operation of the arithmetic and logic unit: an arithmetic, logic, comparison, shift,
@@ -275,15 +296,34 @@ pub(crate) fn reserved(word: u32) -> Fault {
 }
 
 impl Cpu {
-    /// The processor after a reset in MARS: registers 0, `$gp` and `$sp` at their initial
-    /// values, the program counter at the text segment, Status 0x0000FF11.
+    /// The processor after a reset in MARS's default memory configuration: registers 0, `$gp`
+    /// and `$sp` at their initial values, the program counter at the text segment, Status
+    /// 0x0000FF11.
     pub fn new() -> Cpu {
+        Cpu::with_layout(&crate::settings::DEFAULT)
+    }
+
+    /// The processor after a reset in memory configuration `layout` (its `$gp`, `$sp` and text
+    /// segment).
+    pub fn with_layout(layout: &Layout) -> Cpu {
         let mut regs = [0; 32];
-        regs[GP] = memory::GP_INIT;
-        regs[SP] = memory::SP_INIT;
+        regs[GP] = layout.gp;
+        regs[SP] = layout.sp;
         let mut cp0 = [0; 32];
         cp0[cp0::STATUS] = cp0::STATUS_RESET;
-        Cpu { regs, hi: 0, lo: 0, pc: memory::TEXT_BASE, cp0, fpr: [0; 32], fcc: 0, instr_count: 0, alu: None }
+        Cpu {
+            regs,
+            hi: 0,
+            lo: 0,
+            pc: layout.text_base,
+            cp0,
+            fpr: [0; 32],
+            fcc: 0,
+            instr_count: 0,
+            alu: None,
+            delayed_branching: false,
+            delay: Delay::Cleared,
+        }
     }
 
     /// Register `r` (`$0` reads as 0).
@@ -300,7 +340,9 @@ impl Cpu {
         }
     }
 
-    /// Executes the instruction at the program counter.
+    /// Executes the instruction at the program counter. After `syscall` the caller performs the
+    /// service and then calls [`Cpu::end_step`] (unless the service waits for input or the
+    /// program stops).
     pub fn step(&mut self, mem: &mut Memory) -> Step {
         let pc = self.pc;
         let word = match mem.fetch(pc) {
@@ -319,10 +361,50 @@ impl Cpu {
         if let (Some(form), Some((a, b))) = (form, operands) {
             self.record_alu(form, word, pc, a, b, matches!(&result, Err((ExcCode::Overflow, ..))));
         }
-        match result {
+        let step = match result {
             Ok(step) => step,
             Err((code, message, bad)) => Step::Exception(self.raise(mem, code, message, pc, bad, false)),
+        };
+        match &step {
+            Step::Ok => self.end_step(),
+            Step::Exception(e) if e.handled => self.end_step(),
+            _ => {}
         }
+        step
+    }
+
+    /// The end of a step that went on (MARS's simulator loop after an instruction): a branch
+    /// whose delay slot just executed is taken, a branch just registered is triggered.
+    #[inline]
+    pub fn end_step(&mut self) {
+        match self.delay {
+            Delay::Cleared => {}
+            Delay::Registered(t) => self.delay = Delay::Triggered(t),
+            Delay::Triggered(t) => {
+                self.pc = t;
+                self.delay = Delay::Cleared;
+            }
+        }
+    }
+
+    /// Goes to `target` (MARS's `processJump` / `processBranch`): at once, or after the delay
+    /// slot with delayed branching.
+    #[inline]
+    pub(crate) fn jump(&mut self, target: u32) {
+        if !self.delayed_branching {
+            self.pc = target;
+        } else if let Delay::Cleared = self.delay {
+            self.delay = Delay::Registered(target);
+        } else if let Delay::Triggered(t) = self.delay {
+            self.delay = Delay::Registered(t);
+        }
+    }
+
+    /// The return address a link writes (MARS's `processReturnAddress`): past the delay slot
+    /// with delayed branching.
+    #[inline]
+    fn return_address(&self) -> u32 {
+        if self.delayed_branching { self.pc.wrapping_add(4) } else { self.pc }
     }
 
     /// The two operands of an ALU instruction, before it executes.
@@ -379,22 +461,23 @@ impl Cpu {
             self.cp0[cp0::EPC] = pc;
             self.cp0[cp0::STATUS] |= cp0::EXL;
         }
-        let handled = mem.has_code(memory::EXCEPTION_HANDLER);
-        self.pc = if handled { memory::EXCEPTION_HANDLER } else { pc };
+        let handler = mem.layout.exception_handler;
+        let handled = mem.has_code(handler);
+        self.pc = if handled { handler } else { pc };
         Exception { code, message, pc, bad_vaddr: bad, fetch, handled }
     }
 
     /// Branch to `offset` instructions from the next one.
     fn branch(&mut self, f: &Fields, cond: bool) {
         if cond {
-            self.pc = self.pc.wrapping_add(f.simm << 2);
+            self.jump(self.pc.wrapping_add(f.simm << 2));
         }
     }
 
     /// Branch and link: MARS links only when the branch is taken.
     fn branch_link(&mut self, f: &Fields, cond: bool) {
         if cond {
-            self.set_reg(RA, self.pc);
+            self.set_reg(RA, self.return_address());
             self.branch(f, true);
         }
     }
@@ -418,10 +501,10 @@ impl Cpu {
                 0x0E => trap(rs != f.simm)?,
                 _ => return Err(reserved(word)),
             },
-            0x02 => self.pc = (self.pc & 0xF000_0000) | ((word & 0x03FF_FFFF) << 2),
+            0x02 => self.jump((self.pc & 0xF000_0000) | ((word & 0x03FF_FFFF) << 2)),
             0x03 => {
-                self.set_reg(RA, self.pc);
-                self.pc = (self.pc & 0xF000_0000) | ((word & 0x03FF_FFFF) << 2);
+                self.set_reg(RA, self.return_address());
+                self.jump((self.pc & 0xF000_0000) | ((word & 0x03FF_FFFF) << 2));
             }
             0x04 => self.branch(&f, rs == rt),
             0x05 => self.branch(&f, rs != rt),
@@ -505,10 +588,11 @@ impl Cpu {
             0x04 => self.set_reg(f.rd, rt << (rs & 31)),
             0x06 => self.set_reg(f.rd, rt >> (rs & 31)),
             0x07 => self.set_reg(f.rd, ((rt as i32) >> (rs & 31)) as u32),
-            0x08 => self.pc = rs,
+            0x08 => self.jump(rs),
             0x09 => {
-                self.set_reg(f.rd, self.pc);
-                self.pc = rs;
+                // As MARS: the link first, then the jump to rs (its new value when rd = rs).
+                self.set_reg(f.rd, self.return_address());
+                self.jump(self.reg(f.rs));
             }
             0x0A => {
                 if rt == 0 {

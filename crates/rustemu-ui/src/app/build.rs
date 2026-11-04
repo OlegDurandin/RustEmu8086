@@ -188,7 +188,8 @@ impl App {
         self.clear_errors();
         let name = self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            rustemu_mips::asm::assemble_with(&name, &self.doc.text, &mut |p| self.mips_include(p))
+            let settings = self.settings.mars.mips();
+            rustemu_mips::asm::assemble_settings(&name, &self.doc.text, &mut |p| self.mips_include(p), &settings)
         }));
         let result = match result {
             Ok(r) => r,
@@ -473,7 +474,8 @@ impl App {
             self.windows[Tool::RunIo] = true;
             self.mips.focus_request = true;
             let (keyboard, lab) = self.session.mips_program.as_ref().map_or((false, false), |p| {
-                crate::mips_devices::devices_used(p.statements.iter().flat_map(|s| s.words.iter().copied()))
+                let mmio = p.image.settings.layout().mmio_base;
+                crate::mips_devices::devices_used(p.statements.iter().flat_map(|s| s.words.iter().copied()), mmio)
             });
             if keyboard {
                 self.windows[Tool::MmioDisplay] = true;
@@ -492,7 +494,7 @@ impl App {
         self.windows[Tool::Source] = !self.program.files.is_empty();
         // The memory window starts at the data (8086: DS:0000, MIPS: .data).
         self.view.mem_view_addr = match self.arch() {
-            Arch::Mips32 => rustemu_mips::memory::DATA_BASE,
+            Arch::Mips32 => crate::mips_ui::layout(self).data_base,
             _ => self.session.target.data_address(None, 0),
         };
         self.status = format!("Loaded - {}", self.pc_status());

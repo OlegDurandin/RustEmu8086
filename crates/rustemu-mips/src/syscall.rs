@@ -308,7 +308,7 @@ impl Machine {
                     return Err(Fail::syscall(format!("request ({n}) is negative heap amount (syscall 9)")));
                 }
                 let next = (self.heap as u64 + n as u64).next_multiple_of(4);
-                if next >= memory::DATA_LIMIT as u64 {
+                if next >= self.mem.layout.data_limit as u64 {
                     return Err(Fail::syscall(format!("request ({n}) exceeds available heap storage (syscall 9)")));
                 }
                 self.cpu.set_reg(V0, self.heap);
