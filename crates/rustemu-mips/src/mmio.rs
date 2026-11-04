@@ -32,6 +32,24 @@ use crate::memory::{MMIO_BASE, Memory};
 use crate::random::JavaRandom;
 use std::sync::atomic::Ordering::Relaxed;
 
+/// The address in `mem`'s memory configuration of the device register at `default` (its
+/// address in the default configuration).
+#[inline]
+fn at(mem: &Memory, default: u32) -> u32 {
+    mem.layout.mmio_base.wrapping_add(default - MMIO_BASE)
+}
+
+// The devices are at fixed offsets from the base of memory-mapped I/O, which depends on the
+// memory configuration (MARS's `Memory.memoryMapBaseAddress`); the addresses below are the
+// default configuration's.
+
+/// Offset of the receiver data register from the MMIO base.
+pub const RECEIVER_DATA_OFFSET: u32 = 4;
+/// Offset of the transmitter data register from the MMIO base.
+pub const TRANSMITTER_DATA_OFFSET: u32 = 12;
+/// Offset of the Digital Lab Sim from the MMIO base.
+pub const LAB_OFFSET: u32 = 0x10;
+
 /// Receiver (keyboard) control: bit 0 ready, bit 1 interrupt enable.
 pub const RECEIVER_CONTROL: u32 = MMIO_BASE;
 /// Receiver (keyboard) data: the typed character in the low byte.
@@ -162,8 +180,8 @@ impl KeyboardDisplay {
         self.state = DeviceState { random: JavaRandom::new(seed), ..DeviceState::default() };
         self.display.clear();
         self.undo = None;
-        let tc = mem.peek32(TRANSMITTER_CONTROL) | 1;
-        mem.load(TRANSMITTER_CONTROL, &tc.to_le_bytes());
+        let tc = mem.peek32(at(mem, TRANSMITTER_CONTROL)) | 1;
+        mem.load(at(mem, TRANSMITTER_CONTROL), &tc.to_le_bytes());
     }
 
     /// The display text: bytes, shown as Latin-1 (MARS shows each byte as a character); in
@@ -210,9 +228,9 @@ impl KeyboardDisplay {
     /// set (the previous key, if not read, is lost); `status` is coprocessor 0's Status. The
     /// registers are written outside the history: step back does not take a key back.
     pub fn key(&mut self, mem: &mut Memory, status: u32, char: u8) {
-        let rc = mem.peek32(RECEIVER_CONTROL) | 1;
-        mem.load(RECEIVER_CONTROL, &rc.to_le_bytes());
-        mem.load(RECEIVER_DATA, &(char as u32).to_le_bytes());
+        let rc = mem.peek32(at(mem, RECEIVER_CONTROL)) | 1;
+        mem.load(at(mem, RECEIVER_CONTROL), &rc.to_le_bytes());
+        mem.load(at(mem, RECEIVER_DATA), &(char as u32).to_le_bytes());
         if rc != 1 && interrupts_on(status) {
             self.state.interrupt = Some(ExcCode::KeyboardInterrupt);
         }
@@ -231,14 +249,14 @@ impl KeyboardDisplay {
         self.undo = None;
         if mem.mmio.read_data.load(Relaxed) {
             mem.mmio.read_data.store(false, Relaxed);
-            let rc = mem.peek32(RECEIVER_CONTROL) & 2;
-            store(mem, RECEIVER_CONTROL, rc);
+            let rc = mem.peek32(at(mem, RECEIVER_CONTROL)) & 2;
+            store(mem, at(mem, RECEIVER_CONTROL), rc);
         }
         if let Some(v) = mem.mmio.written.take()
-            && mem.peek32(TRANSMITTER_CONTROL) & 1 == 1
+            && mem.peek32(at(mem, TRANSMITTER_CONTROL)) & 1 == 1
         {
-            let tc = mem.peek32(TRANSMITTER_CONTROL) & 2;
-            store(mem, TRANSMITTER_CONTROL, tc);
+            let tc = mem.peek32(at(mem, TRANSMITTER_CONTROL)) & 2;
+            store(mem, at(mem, TRANSMITTER_CONTROL), tc);
             self.state.pending = v;
             if !self.display_after_delay {
                 self.show(v);
@@ -254,8 +272,8 @@ impl KeyboardDisplay {
                     self.show(self.state.pending);
                 }
                 self.state.counting = false;
-                let tc = mem.peek32(TRANSMITTER_CONTROL) | 1;
-                store(mem, TRANSMITTER_CONTROL, tc);
+                let tc = mem.peek32(at(mem, TRANSMITTER_CONTROL)) | 1;
+                store(mem, at(mem, TRANSMITTER_CONTROL), tc);
                 if tc != 1 && interrupts_on(status) {
                     self.state.interrupt = Some(ExcCode::DisplayInterrupt);
                 }
@@ -446,7 +464,7 @@ impl DigitalLab {
     pub fn click(&mut self, mem: &mut Memory, status: u32, key: u8) {
         if self.state.key.is_some() {
             self.state.key = None;
-            mem.load(LAB_KEY, &[0]);
+            mem.load(at(mem, LAB_KEY), &[0]);
         } else {
             self.state.key = Some(key & 15);
             if self.state.key_interrupts && status & cp0::EXL == 0 {
@@ -478,8 +496,9 @@ impl DigitalLab {
 
     /// A load or store at one of the four bytes (MARS takes the value as a Java `char`).
     fn access(&mut self, mem: &mut Memory, addr: u32, value: u16) {
+        let key_addr = at(mem, LAB_KEY);
         let s = &mut self.state;
-        match addr {
+        match addr.wrapping_sub(mem.layout.mmio_base).wrapping_add(MMIO_BASE) {
             LAB_BASE => s.segments[0] = value as u8,
             LAB_LEFT => s.segments[1] = value as u8,
             LAB_ROW => {
@@ -488,7 +507,7 @@ impl DigitalLab {
                     _ => 0,
                 };
                 // A store of the tool: part of the step, as the program's.
-                let _ = mem.store8(LAB_KEY, found as u8);
+                let _ = mem.store8(key_addr, found as u8);
                 s.key_interrupts = value & 0xF0 != 0;
             }
             _ => {

@@ -4,7 +4,6 @@
 
 use rustemu_asm::{Dialect, EmuDirectives, Format, LineInfo, Symbol, SymbolKind};
 use rustemu_mips::AsMips;
-use rustemu_mips::memory::TEXT_BASE;
 
 use crate::Session;
 
@@ -48,10 +47,21 @@ impl Session {
         m.load(&prog.image)
     }
 
-    /// Assembles MIPS source `text` of file `name` (its `.include` files read from disk) and loads it.
+    /// Assembles MIPS source `text` of file `name` (its `.include` files read from disk) with
+    /// MARS's default settings and loads it.
     pub fn load_mips_source(&mut self, name: &str, text: &str) -> Result<(), String> {
+        self.load_mips_source_with(name, text, &rustemu_mips::Settings::default())
+    }
+
+    /// Like [`Session::load_mips_source`], with MARS's `settings`.
+    pub fn load_mips_source_with(
+        &mut self,
+        name: &str,
+        text: &str,
+        settings: &rustemu_mips::Settings,
+    ) -> Result<(), String> {
         let mut read = |p: &str| std::fs::read(p).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
-        let prog = rustemu_mips::asm::assemble_with(name, text, &mut read).map_err(|e| e.to_string())?;
+        let prog = rustemu_mips::asm::assemble_settings(name, text, &mut read, settings).map_err(|e| e.to_string())?;
         self.load_mips(prog, name)
     }
 }
@@ -59,6 +69,8 @@ impl Session {
 /// The debug information of a MIPS program in the session's common form: statements and data by
 /// source line (offsets from the text segment base), labels as symbols.
 fn debug_info(prog: &rustemu_mips::asm::Program, name: &str) -> rustemu_asm::Program {
+    // Offsets from the text segment of the program's memory configuration.
+    let base = prog.image.settings.layout().text_base;
     let line = |file_line: usize| file_line as u32;
     let place = |p: &(usize, usize)| (p.0, line(p.1));
     let mut lines: Vec<LineInfo> = prog
@@ -67,7 +79,7 @@ fn debug_info(prog: &rustemu_mips::asm::Program, name: &str) -> rustemu_asm::Pro
         .map(|s| LineInfo {
             file: s.file,
             line: line(s.line),
-            image_offset: s.addr.wrapping_sub(TEXT_BASE),
+            image_offset: s.addr.wrapping_sub(base),
             len: s.words.len() as u32 * 4,
             is_code: true,
             data_size: 0,
@@ -79,7 +91,7 @@ fn debug_info(prog: &rustemu_mips::asm::Program, name: &str) -> rustemu_asm::Pro
     lines.extend(prog.data.iter().filter(|d| d.len > 0).map(|d| LineInfo {
         file: d.file,
         line: line(d.line),
-        image_offset: d.addr.wrapping_sub(TEXT_BASE),
+        image_offset: d.addr.wrapping_sub(base),
         len: d.len,
         is_code: false,
         data_size: d.unit,

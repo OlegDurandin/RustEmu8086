@@ -11,7 +11,7 @@ use crate::console::Console;
 use crate::cpu::{Cpu, RA, REG_NAMES, SP};
 use crate::disasm::{self, Style};
 use crate::machine::{Finish, Machine};
-use crate::memory::{self, Memory, Segment};
+use crate::memory::{self, Memory};
 use crate::random::JavaRandom;
 
 /// The registers before an execution command ([`Target::checkpoint`]).
@@ -134,7 +134,7 @@ impl Target for Machine {
     }
 
     fn image_base(&self) -> Option<u32> {
-        self.loaded.then_some(memory::TEXT_BASE)
+        self.loaded.then_some(self.mem.layout.text_base)
     }
 
     fn terminated(&self) -> Option<u8> {
@@ -200,7 +200,7 @@ impl Target for Machine {
         }
         // Return addresses saved on the stack (sw $ra, n($sp)).
         let mut a = self.cpu.reg(SP) & !3;
-        while Segment::of(a) == Some(Segment::Stack) && a <= memory::STACK_BASE && out.len() < 64 {
+        while self.mem.layout.in_stack(a) && out.len() < 64 {
             let w = self.mem.peek32(a);
             if w != ra
                 && let Some(mut f) = self.called_from(w)

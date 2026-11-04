@@ -66,7 +66,7 @@ Then press **F8** (or **Step**) a few times. Went too far? **⇧F8** steps back.
 - **Share a program as a link.** The code is packed into the link itself; a teacher sends it, and the student
   opens a ready example.
 - **MIPS32 too.** Switch the processor to MIPS32 (toolbar, or the badge on a tablet) for a workspace of its own: the
-  MARS assembler syntax, floating point (coprocessor 1), system calls (`syscall`), a Run I/O console, MARS's keyboard and display, bitmap display and Digital Lab Sim in memory, registers grouped by use, flat memory, and the
+  MARS assembler syntax, floating point (coprocessor 1), system calls (`syscall`), a Run I/O console, MARS's keyboard and display, bitmap display and Digital Lab Sim in memory, MARS's settings (delayed branching, self-modifying code, compact memory), registers grouped by use, flat memory, and the
   same step back, breakpoints and watches. Each processor keeps its own program; switching loses nothing. A MIPS
   reference (instructions with what each pseudo-instruction becomes, `syscall` services, registers) is built in,
   and the `rustemu` command line runs MIPS programs too.

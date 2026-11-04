@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 use super::basic::{BASIC, Basic};
 use super::lexer::{IntClass, Kind, Token, parse_int, tokenize};
+use crate::settings::Settings;
 
 /// The pseudo-instructions of MARS.
 const PSEUDO_OPS: &str = include_str!("../../data/PseudoOps.txt");
@@ -38,6 +39,9 @@ pub enum Def {
     Pseudo {
         /// The templates (MARS syntax, `DBNOP` ones included).
         templates: Vec<String>,
+        /// The templates for a compact memory configuration (MARS's `COMPACT` part: 16-bit
+        /// addresses), when the form has them.
+        compact: Option<Vec<String>>,
         /// MARS's description.
         help: String,
     },
@@ -55,11 +59,25 @@ pub struct Form {
 }
 
 impl Form {
-    /// Number of machine instructions (delay-slot `nop`s are not generated: no delayed branching).
-    pub fn words(&self) -> u32 {
+    /// The templates of a pseudo-instruction under `settings` (the compact ones in a compact
+    /// memory configuration, when there are), empty for a basic instruction.
+    pub fn templates(&self, settings: &Settings) -> &[String] {
+        match &self.def {
+            Def::Basic(_) => &[],
+            Def::Pseudo { compact: Some(c), .. } if settings.layout().is_compact() => c,
+            Def::Pseudo { templates, .. } => templates,
+        }
+    }
+
+    /// Number of machine instructions under `settings`: a delay-slot `nop` (`DBNOP`) only with
+    /// delayed branching.
+    pub fn words(&self, settings: &Settings) -> u32 {
         match &self.def {
             Def::Basic(_) => 1,
-            Def::Pseudo { templates, .. } => templates.iter().filter(|t| !t.contains("DBNOP")).count() as u32,
+            Def::Pseudo { .. } => {
+                self.templates(settings).iter().filter(|t| settings.delayed_branching || !t.contains("DBNOP")).count()
+                    as u32
+            }
         }
     }
 }
@@ -103,6 +121,7 @@ impl Table {
             let mut parts = line.split('\t').filter(|p| !p.is_empty());
             let Some(spec) = parts.next() else { continue };
             let mut templates = Vec::new();
+            let mut compact: Option<Vec<String>> = None;
             let mut help = String::new();
             for p in parts {
                 if let Some(h) = p.strip_prefix('#') {
@@ -111,19 +130,19 @@ impl Table {
                 }
                 // The second template set is for compact memory configurations.
                 if p.trim() == "COMPACT" {
-                    help = line.split("\t#").nth(1).unwrap_or("").trim().to_string();
-                    break;
+                    compact = Some(Vec::new());
+                    continue;
                 }
                 // MARS's table forgets the base register of the second instruction of
                 // `swr $t1,100` (MARS then emits a nop); the other forms have it.
                 let p = if spec == "swr $t1,100" && p.trim() == "swr RG1, 0" { "swr RG1, 0($1)" } else { p.trim() };
-                templates.push(p.to_string());
+                compact.as_mut().unwrap_or(&mut templates).push(p.to_string());
             }
             let Some((m, operands)) = example_operands(spec) else { continue };
             forms.entry(m).or_default().push(Form {
                 example: spec.into(),
                 operands,
-                def: Def::Pseudo { templates, help },
+                def: Def::Pseudo { templates, compact, help },
             });
         }
         Table { forms }
@@ -207,11 +226,11 @@ fn bit15(v: i32) -> i32 {
 
 /// The instruction a pseudo-instruction template stands for, with the operands of the statement:
 /// `tokens` are the statement's tokens, the mnemonic at 0, labels already replaced by their
-/// addresses; `label` is the label of the last operand (for `LAB`). None for a template that
-/// generates nothing (`DBNOP`: no delayed branching).
-pub fn substitute(template: &str, tokens: &[&str], label: &str) -> Option<String> {
+/// addresses; `label` is the label of the last operand (for `LAB`); `delayed`: delayed branching.
+/// None for a template that generates nothing (`DBNOP` without delayed branching).
+pub fn substitute(template: &str, tokens: &[&str], label: &str, delayed: bool) -> Option<String> {
     if template.contains("DBNOP") {
-        return None;
+        return delayed.then(|| "nop".to_string());
     }
     let mut s = template.to_string();
     let value = |n: usize| tokens.get(n).copied().unwrap_or("");
@@ -306,8 +325,9 @@ pub fn substitute(template: &str, tokens: &[&str], label: &str) -> Option<String
     }
     if let Some(i) = s.find("BROFF") {
         // BROFFnm: n without delayed branching (MARS's default), m with it.
-        let disabled = s.get(i + 5..i + 6).unwrap_or("0").to_string();
-        s = s.replacen(&s[i..i + 7].to_string(), &disabled, 1);
+        let k = if delayed { i + 6 } else { i + 5 };
+        let offset = s.get(k..k + 1).unwrap_or("0").to_string();
+        s = s.replacen(&s[i..i + 7].to_string(), &offset, 1);
     }
     if s.contains("NR") {
         for op in 1..tokens.len() {
@@ -369,24 +389,45 @@ mod tests {
     }
 
     #[test]
+    fn compact_and_delayed_forms() {
+        let t = Table::get();
+        let lw = t.forms("lw").unwrap().iter().find(|f| f.example == "lw $t1,label").unwrap();
+        let compact = Settings { memory: crate::settings::MemoryConfig::CompactDataAtZero, ..Settings::default() };
+        assert_eq!(lw.templates(&Settings::default()), ["lui $1, LH2", "lw RG1, LL2($1)"]);
+        assert_eq!(lw.templates(&compact), ["lw RG1, LL2($0)"]);
+        assert_eq!((lw.words(&Settings::default()), lw.words(&compact)), (2, 1));
+        let mulou = &t.forms("mulou").unwrap()[0];
+        let delayed = Settings { delayed_branching: true, ..Settings::default() };
+        assert_eq!(mulou.words(&delayed), mulou.words(&Settings::default()) + 1);
+    }
+
+    #[test]
     fn templates_like_mars() {
         let toks = ["li", "$t0", "100000"];
-        assert_eq!(substitute("lui $1, VHL2", &toks, ""), Some("lui $1, 1".into()));
-        assert_eq!(substitute("ori RG1, $1, VL2U", &toks, ""), Some("ori $t0, $1, 34464".into()));
+        assert_eq!(substitute("lui $1, VHL2", &toks, "", false), Some("lui $1, 1".into()));
+        assert_eq!(substitute("ori RG1, $1, VL2U", &toks, "", false), Some("ori $t0, $1, 34464".into()));
         // la $t0, label at 0x10018000: the upper half is not rounded (ori), lw's is (signed offset).
         let toks = ["la", "$t0", &(0x1001_8000u32 as i32).to_string()];
-        assert_eq!(substitute("lui $1, LHL", &toks, ""), Some("lui $1, 4097".into()));
-        assert_eq!(substitute("lui $1, LH2", &toks, ""), Some("lui $1, 4098".into()));
-        assert_eq!(substitute("lw RG1, LL2($1)", &toks, ""), Some("lw $t0, -32768($1)".into()));
+        assert_eq!(substitute("lui $1, LHL", &toks, "", false), Some("lui $1, 4097".into()));
+        assert_eq!(substitute("lui $1, LH2", &toks, "", false), Some("lui $1, 4098".into()));
+        assert_eq!(substitute("lw RG1, LL2($1)", &toks, "", false), Some("lw $t0, -32768($1)".into()));
         assert_eq!(
-            substitute("bne RG3, $0, BROFF12", &["div", "$t0", "$t1", "$t2"], ""),
+            substitute("bne RG3, $0, BROFF12", &["div", "$t0", "$t1", "$t2"], "", false),
             Some("bne $t2, $0, 1".into())
         );
-        assert_eq!(substitute("DBNOP", &["div"], ""), None);
         assert_eq!(
-            substitute("bne $1, $0, LAB", &["blt", "$t0", "$t1", "4194324"], "loop"),
+            substitute("bne RG3, $0, BROFF12", &["div", "$t0", "$t1", "$t2"], "", true),
+            Some("bne $t2, $0, 2".into())
+        );
+        assert_eq!(substitute("DBNOP", &["div"], "", false), None);
+        assert_eq!(substitute("DBNOP", &["div"], "", true), Some("nop".into()));
+        assert_eq!(
+            substitute("bne $1, $0, LAB", &["blt", "$t0", "$t1", "4194324"], "loop", false),
             Some("bne $1, $0, loop".into())
         );
-        assert_eq!(substitute("srl $1, RG2, S32", &["rol", "$t0", "$t1", "8"], ""), Some("srl $1, $t1, 24".into()));
+        assert_eq!(
+            substitute("srl $1, RG2, S32", &["rol", "$t0", "$t1", "8"], "", false),
+            Some("srl $1, $t1, 24".into())
+        );
     }
 }

@@ -1694,3 +1694,37 @@ fn mips_devices() {
     assert_eq!((m.lab.pressed(), m.lab.segments()[0], m.lab.segments()[1] & 0x7f), (Some(11), 0x06, 0x7c));
     save(&mut h, "47_mips_digital_lab");
 }
+
+#[test]
+fn mars_settings() {
+    use rustemu_session::Arch;
+    let mut h = harness(App::with_settings(Settings { last_file: None, ..Default::default() }));
+    h.run();
+    h.state_mut().switch_arch(Arch::Mips32);
+    h.state_mut().doc.text =
+        ".text\n    li $t0, 1\n    beq $zero, $zero, L\n    addi $t0, $t0, 10\nL:  li $v0, 10\n    syscall\n".into();
+    h.state_mut().settings.mars.delayed_branching = true;
+    h.state_mut().emulate();
+    h.run();
+    assert!(h.state().session.mips().unwrap().settings.delayed_branching, "the program takes the settings");
+    // The emulator window's settings menu, with MARS's names.
+    h.state_mut().windows[Tool::RunIo] = false;
+    h.run();
+    h.get_by_label("settings").click();
+    h.run_steps(4);
+    h.get_by_label("Delayed branching");
+    h.get_by_label("Compact, Data at Address 0").click();
+    h.run_steps(4);
+    assert_eq!(h.state().settings.mars.memory, "CompactDataAtZero");
+    assert!(rustemu_ui::mars_settings::changed_since_load(h.state()), "the loaded program has the old ones");
+    h.get_by_label_contains("MARS settings were changed");
+    save(&mut h, "48_mips_settings");
+    // Assembled again: the delay slot runs, the program is at 0x3000.
+    h.key_press(egui::Key::Escape);
+    h.state_mut().emulate();
+    h.state_mut().start_run();
+    run_frames(&mut h, 5);
+    let m = h.state().session.mips().unwrap();
+    assert_eq!((m.cpu.regs[8], m.mem.layout.text_base), (11, 0x3000));
+    assert!(!rustemu_ui::mars_settings::changed_since_load(h.state()));
+}
