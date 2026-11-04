@@ -16,6 +16,8 @@
 //! Anything else is "address out of range". The loader and the debugger use the raw accessors
 //! ([`Memory::peek8`], [`Memory::load`]), which reach every address.
 
+use std::sync::atomic::Ordering::Relaxed;
+
 /// Bytes per page.
 pub const PAGE_SIZE: usize = 4096;
 /// Pages in a block of the page directory (a block covers 4 MB, the size of a segment).
@@ -129,6 +131,40 @@ pub fn hex(v: u32) -> String {
     format!("0x{v:08x}")
 }
 
+/// What an instruction did to the keyboard and display registers (MARS tells its MMIO tool of
+/// every access; only these two matter to it).
+#[derive(Debug, Default)]
+pub(crate) struct MmioTouch {
+    /// The receiver data register was read (a load at exactly its address).
+    pub(crate) read_data: std::sync::atomic::AtomicBool,
+    /// The value stored at exactly the transmitter data address (the byte of `sb`, the word of `sw`).
+    pub(crate) written: Option<u32>,
+    /// Loads and stores at the Digital Lab Sim's addresses (`0xffff0010..=0xffff0013`), in
+    /// order: the address and the value loaded or stored (MARS tells its tool of each).
+    pub(crate) lab: std::sync::Mutex<Vec<(u32, u32)>>,
+    /// `lab` is not empty.
+    pub(crate) lab_touched: std::sync::atomic::AtomicBool,
+}
+
+impl MmioTouch {
+    /// Either register was touched.
+    #[inline]
+    pub(crate) fn any(&self) -> bool {
+        self.written.is_some() || self.read_data.load(Relaxed) || self.lab_touched.load(Relaxed)
+    }
+}
+
+impl Clone for MmioTouch {
+    fn clone(&self) -> Self {
+        MmioTouch {
+            read_data: self.read_data.load(Relaxed).into(),
+            written: self.written,
+            lab: self.lab.lock().map(|l| l.clone()).unwrap_or_default().into(),
+            lab_touched: self.lab_touched.load(Relaxed).into(),
+        }
+    }
+}
+
 /// The memory of the machine.
 #[derive(Clone, Default)]
 pub struct Memory {
@@ -145,6 +181,9 @@ pub struct Memory {
     /// Programs may load and store in the text segment (MARS setting "self-modifying code",
     /// off by default).
     pub self_modifying: bool,
+    /// The MMIO registers of the keyboard and display the running instruction touched (see
+    /// [`crate::mmio`]).
+    pub(crate) mmio: MmioTouch,
 }
 
 impl std::fmt::Debug for Memory {
@@ -339,10 +378,43 @@ impl Memory {
         self.journal = journal;
     }
 
+    /// Records a load the devices watch: the receiver data register, the Digital Lab Sim's bytes.
+    #[inline]
+    fn note_load(&self, addr: u32, value: u32) {
+        if addr >= MMIO_BASE {
+            if addr == crate::mmio::RECEIVER_DATA {
+                self.mmio.read_data.store(true, Relaxed);
+            }
+            self.note_lab(addr, value);
+        }
+    }
+
+    /// Records a store the devices watch: the transmitter data register, the Digital Lab Sim's bytes.
+    #[inline]
+    fn note_store(&mut self, addr: u32, value: u32) {
+        if addr >= MMIO_BASE {
+            if addr == crate::mmio::TRANSMITTER_DATA {
+                self.mmio.written = Some(value);
+            }
+            self.note_lab(addr, value);
+        }
+    }
+
+    fn note_lab(&self, addr: u32, value: u32) {
+        if addr.wrapping_sub(crate::mmio::LAB_BASE) < 4
+            && let Ok(mut l) = self.mmio.lab.lock()
+        {
+            l.push((addr, value));
+            self.mmio.lab_touched.store(true, Relaxed);
+        }
+    }
+
     /// A byte the program loads (`lb`, `lbu`, and each byte of `lwl` / `lwr`).
     pub fn load8(&self, addr: u32) -> Result<u8, AccessError> {
         self.check_access(Access::Load, addr)?;
-        Ok(self.peek8(addr))
+        let v = self.peek8(addr);
+        self.note_load(addr, v as u32);
+        Ok(v)
     }
 
     /// A halfword the program loads (`lh`, `lhu`); it must be aligned.
@@ -351,7 +423,9 @@ impl Memory {
             return Err(AccessError::new(Access::Load, addr, "fetch address not aligned on halfword boundary "));
         }
         self.check_access(Access::Load, addr)?;
-        Ok(self.read(addr, 2) as u16)
+        let v = self.read(addr, 2);
+        self.note_load(addr, v);
+        Ok(v as u16)
     }
 
     /// A word the program loads (`lw`, `ll`); it must be aligned.
@@ -360,12 +434,15 @@ impl Memory {
             return Err(AccessError::new(Access::Load, addr, "fetch address not aligned on word boundary "));
         }
         self.check_access(Access::Load, addr)?;
-        Ok(self.read(addr, 4))
+        let v = self.read(addr, 4);
+        self.note_load(addr, v);
+        Ok(v)
     }
 
     /// Stores a byte (`sb`, and each byte of `swl` / `swr`).
     pub fn store8(&mut self, addr: u32, value: u8) -> Result<(), AccessError> {
         self.check_access(Access::Store, addr)?;
+        self.note_store(addr, value as u32);
         self.write(addr, 1, value as u32);
         Ok(())
     }
@@ -376,6 +453,7 @@ impl Memory {
             return Err(AccessError::new(Access::Store, addr, "store address not aligned on halfword boundary "));
         }
         self.check_access(Access::Store, addr)?;
+        self.note_store(addr, value as u32);
         self.write(addr, 2, value as u32);
         Ok(())
     }
@@ -386,6 +464,7 @@ impl Memory {
             return Err(AccessError::new(Access::Store, addr, "store address not aligned on word boundary "));
         }
         self.check_access(Access::Store, addr)?;
+        self.note_store(addr, value);
         self.write(addr, 4, value);
         Ok(())
     }

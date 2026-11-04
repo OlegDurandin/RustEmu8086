@@ -42,6 +42,7 @@ rustemu run sum.asm --trace                  # every instruction with registers
 | `--screen` | print the final text screen instead of the output stream |
 | `--trace` | print every executed instruction |
 | `--timer-irq` | enable IRQ0 (INT 08h / 1Ch) 18.2 times a second |
+| `--keys <text>` | MIPS: keys of MARS's MMIO keyboard (`\n` is Enter) |
 
 The exit code of `rustemu run` is the program's exit code (AL in INT 21h, function 4Ch), so scripts can check the
 result:
@@ -72,6 +73,7 @@ in the MARS dialect; `--arch mips` or `--arch 8086` says it explicitly.
 rustemu asm sort.s -l -s                     # check; listing (.lst, MARS's text segment) + symbols
 rustemu asm sort.s -o sort.bin               # the text segment as binary (MARS's dump .text)
 rustemu run sum.s --input '100\n'            # Run I/O input; \n = Enter
+rustemu run keyboard_display.s --keys 'hi\n' --max 500000   # keys of the MMIO keyboard
 rustemu run fibonacci.s --regs               # print the registers at the end
 rustemu run hello.s --trace                  # every instruction with $v0 $a0 $t0 $t1 $sp
 rustemu disasm sort.bin --arch mips          # from 0x00400000; --org for another address
@@ -80,7 +82,8 @@ rustemu disasm sort.bin --arch mips --mars   # MARS's basic notation: $8, branch
 
 The exit code is the code of `exit2` (syscall 17), 0 after `exit` (syscall 10) or when the program runs past its
 last instruction; an exception without a handler prints the error and returns 5. File services (13–16) work in
-the program's folder. A trace line:
+the program's folder. `--keys` types on MARS's MMIO keyboard (one key each time the program has read the
+previous one); what the program sent to the MMIO display is printed at the end after `[MMIO display]`. A trace line:
 
 ```
 00400004  3c011001  lui $at, 0x1001              v0=00000004 a0=00000000 t0=00000000 t1=00000000 sp=7fffeffc

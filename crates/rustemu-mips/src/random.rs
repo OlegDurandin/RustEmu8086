@@ -2,9 +2,11 @@
 //! seed (syscall 40) a program gets the same numbers as in MARS.
 
 /// A linear congruential generator with Java's constants and algorithms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct JavaRandom {
     seed: u64,
+    /// The second value of the last `nextGaussian` pair (its bits), returned by the next call.
+    gaussian: Option<u64>,
 }
 
 const MULTIPLIER: u64 = 0x5_DEEC_E66D;
@@ -13,7 +15,7 @@ const MASK: u64 = (1 << 48) - 1;
 impl JavaRandom {
     /// `new Random(seed)`.
     pub fn new(seed: i64) -> JavaRandom {
-        let mut r = JavaRandom { seed: 0 };
+        let mut r = JavaRandom { seed: 0, gaussian: None };
         r.set_seed(seed);
         r
     }
@@ -21,6 +23,7 @@ impl JavaRandom {
     /// `setSeed(seed)`.
     pub fn set_seed(&mut self, seed: i64) {
         self.seed = (seed as u64 ^ MULTIPLIER) & MASK;
+        self.gaussian = None;
     }
 
     /// `next(bits)`: the next `bits` (1..=32) random bits.
@@ -38,6 +41,24 @@ impl JavaRandom {
     pub fn next_double(&mut self) -> f64 {
         let hi = (self.next(26) as i64) << 27;
         (hi + self.next(27) as i64) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+
+    /// `nextGaussian()`: normally distributed, mean 0, standard deviation 1 (Marsaglia's polar
+    /// method, values in pairs, as Java).
+    pub fn next_gaussian(&mut self) -> f64 {
+        if let Some(g) = self.gaussian.take() {
+            return f64::from_bits(g);
+        }
+        loop {
+            let v1 = 2.0 * self.next_double() - 1.0;
+            let v2 = 2.0 * self.next_double() - 1.0;
+            let s = v1 * v1 + v2 * v2;
+            if s < 1.0 && s != 0.0 {
+                let multiplier = (-2.0 * s.ln() / s).sqrt();
+                self.gaussian = Some((v2 * multiplier).to_bits());
+                return v1 * multiplier;
+            }
+        }
     }
 
     /// `nextInt()`: any 32-bit value.
@@ -66,6 +87,17 @@ impl JavaRandom {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gaussians_as_java() {
+        // new Random(42).nextGaussian() three times, as bits (Double.doubleToLongBits). Java takes
+        // the logarithm from StrictMath (fdlibm): the last bit may differ.
+        let mut r = JavaRandom::new(42);
+        for java in [4607821503525903750i64, 4606456510138157127, -4616641179245592382] {
+            let ours = r.next_gaussian().to_bits() as i64;
+            assert!((ours - java).abs() <= 1, "{ours} vs {java}");
+        }
+    }
 
     #[test]
     fn same_numbers_as_java() {

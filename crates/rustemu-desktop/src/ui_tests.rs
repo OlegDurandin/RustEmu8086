@@ -1147,12 +1147,15 @@ fn panels_and_classic_windows() {
     save(&mut h, "40_panels_debugging");
     // Every open tool has a tab, nothing floats over the editor.
     let tree = h.state().panels.clone().unwrap();
-    for t in [Tool::Editor, Tool::Emulator, Tool::Screen, Tool::Source, Tool::Memory, Tool::Watch, Tool::Devices] {
+    for t in [Tool::Editor, Tool::Emulator, Tool::Screen, Tool::Source, Tool::Watch, Tool::Devices] {
         assert!(tree.tiles.find_pane(&t).is_some(), "{t:?} has no tab");
     }
+    // The memory window floats: as a tab it took the emulator's column.
+    assert!(tree.tiles.find_pane(&Tool::Memory).is_none());
+    h.get_by_label_contains("memory");
     // The tabs of the inspection tools are below the emulator, the screen is on the right.
     let rect = |t| tree.tiles.rect(tree.tiles.parent_of(tree.tiles.find_pane(&t).unwrap()).unwrap()).unwrap();
-    assert!(rect(Tool::Memory).top() > rect(Tool::Emulator).bottom() - 1.0);
+    assert!(rect(Tool::Watch).top() > rect(Tool::Emulator).bottom() - 1.0);
     assert!(rect(Tool::Screen).left() > rect(Tool::Emulator).right() - 1.0);
     assert!(rect(Tool::Emulator).left() > rect(Tool::Editor).right() - 1.0);
 
@@ -1626,4 +1629,68 @@ fn mips_macros() {
     h.state_mut().start_run();
     run_frames(&mut h, 20);
     assert_eq!(h.state().session.mips().unwrap().console.text(), "Squares: 1 4 9 16 25 \n");
+}
+
+/// MARS's memory-mapped devices: a program that uses them opens the Keyboard and Display window,
+/// keys typed in its keyboard area reach the program, the Bitmap Display shows memory.
+#[test]
+fn mips_devices() {
+    use rustemu_session::Arch;
+    let mut h = harness(App::with_settings(Settings { last_file: None, ..Default::default() }));
+    h.run();
+    h.state_mut().switch_arch(Arch::Mips32);
+    let i = rustemu_ui::examples::MIPS_EXAMPLES.iter().position(|e| e.1 == "keyboard_display.s").unwrap();
+    h.state_mut().load_mips_example(i);
+    h.run();
+    h.get_by_label("▶ emulate").click();
+    h.run();
+    assert!(h.state().windows[Tool::MmioDisplay], "the program reaches 0xffff0000");
+    h.state_mut().start_run();
+    run_frames(&mut h, 5);
+    // The keyboard area has the focus: typed text goes to the program.
+    h.event(egui::Event::Text("hello, mips".into()));
+    // One key a frame, when the program has read the previous one.
+    run_frames(&mut h, 30);
+    let shown = h.state().session.mips().unwrap().mmio.text().to_vec();
+    assert_eq!(String::from_utf8_lossy(&shown), "Type in the KEYBOARD area (Esc clears):\nHELLO, MIPS");
+    assert_eq!(h.state().devices.typed, "hello, mips");
+    h.get_by_label_contains("DISPLAY: Store to Transmitter Data 0xffff000c");
+    save(&mut h, "45_mips_keyboard_display");
+
+    let i = rustemu_ui::examples::MIPS_EXAMPLES.iter().position(|e| e.1 == "bitmap.s").unwrap();
+    h.state_mut().stop();
+    h.state_mut().load_mips_example(i);
+    h.run();
+    h.get_by_label("▶ emulate").click();
+    h.run();
+    h.state_mut().windows[Tool::MmioDisplay] = false;
+    h.state_mut().windows[Tool::Bitmap] = true;
+    h.state_mut().start_run();
+    for _ in 0..600 {
+        if h.state().session.target.terminated().is_some() {
+            break;
+        }
+        run_frames(&mut h, 1);
+    }
+    assert!(h.state().session.target.terminated().is_some(), "the drawing ends");
+    run_frames(&mut h, 2);
+    h.get_by_label("Base address for display");
+    save(&mut h, "46_mips_bitmap");
+
+    let i = rustemu_ui::examples::MIPS_EXAMPLES.iter().position(|e| e.1 == "digital_lab.s").unwrap();
+    h.state_mut().load_mips_example(i);
+    h.run();
+    h.get_by_label("▶ emulate").click();
+    h.run();
+    assert!(h.state().windows[Tool::DigitalLab], "the program reaches 0xffff0010");
+    h.state_mut().windows[Tool::Bitmap] = false;
+    h.state_mut().start_run();
+    run_frames(&mut h, 3);
+    h.get_by_label("b").click();
+    run_frames(&mut h, 5);
+    h.state_mut().stop();
+    run_frames(&mut h, 2);
+    let m = h.state().session.mips().unwrap();
+    assert_eq!((m.lab.pressed(), m.lab.segments()[0], m.lab.segments()[1] & 0x7f), (Some(11), 0x06, 0x7c));
+    save(&mut h, "47_mips_digital_lab");
 }

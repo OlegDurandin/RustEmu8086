@@ -64,7 +64,7 @@ variable `x dq 1.5` sets the size itself: `fld x`; for `[bx]` the size is writte
 ## The FPU window
 
 The **aux** button at the bottom of the emulator window → **FPU** (or the emulator window menu **view → floating
-point unit**; in the panels mode — a tab next to memory) shows:
+point unit**; in the panels mode — a tab next to watch) shows:
 
 - registers `ST(0)` … `ST(7)` — the value, the tag (valid, zero, special, empty) and the 80-bit hex;
 - the stack top pointer `TOP`, bits C3 C2 C1 C0 (a tooltip reminds how they get into ZF / PF / CF through `SAHF`);
