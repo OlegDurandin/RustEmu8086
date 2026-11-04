@@ -4,7 +4,7 @@
 use egui::{Color32, ColorImage, FontId, RichText, Sense, TextureHandle, TextureOptions, Ui, vec2};
 use serde::{Deserialize, Serialize};
 
-use rustemu_mips::mmio::{DELAYS, DelayTechnique, RECEIVER_DATA, TRANSMITTER_DATA};
+use rustemu_mips::mmio::{DELAYS, DelayTechnique, LAB_OFFSET, RECEIVER_DATA_OFFSET, TRANSMITTER_DATA_OFFSET};
 
 use crate::app::App;
 
@@ -60,14 +60,22 @@ const TECHNIQUES: [DelayTechnique; 3] = [DelayTechnique::Fixed, DelayTechnique::
 const UNITS: [u32; 6] = [1, 2, 4, 8, 16, 32];
 /// Display sizes the Bitmap Display offers, in pixels.
 const SIZES: [u32; 5] = [64, 128, 256, 512, 1024];
-/// Base addresses of the Bitmap Display, as MARS names them.
-const BASES: [(u32, &str); 5] = [
-    (0x1000_0000, "global data"),
-    (0x1000_8000, "$gp"),
-    (0x1001_0000, "static data"),
-    (0x1004_0000, "heap"),
-    (0xffff_0000, "memory map"),
-];
+/// Base addresses the Bitmap Display offers, as MARS names them.
+const BASE_NAMES: [&str; 5] = ["global data", "$gp", "static data", "heap", "memory map"];
+
+/// The addresses of [`BASE_NAMES`] in memory configuration `l` (MARS takes them from its memory).
+fn bases(l: &rustemu_mips::Layout) -> [u32; 5] {
+    [l.data_segment_base, l.gp, l.data_base, l.heap_base, l.mmio_base]
+}
+
+/// The display's base in configuration `l`. A choice of the list is stored as its address in
+/// the default configuration, so it follows the configuration; another address is used as it is.
+fn base_in(stored: u32, l: &rustemu_mips::Layout) -> u32 {
+    match bases(&rustemu_mips::settings::DEFAULT).iter().position(|&b| b == stored) {
+        Some(i) => bases(l)[i],
+        None => stored,
+    }
+}
 
 impl App {
     /// Gives the MIPS machine the device settings (they may change while it runs).
@@ -95,12 +103,16 @@ pub fn keyboard_display_ui(app: &mut App, ui: &mut Ui) {
         return;
     }
     let font = FontId::monospace(13.0);
+    let mmio = crate::mips_ui::layout(app).mmio_base;
     // From the bottom: the keyboard and the options keep their height, the display takes the rest.
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
         keyboard_area(app, ui, &font);
         ui.label(
-            RichText::new(format!("KEYBOARD: Characters typed here are stored to Receiver Data 0x{RECEIVER_DATA:08x}"))
-                .small(),
+            RichText::new(format!(
+                "KEYBOARD: Characters typed here are stored to Receiver Data 0x{:08x}",
+                mmio + RECEIVER_DATA_OFFSET
+            ))
+            .small(),
         );
         ui.separator();
         ui.horizontal(|ui| {
@@ -177,7 +189,8 @@ fn display_area(app: &mut App, ui: &mut Ui, font: &FontId) {
     m.mmio.terminal_size = area;
     ui.label(
         RichText::new(format!(
-            "DISPLAY: Store to Transmitter Data 0x{TRANSMITTER_DATA:08x}, cursor {}, area {} x {}",
+            "DISPLAY: Store to Transmitter Data 0x{:08x}, cursor {}, area {} x {}",
+            m.mem.layout.mmio_base + TRANSMITTER_DATA_OFFSET,
             m.mmio.cursor_text(),
             area.0,
             area.1
@@ -280,6 +293,7 @@ fn latin1(c: char) -> u8 {
 
 /// The Bitmap Display: its settings and the units of memory as pixels.
 pub fn bitmap_ui(app: &mut App, ui: &mut Ui) {
+    let layout = crate::mips_ui::layout(app);
     let s = &mut app.settings.mips_devices;
     egui::Grid::new("bitmap_settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
         let choice = |ui: &mut Ui, label: &str, hover: &str, value: &mut u32, choices: &[u32]| {
@@ -312,12 +326,16 @@ pub fn bitmap_ui(app: &mut App, ui: &mut Ui) {
         choice(ui, "Display Width in Pixels", "Total width in pixels of display area", &mut s.size[0], &SIZES);
         choice(ui, "Display Height in Pixels", "Total height in pixels of display area", &mut s.size[1], &SIZES);
         let l = ui.label("Base address for display").on_hover_text("Base address for display area (upper left corner)");
-        let name =
-            |b: u32| BASES.iter().find(|x| x.0 == b).map_or(format!("0x{b:08x}"), |(a, n)| format!("0x{a:08x} ({n})"));
+        let defaults = bases(&rustemu_mips::settings::DEFAULT);
+        let here = bases(layout);
+        let name = |b: u32| match defaults.iter().position(|&d| d == b) {
+            Some(i) => format!("0x{:08x} ({})", here[i], BASE_NAMES[i]),
+            None => format!("0x{b:08x}"),
+        };
         egui::ComboBox::from_id_salt("bitmap_base")
             .selected_text(name(s.base))
             .show_ui(ui, |ui| {
-                for (a, _) in BASES {
+                for a in defaults {
                     ui.selectable_value(&mut s.base, a, name(a));
                 }
             })
@@ -326,15 +344,16 @@ pub fn bitmap_ui(app: &mut App, ui: &mut Ui) {
         ui.end_row();
     });
     let s = app.settings.mips_devices.clone();
+    let base = base_in(s.base, layout);
     let cols = (s.size[0] / s.unit[0].max(1)).max(1) as usize;
     let rows = (s.size[1] / s.unit[1].max(1)).max(1) as usize;
     ui.weak(format!(
         "{cols} x {rows} units: words 0x{:08x}..0x{:08x}, colour 0x00RRGGBB",
-        s.base,
-        s.base.wrapping_add((4 * (cols * rows - 1)) as u32)
+        base,
+        base.wrapping_add((4 * (cols * rows - 1)) as u32)
     ));
     let pixels = match app.session.mips() {
-        Some(m) => bitmap_pixels(&m.mem, s.base, cols, rows),
+        Some(m) => bitmap_pixels(&m.mem, base, cols, rows),
         None => vec![Color32::BLACK; cols * rows],
     };
     let state = &mut app.devices.bitmap;
@@ -441,28 +460,47 @@ pub fn digital_lab_ui(app: &mut App, ui: &mut Ui) {
             m.clear_history();
         }
     });
+    let b = crate::mips_ui::layout(app).mmio_base + LAB_OFFSET;
     ui.label(
-        RichText::new(
-            "0xffff0010 / 0xffff0011: segments of the right / left display (bit 0 = a … bit 6 = g, bit 7 = point) · \
-             0xffff0012: row to scan (bits 0..3), bit 7 = keyboard interrupt · 0xffff0014: the key found (row | column << 4) · \
-             0xffff0013: non-zero = counter interrupt every 30 instructions",
-        )
+        RichText::new(format!(
+            "0x{b:08x} / 0x{:08x}: segments of the right / left display (bit 0 = a … bit 6 = g, bit 7 = point) · \
+             0x{:08x}: row to scan (bits 0..3), bit 7 = keyboard interrupt · 0x{:08x}: the key found (row | column << 4) · \
+             0x{:08x}: non-zero = counter interrupt every 30 instructions",
+            b + 1,
+            b + 2,
+            b + 4,
+            b + 3
+        ))
         .small()
         .weak(),
     );
 }
 
-/// Which devices the code reaches: (keyboard and display, Digital Lab Sim). An address of the
-/// memory-mapped segment is built with `lui $at, 0xffff`; the offset in the next instruction
-/// (`ori`, a load or a store) tells the device: 0x10..0x14 is the Digital Lab Sim's.
-pub fn devices_used(words: impl Iterator<Item = u32>) -> (bool, bool) {
+/// Which devices the code reaches: (keyboard and display, Digital Lab Sim), with memory-mapped
+/// I/O at `mmio_base`. At 0xffff0000 an address of the segment is built with `lui $at, 0xffff`
+/// and the offset is in the next instruction (`ori`, a load or a store); in a compact
+/// configuration (MMIO at 0x7f00) the address is an instruction's 16-bit immediate. Offsets
+/// 0x10..0x14 are the Digital Lab Sim's.
+pub fn devices_used(words: impl Iterator<Item = u32>, mmio_base: u32) -> (bool, bool) {
     let (mut keyboard, mut lab) = (false, false);
+    let mut note = |offset: u32| {
+        if (0x10..=0x14).contains(&offset) { lab = true } else { keyboard = true }
+    };
     let mut after_lui = false;
     for w in words {
-        if after_lui {
-            if (0x10..=0x14).contains(&(w & 0xFFFF)) { lab = true } else { keyboard = true }
+        let imm = w & 0xFFFF;
+        if mmio_base >> 16 == 0 {
+            // An I-type instruction (not a branch) with the address as its immediate.
+            let op = w >> 26;
+            if op >= 0x08 && (mmio_base..mmio_base + 0x18).contains(&imm) {
+                note(imm - mmio_base);
+            }
+            continue;
         }
-        after_lui = w & 0xFFE0_FFFF == 0x3C00_FFFF;
+        if after_lui {
+            note(imm);
+        }
+        after_lui = w & 0xFFE0_FFFF == (0x3C00_0000 | mmio_base >> 16);
     }
     (keyboard, lab)
 }

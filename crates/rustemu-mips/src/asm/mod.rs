@@ -22,6 +22,12 @@
 //!   second time is MARS's "Recursive include" error.
 //!
 //! Strings are stored as UTF-8 (MARS keeps only the low byte of each character).
+//!
+//! MARS's settings ([`Settings`]) change the assembly: the memory configuration gives the
+//! segment addresses (and in a compact configuration pseudo-instructions use their 16-bit
+//! forms), delayed branching adds the delay-slot `nop`s of some pseudo-instructions, without
+//! pseudo-instructions each one is an error, warnings can be errors, and execution can start
+//! at the global label `main`.
 
 mod basic;
 mod lexer;
@@ -34,7 +40,8 @@ pub use lexer::{DIRECTIVES, IntClass, Kind, Token, parse_int, tokenize};
 pub use table::{Def, Form, Operand, Table};
 
 use crate::machine::{Chunk, Image};
-use crate::memory::{self, Segment};
+use crate::memory::Segment;
+use crate::settings::{Layout, Settings};
 
 /// An error (or a warning) of the source: its file, 1-based line and column, and MARS's message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,16 +142,17 @@ impl Program {
             .collect()
     }
 
-    /// The user text segment as bytes from its base 0x00400000 (little-endian words, gaps as
-    /// zeros), as MARS's "dump .text Binary".
+    /// The user text segment as bytes from its base (0x00400000 in the default memory
+    /// configuration; little-endian words, gaps as zeros), as MARS's "dump .text Binary".
     pub fn text_bytes(&self) -> Vec<u8> {
-        let in_text = |a: u32| (memory::TEXT_BASE..memory::TEXT_LIMIT).contains(&a);
+        let layout = self.image.settings.layout();
+        let in_text = |a: u32| (layout.text_base..layout.text_limit).contains(&a);
         let mut out = Vec::new();
         for s in &self.statements {
             for (k, w) in s.words.iter().enumerate() {
                 let a = s.addr + 4 * k as u32;
                 if in_text(a) {
-                    let at = (a - memory::TEXT_BASE) as usize;
+                    let at = (a - layout.text_base) as usize;
                     if out.len() < at + 4 {
                         out.resize(at + 4, 0);
                     }
@@ -332,6 +340,10 @@ const KERNEL: usize = 1;
 
 /// The state of the assembly.
 struct Asm {
+    settings: Settings,
+    layout: &'static Layout,
+    /// Names declared global (`.globl`).
+    globals: Vec<String>,
     errors: Vec<AsmError>,
     warnings: Vec<AsmError>,
     symbols: HashMap<String, (u32, bool)>,
@@ -369,8 +381,12 @@ struct Asm {
 }
 
 impl Asm {
-    fn new() -> Asm {
+    fn new(settings: Settings) -> Asm {
+        let layout = settings.layout();
         Asm {
+            settings,
+            layout,
+            globals: Vec::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             symbols: HashMap::new(),
@@ -378,9 +394,9 @@ impl Asm {
             in_data: false,
             text_space: USER,
             data_space: USER,
-            text_addr: [memory::TEXT_BASE, memory::KTEXT_BASE],
-            data_addr: [memory::DATA_BASE, memory::KDATA_BASE],
-            extern_addr: memory::DATA_SEGMENT_BASE,
+            text_addr: [layout.text_base, layout.ktext_base],
+            data_addr: [layout.data_base, layout.kdata_base],
+            extern_addr: layout.extern_base,
             auto_align: true,
             last_data: None,
             data: BTreeMap::new(),
@@ -652,12 +668,18 @@ impl Asm {
                 return self.error(col, msg);
             }
         };
+        if matches!(form.def, Def::Pseudo { .. }) && !self.settings.pseudo_instructions {
+            // As MARS: an error, and the statement is assembled all the same.
+            self.error(m.col, "Extended (pseudo) instruction or format not permitted.  See Settings.");
+        }
+        let words = form.words(&self.settings);
         let addr = self.text_addr[self.text_space];
-        let end = addr.wrapping_add(form.words() * 4).wrapping_sub(1);
-        if !Segment::of(addr).is_some_and(Segment::is_code) || Segment::of(end) != Segment::of(addr) {
+        let end = addr.wrapping_add(words * 4).wrapping_sub(1);
+        let seg = self.layout.segment(addr);
+        if !seg.is_some_and(Segment::is_code) || self.layout.segment(end) != seg {
             return self.error(m.col, format!("\"{}\" is not a valid text segment address", addr as i32));
         }
-        self.text_addr[self.text_space] = addr.wrapping_add(form.words() * 4);
+        self.text_addr[self.text_space] = addr.wrapping_add(words * 4);
         self.pending.push(Pending { place: self.place.clone(), tokens, form, addr });
     }
 
@@ -735,6 +757,7 @@ impl Asm {
                 if let Some(a) = args.iter().find(|a| a.kind != Kind::Ident) {
                     self.error(a.col, format!("\"{}\" directive argument must be label.", d.text));
                 }
+                self.globals.extend(args.iter().map(|a| a.text.clone()));
             }
             ".eqv" => match args {
                 [n, rest @ ..] if n.kind == Kind::Ident && !rest.is_empty() => {
@@ -784,9 +807,9 @@ impl Asm {
 
     /// Whether `len` bytes at `addr` are in a data segment.
     fn check_data(&mut self, addr: u32, len: u32, col: usize) -> bool {
-        let seg = Segment::of(addr);
+        let seg = self.layout.segment(addr);
         let ok = matches!(seg, Some(Segment::Data | Segment::Stack | Segment::KernelData | Segment::Mmio))
-            && (len == 0 || Segment::of(addr.wrapping_add(len - 1)) == seg);
+            && (len == 0 || self.layout.segment(addr.wrapping_add(len - 1)) == seg);
         if !ok {
             self.error(col, format!("\"{}\" is not a valid data segment address", addr as i32));
         }
@@ -1073,13 +1096,16 @@ impl Asm {
                     }
                 }
             }
-            Def::Pseudo { templates, .. } => {
+            Def::Pseudo { .. } => {
+                let templates = p.form.templates(&self.settings);
                 let texts: Vec<&str> =
                     std::iter::once(p.tokens[0].text.as_str()).chain(ops.iter().map(|t| t.text.as_str())).collect();
                 let label = p.tokens.last().filter(|t| t.kind == Kind::Ident).map_or("", |t| t.text.as_str());
                 let mut addr = p.addr;
                 for tpl in templates {
-                    let Some(line) = table::substitute(tpl, &texts, label) else { continue };
+                    let Some(line) = table::substitute(tpl, &texts, label, self.settings.delayed_branching) else {
+                        continue;
+                    };
                     let built = tokenize(&line).ok().and_then(|toks| {
                         let (m, rest) = toks.split_first()?;
                         let forms = Table::get().forms(&m.text)?;
@@ -1147,12 +1173,14 @@ fn int_value(t: &Token) -> Option<i32> {
     }
 }
 
-/// Groups bytes by address into contiguous chunks.
-fn chunks_of(bytes: impl Iterator<Item = (u32, u8)>, code: bool) -> Vec<Chunk> {
+/// Groups bytes by address into contiguous chunks (each within one segment of `layout`).
+fn chunks_of(bytes: impl Iterator<Item = (u32, u8)>, code: bool, layout: &Layout) -> Vec<Chunk> {
     let mut out: Vec<Chunk> = Vec::new();
     for (a, b) in bytes {
         match out.last_mut() {
-            Some(c) if c.addr.wrapping_add(c.bytes.len() as u32) == a && Segment::of(a) == Segment::of(c.addr) => {
+            Some(c)
+                if c.addr.wrapping_add(c.bytes.len() as u32) == a && layout.segment(a) == layout.segment(c.addr) =>
+            {
                 c.bytes.push(b)
             }
             _ => out.push(Chunk { addr: a, bytes: vec![b], code }),
@@ -1213,18 +1241,29 @@ fn include_lines(
     Ok(())
 }
 
-/// Assembles a MARS program without `.include` files (see [`assemble_with`]).
+/// Assembles a MARS program without `.include` files, with MARS's default settings (see
+/// [`assemble_with`]).
 pub fn assemble(source: &str) -> Result<Program, Vec<AsmError>> {
     assemble_with("", source, &mut |_| None).map_err(|e| e.errors)
 }
 
-/// Assembles MARS program `source` of file `name`; `read` gives the text of a file `.include`
-/// names (its path: relative to the folder of the including file, joined to it), None when
-/// there is no such file.
+/// Assembles MARS program `source` of file `name` with MARS's default settings; `read` gives
+/// the text of a file `.include` names (its path: relative to the folder of the including file,
+/// joined to it), None when there is no such file.
 pub fn assemble_with(
     name: &str,
     source: &str,
     read: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<Program, AsmErrors> {
+    assemble_settings(name, source, read, &Settings::default())
+}
+
+/// Like [`assemble_with`], with MARS's `settings`; the program's [`Image`] records them.
+pub fn assemble_settings(
+    name: &str,
+    source: &str,
+    read: &mut dyn FnMut(&str) -> Option<String>,
+    settings: &Settings,
 ) -> Result<Program, AsmErrors> {
     let mut files = vec![SourceFile { name: name.to_string(), text: source.to_string() }];
     let mut lines = Vec::new();
@@ -1232,7 +1271,7 @@ pub fn assemble_with(
     if let Err(e) = include_lines(&mut files, 0, read, &mut Vec::new(), &mut lines, 0) {
         return Err(AsmErrors { errors: vec![e], files: names(&files) });
     }
-    let mut asm = Asm::new();
+    let mut asm = Asm::new(*settings);
     asm.lines = lines;
     for i in 0..asm.lines.len() {
         asm.index = i;
@@ -1258,6 +1297,10 @@ pub fn assemble_with(
     }
     let pending = std::mem::take(&mut asm.pending);
     let statements: Vec<Statement> = pending.iter().filter_map(|p| asm.build(p)).collect();
+    if settings.warnings_are_errors && asm.errors.is_empty() && !asm.warnings.is_empty() {
+        // As MARS: the warnings stop the assembly.
+        asm.errors = std::mem::take(&mut asm.warnings);
+    }
     if !asm.errors.is_empty() {
         asm.errors.sort_by_key(|e| (e.file, e.line, e.col));
         return Err(AsmErrors { errors: asm.errors, files: names(&files) });
@@ -1270,13 +1313,22 @@ pub fn assemble_with(
             w.to_le_bytes().into_iter().enumerate().map(move |(i, b)| (a + i as u32, b))
         })
     });
-    let mut chunks = chunks_of(code, true);
-    chunks.extend(chunks_of(asm.data.iter().map(|(&a, &b)| (a, b)), false));
+    let layout = asm.layout;
+    let mut chunks = chunks_of(code, true, layout);
+    chunks.extend(chunks_of(asm.data.iter().map(|(&a, &b)| (a, b)), false, layout));
+    // MARS's `RegisterFile.initializeProgramCounter(startAtMain)`: the global label `main`, if it
+    // labels code.
+    let main =
+        asm.symbols.get("main").map(|s| s.0).filter(|&a| asm.globals.iter().any(|g| g == "main") && layout.in_code(a));
+    let entry = match main {
+        Some(a) if settings.start_at_main => a,
+        _ => layout.text_base,
+    };
     let mut symbols: Vec<Symbol> =
         asm.symbols.iter().map(|(n, &(addr, data))| Symbol { name: n.clone(), addr, data }).collect();
     symbols.sort_by(|a, b| (a.addr, &a.name).cmp(&(b.addr, &b.name)));
     Ok(Program {
-        image: Image { chunks, entry: memory::TEXT_BASE },
+        image: Image { chunks, entry, settings: *settings },
         statements,
         data: asm.data_lines,
         symbols,

@@ -4,9 +4,9 @@
 //! code list — address, machine word, instruction and source line.
 
 use egui::{Color32, FontId, RichText, Ui};
+use rustemu_mips::Layout;
 use rustemu_mips::cpu::{Cpu, REG_NAMES};
 use rustemu_mips::disasm::{Style, disassemble};
-use rustemu_mips::memory::{self, Segment};
 use rustemu_mips::syscall::{java_double, java_float};
 use rustemu_mips::target::{Checkpoint, FCC, FPR};
 
@@ -554,17 +554,24 @@ pub fn parse_addr(app: &App, text: &str) -> Option<u32> {
     app.session.compile(t).ok().map(|e| e.eval(&*app.session.target) as u32)
 }
 
+/// The memory configuration of the machine (of its loaded program; the default one without a
+/// MIPS machine).
+pub fn layout(app: &App) -> &'static Layout {
+    app.session.mips().map_or(&rustemu_mips::settings::DEFAULT, |m| m.settings.layout())
+}
+
 /// The places of the memory window's buttons: name, hover text, address (None: no machine).
-fn quick_links(app: &App) -> Vec<(&'static str, &'static str, u32)> {
+fn quick_links(app: &App) -> Vec<(&'static str, String, u32)> {
     let Some(m) = app.session.mips() else { return Vec::new() };
+    let l = m.settings.layout();
     vec![
-        (".text", "user code (0x00400000)", memory::TEXT_BASE),
-        (".data", "user data (0x10010000)", memory::DATA_BASE),
-        ("heap", "memory of sbrk (0x10040000)", memory::HEAP_BASE),
-        ("$gp", "global pointer", m.cpu.regs[28]),
-        ("$sp", "the stack, from the stack pointer", m.cpu.regs[29]),
-        ("PC", "the current instruction", m.cpu.pc),
-        (".kdata", "kernel data (0x90000000)", memory::KDATA_BASE),
+        (".text", format!("user code (0x{:08x})", l.text_base), l.text_base),
+        (".data", format!("user data (0x{:08x})", l.data_base), l.data_base),
+        ("heap", format!("memory of sbrk (0x{:08x})", l.heap_base), l.heap_base),
+        ("$gp", "global pointer".into(), m.cpu.regs[28]),
+        ("$sp", "the stack, from the stack pointer".into(), m.cpu.regs[29]),
+        ("PC", "the current instruction".into(), m.cpu.pc),
+        (".kdata", format!("kernel data (0x{:08x})", l.kdata_base), l.kdata_base),
     ]
 }
 
@@ -599,6 +606,7 @@ pub fn memory_ui(app: &mut App, ui: &mut Ui) {
         }
     });
     let base = app.view.mem_view_addr & !0xF;
+    let layout = layout(app);
     let font = FontId::monospace(12.5);
     // A word clicked while the program is paused is edited in place (Enter writes it).
     let editable = app.cpu_editable();
@@ -617,7 +625,7 @@ pub fn memory_ui(app: &mut App, ui: &mut Ui) {
                     let mut chars = String::new();
                     for w in 0..4u32 {
                         let wa = a.wrapping_add(w * 4);
-                        if Segment::of(wa).is_none() {
+                        if layout.segment(wa).is_none() {
                             ui.label(text("········ ".into(), weak));
                             chars.push_str("    ");
                             continue;
@@ -661,7 +669,7 @@ pub fn memory_ui(app: &mut App, ui: &mut Ui) {
                             start_edit = Some((wa, format!("0x{v:08x}")));
                         }
                     }
-                    let label = match Segment::of(a) {
+                    let label = match layout.segment(a) {
                         None => "  unmapped".to_string(),
                         Some(_) => format!(" {chars}"),
                     };
@@ -730,7 +738,8 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
         let start = app.view.code_view_start;
         if pc < start || pc >= start.wrapping_add(CODE_ROWS * 4) || !start.is_multiple_of(4) {
             // A few instructions before the PC, within its segment.
-            let back = (1..=4u32).take_while(|k| Segment::of(pc.wrapping_sub(4 * k)) == Segment::of(pc)).count();
+            let l = layout(app);
+            let back = (1..=4u32).take_while(|k| l.segment(pc.wrapping_sub(4 * k)) == l.segment(pc)).count();
             app.view.code_view_start = pc.wrapping_sub(4 * back as u32);
         }
     }
@@ -757,10 +766,11 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
                 }
             }
             ui.end_row();
+            let l = layout(app);
             let t = &*app.session.target;
             for row in 0..CODE_ROWS {
                 let a = start.wrapping_add(row * 4);
-                let mapped = Segment::of(a).is_some();
+                let mapped = l.segment(a).is_some();
                 let word = if mapped { u32::from_le_bytes(t.read_bytes(a, 4).try_into().unwrap()) } else { 0 };
                 let bp = t.breakpoints().contains(&a);
                 let current = a == pc;
@@ -784,7 +794,11 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
                     if current || selected { t.strong() } else { t }
                 };
                 let marker = if current { "▶" } else { " " };
-                let addr = ui.add(egui::Label::new(strong(format!("{marker}{a:08x}"))).sense(egui::Sense::click()));
+                let mut addr = ui.add(egui::Label::new(strong(format!("{marker}{a:08x}"))).sense(egui::Sense::click()));
+                // With delayed branching: the instruction runs in the delay slot of a taken branch.
+                if current && let rustemu_mips::Delay::Triggered(target) = m.cpu.delay {
+                    addr = addr.on_hover_text(format!("delay slot: then the branch goes to 0x{target:08x}"));
+                }
                 if !mapped {
                     ui.label(RichText::new("unmapped").font(font.clone()).weak());
                     ui.label("");
@@ -793,7 +807,10 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
                     continue;
                 }
                 ui.label(RichText::new(format!("{word:08x}")).font(font.clone()).weak());
-                let text = if m.mem.has_code(a) { disassemble(word, a, Style::Named) } else { String::new() };
+                let mut text = if m.mem.has_code(a) { disassemble(word, a, Style::Named) } else { String::new() };
+                if current && let rustemu_mips::Delay::Triggered(target) = m.cpu.delay {
+                    text += &format!("   (delay slot → 0x{target:08x})");
+                }
                 let ins = ui.add(egui::Label::new(strong(text)).sense(egui::Sense::click()));
                 let line_text = |file: usize, l: usize| {
                     files.get(file).and_then(|f| f.1.get(l.wrapping_sub(1))).map_or("", |s| s.trim())

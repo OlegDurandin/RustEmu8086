@@ -117,8 +117,11 @@ forces it. See [Command line](Command-line).
 - Macros and `.include`, by MARS's rules (see below).
 - MARS's memory-mapped devices: the Keyboard and Display MMIO Simulator, the Bitmap Display and the Digital Lab
   Sim (see below).
+- MARS's settings: delayed branching, self-modifying code, start at `main`, no pseudo-instructions, warnings as
+  errors, the compact memory configurations (see below).
 
-Not yet: dialogs (50–59), MARS's settings (delayed branching…).
+Not yet: dialogs (50–59); of MARS's settings, program arguments, an exception handler file, input in dialogs and
+assembling all files of a folder.
 
 ## Macros and .include
 
@@ -151,7 +154,9 @@ loop:
 The *tools* menu of the emulator window (and *Windows* in the Emulator menu, ⋮ on the tablet) opens MARS's
 tools for input and output through memory. They are always connected: a program can use them without a click on
 "Connect to MIPS". A program that reaches the devices (its code builds an address with `lui …, 0xffff`) opens the
-keyboard and display, or the Digital Lab Sim, at **emulate**.
+keyboard and display, or the Digital Lab Sim, at **emulate**. The addresses below are those of the default memory
+configuration; in the compact ones the devices are at the same offsets from `0x7f00` (see
+[MARS's settings](#marss-settings)).
 
 **Keyboard and Display MMIO Simulator** — four words at `0xffff0000`:
 
@@ -201,3 +206,47 @@ handler — Status's interrupt enable does not matter — and these Cause bits s
 The keyboard and display and the Digital Lab Sim are checked against MARS's own tools: the same display text,
 segments, registers and interrupts for programs that poll, take interrupts, use the terminal and get keys or
 clicks at given instructions.
+
+## MARS's settings
+
+The *settings* menu of the emulator window (also Options → *MARS settings* and *all options…*, ⋮ → Options on the
+tablet) has MARS's settings that change how a program assembles and runs. They are saved and used by the next
+**emulate**; a loaded program keeps the settings it was assembled with, and after a change the emulator window says
+so and offers *Reassemble and load (F9)*.
+
+| setting | MARS's option | what changes |
+|---|---|---|
+| Delayed branching | `db` | the instruction after a branch or jump (its delay slot) runs before the branch is taken; `jal`, `jalr`, `bgezal`, `bltzal` link past the slot; pseudo-instructions get the `nop`s of their delay slots (`mulo`, `mulou`…). In the code list the instruction in a delay slot shows where the branch goes next |
+| Self-modifying code | `smc` | the program loads and stores in the text segment, and a stored word becomes an instruction (past the end of the program too); code runs from the data segment (`jalr` to data) |
+| Initialize Program Counter to global 'main' if defined | `sm` | execution starts at `main` when the program declares `.globl main` |
+| Permit extended (pseudo) instructions and formats | `np` turns it off | off: `li`, `la`, `move`, `lw $t0, label`… are errors ("Extended (pseudo) instruction or format not permitted.  See Settings.") |
+| Assembler warnings are considered errors | `we` | a warning (a `.byte` value out of range…) stops the assembly |
+| Memory configuration | `mc` | where the segments are, see below |
+
+As in MARS, a few details are MARS's own:
+
+- a branch in a delay slot keeps the first branch's target and takes it one instruction later;
+- an exception in a delay slot enters the handler, but the pending branch is taken right after, so the handler's
+  code does not run;
+- with self-modifying code the text segment is read and written by words: a byte or halfword store replaces the
+  whole word, a byte or halfword load reads the low bits of the word, and at an address that is not a word's
+  both are an address error ("fetch address for text segment not aligned to word boundary").
+
+The memory configurations:
+
+| | Default | Compact, Data at Address 0 | Compact, Text at Address 0 |
+|---|---|---|---|
+| `.text` | `0x00400000` | `0x00003000` | `0x00000000` |
+| `.data` | `0x10010000` | `0x00000000` | `0x00002000` |
+| heap (`sbrk`) | `0x10040000` | `0x00002000` | `0x00003000` |
+| `$gp` / `$sp` | `0x10008000` / `0x7fffeffc` | `0x00001800` / `0x00002ffc` | `0x00001800` / `0x00003ffc` |
+| `.ktext` / exception handler | `0x80000000` / `0x80000180` | `0x00004000` / `0x00004180` | `0x00004000` / `0x00004180` |
+| `.kdata` | `0x90000000` | `0x00005000` | `0x00005000` |
+| MMIO (devices) | `0xffff0000` | `0x00007f00` | `0x00007f00` |
+
+In a compact configuration every address fits in 16 bits: `la`, `lw $t0, label` and the other pseudo-instructions
+with a label take one instruction instead of two, as in MARS. The memory window's buttons, the Bitmap Display's
+base addresses and the devices follow the configuration of the loaded program.
+
+The command line has the same settings: `--delayed-branching`, `--self-modifying`, `--start-at-main`,
+`--no-pseudo`, `--warnings-are-errors`, `--memory <config>` (see [Command line](Command-line)).

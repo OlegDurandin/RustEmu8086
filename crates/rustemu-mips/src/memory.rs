@@ -1,8 +1,9 @@
 //! Memory of the MIPS machine: a sparse 32-bit address space in 4 KB pages, little-endian, with
-//! the segments and access rules of MARS's default memory configuration and a journal of
-//! overwritten bytes for step back.
+//! the segments and access rules of a MARS memory configuration ([`Memory::layout`], see
+//! [`crate::settings`]) and a journal of overwritten bytes for step back.
 //!
-//! The segments are MARS's effective ones (its tables hold 4 MB per segment):
+//! The segments of the default configuration are (MARS's effective ones: its tables hold 4 MB
+//! per segment):
 //!
 //! | segment | addresses | program access |
 //! |---|---|---|
@@ -11,10 +12,14 @@
 //! | stack | `0x7fbffffd..=0x7ffffffc` (start address) | loads and stores |
 //! | kernel text | `0x80000000..0x80400000` | instruction fetch |
 //! | kernel data | `0x90000000..0x90400000` | loads and stores |
-//! | MMIO | `0xffff0000..=0xffffffff` | loads and stores |
+//! | MMIO | `0xffff0000..0xffffffff` | loads and stores |
 //!
-//! Anything else is "address out of range". The loader and the debugger use the raw accessors
-//! ([`Memory::peek8`], [`Memory::load`]), which reach every address.
+//! Anything else is "address out of range". With self-modifying code the text segment takes
+//! loads and stores as MARS's does: by word (a byte or halfword store replaces the whole word,
+//! a byte or halfword load reads the low bits of the word; at an address that is not a word's,
+//! MARS's statement lookup fails with an address error), and a stored word becomes an
+//! instruction. The loader and the debugger use the raw accessors ([`Memory::peek8`],
+//! [`Memory::load`]), which reach every address.
 
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -28,6 +33,9 @@ type Page = [u8; PAGE_SIZE];
 type Block = [Option<Box<Page>>; BLOCK_PAGES];
 /// Size MARS gives each segment (its block tables hold 4 MB).
 const SEGMENT_SIZE: u32 = 4 * 1024 * 1024;
+
+// The addresses of MARS's default memory configuration (see [`crate::settings::DEFAULT`] and
+// the other configurations there).
 
 /// Base of the text segment (`.text`, where the program counter starts).
 pub const TEXT_BASE: u32 = 0x0040_0000;
@@ -62,6 +70,8 @@ pub const KDATA_LIMIT: u32 = KDATA_BASE + SEGMENT_SIZE;
 /// Base of memory-mapped I/O (keyboard and display of MARS's MMIO simulator).
 pub const MMIO_BASE: u32 = 0xffff_0000;
 
+pub use crate::settings::Layout;
+
 /// A region of the address space with its own access rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Segment {
@@ -80,20 +90,6 @@ pub enum Segment {
 }
 
 impl Segment {
-    /// The segment of `addr` (for a multi-byte access: of its first byte), None when the address
-    /// is outside every segment.
-    pub fn of(addr: u32) -> Option<Segment> {
-        Some(match addr {
-            DATA_SEGMENT_BASE..DATA_LIMIT => Segment::Data,
-            a if a > STACK_LIMIT && a <= STACK_BASE => Segment::Stack,
-            MMIO_BASE..=u32::MAX => Segment::Mmio,
-            TEXT_BASE..TEXT_LIMIT => Segment::Text,
-            KDATA_BASE..KDATA_LIMIT => Segment::KernelData,
-            KTEXT_BASE..KTEXT_LIMIT => Segment::KernelText,
-            _ => return None,
-        })
-    }
-
     /// Code segments: instructions are fetched from them.
     pub fn is_code(self) -> bool {
         matches!(self, Segment::Text | Segment::KernelText)
@@ -181,6 +177,8 @@ pub struct Memory {
     /// Programs may load and store in the text segment (MARS setting "self-modifying code",
     /// off by default).
     pub self_modifying: bool,
+    /// The memory configuration: where the segments are.
+    pub layout: Layout,
     /// The MMIO registers of the keyboard and display the running instruction touched (see
     /// [`crate::mmio`]).
     pub(crate) mmio: MmioTouch,
@@ -249,6 +247,17 @@ impl Memory {
     /// Whether `addr` holds loaded code.
     pub fn has_code(&self, addr: u32) -> bool {
         self.code.iter().any(|&(s, e)| (s..e).contains(&addr))
+    }
+
+    /// Number of code ranges ([`Memory::truncate_code`] goes back to it: step back over a
+    /// self-modifying store).
+    pub fn code_ranges(&self) -> usize {
+        self.code.len()
+    }
+
+    /// Forgets the code ranges added after the first `n`.
+    pub fn truncate_code(&mut self, n: usize) {
+        self.code.truncate(n);
     }
 
     /// Forgets all contents and code (a fresh machine).
@@ -331,7 +340,7 @@ impl Memory {
 
     /// Checks that the program may load or store at `addr` (alignment aside).
     pub fn check_access(&self, access: Access, addr: u32) -> Result<(), AccessError> {
-        match Segment::of(addr) {
+        match self.layout.segment(addr) {
             Some(Segment::Text) if !self.self_modifying => Err(AccessError::new(
                 access,
                 addr,
@@ -344,8 +353,8 @@ impl Memory {
                 access,
                 addr,
                 match access {
-                    Access::Load => "Cannot read directly from kernel text segment!",
-                    Access::Store => "Cannot write directly to kernel text segment!",
+                    Access::Load => "DEVELOPER: You must use getStatement() to read from kernel text segment!",
+                    Access::Store => "DEVELOPER: You must use setStatement() to write to kernel text segment!",
                 },
             )),
             Some(_) => Ok(()),
@@ -381,8 +390,9 @@ impl Memory {
     /// Records a load the devices watch: the receiver data register, the Digital Lab Sim's bytes.
     #[inline]
     fn note_load(&self, addr: u32, value: u32) {
-        if addr >= MMIO_BASE {
-            if addr == crate::mmio::RECEIVER_DATA {
+        let base = self.layout.mmio_base;
+        if addr >= base {
+            if addr == base + crate::mmio::RECEIVER_DATA_OFFSET {
                 self.mmio.read_data.store(true, Relaxed);
             }
             self.note_lab(addr, value);
@@ -392,8 +402,9 @@ impl Memory {
     /// Records a store the devices watch: the transmitter data register, the Digital Lab Sim's bytes.
     #[inline]
     fn note_store(&mut self, addr: u32, value: u32) {
-        if addr >= MMIO_BASE {
-            if addr == crate::mmio::TRANSMITTER_DATA {
+        let base = self.layout.mmio_base;
+        if addr >= base {
+            if addr == base + crate::mmio::TRANSMITTER_DATA_OFFSET {
                 self.mmio.written = Some(value);
             }
             self.note_lab(addr, value);
@@ -401,7 +412,7 @@ impl Memory {
     }
 
     fn note_lab(&self, addr: u32, value: u32) {
-        if addr.wrapping_sub(crate::mmio::LAB_BASE) < 4
+        if addr.wrapping_sub(self.layout.mmio_base + crate::mmio::LAB_OFFSET) < 4
             && let Ok(mut l) = self.mmio.lab.lock()
         {
             l.push((addr, value));
@@ -409,9 +420,45 @@ impl Memory {
         }
     }
 
+    /// With self-modifying code, `addr` is in the text segment: MARS reads and writes it by
+    /// whole words.
+    #[inline]
+    fn text_word(&self, addr: u32) -> bool {
+        self.self_modifying && (self.layout.text_base..self.layout.text_limit).contains(&addr)
+    }
+
+    /// The word of the text segment at `addr` as MARS reads it with self-modifying code (its
+    /// statement: 0 where there is none); MARS looks the statement up first, so `addr` must
+    /// be a word's.
+    fn load_text(&self, addr: u32) -> Result<u32, AccessError> {
+        if !addr.is_multiple_of(4) {
+            return Err(AccessError::new(
+                Access::Load,
+                addr,
+                "fetch address for text segment not aligned to word boundary ",
+            ));
+        }
+        Ok(if self.has_code(addr) { self.read(addr, 4) } else { 0 })
+    }
+
+    /// A store into the text segment with self-modifying code, as MARS's: the value replaces
+    /// the word at `addr` (a word's address: MARS reads the old statement first), which becomes
+    /// an instruction.
+    fn store_text(&mut self, addr: u32, value: u32) -> Result<(), AccessError> {
+        self.load_text(addr)?;
+        self.write(addr, 4, value);
+        if !self.has_code(addr) {
+            self.add_code(addr, addr + 4);
+        }
+        Ok(())
+    }
+
     /// A byte the program loads (`lb`, `lbu`, and each byte of `lwl` / `lwr`).
     pub fn load8(&self, addr: u32) -> Result<u8, AccessError> {
         self.check_access(Access::Load, addr)?;
+        if self.text_word(addr) {
+            return Ok(self.load_text(addr)? as u8);
+        }
         let v = self.peek8(addr);
         self.note_load(addr, v as u32);
         Ok(v)
@@ -423,6 +470,9 @@ impl Memory {
             return Err(AccessError::new(Access::Load, addr, "fetch address not aligned on halfword boundary "));
         }
         self.check_access(Access::Load, addr)?;
+        if self.text_word(addr) {
+            return Ok(self.load_text(addr)? as u16);
+        }
         let v = self.read(addr, 2);
         self.note_load(addr, v);
         Ok(v as u16)
@@ -434,6 +484,9 @@ impl Memory {
             return Err(AccessError::new(Access::Load, addr, "fetch address not aligned on word boundary "));
         }
         self.check_access(Access::Load, addr)?;
+        if self.text_word(addr) {
+            return self.load_text(addr);
+        }
         let v = self.read(addr, 4);
         self.note_load(addr, v);
         Ok(v)
@@ -442,6 +495,9 @@ impl Memory {
     /// Stores a byte (`sb`, and each byte of `swl` / `swr`).
     pub fn store8(&mut self, addr: u32, value: u8) -> Result<(), AccessError> {
         self.check_access(Access::Store, addr)?;
+        if self.text_word(addr) {
+            return self.store_text(addr, value as u32);
+        }
         self.note_store(addr, value as u32);
         self.write(addr, 1, value as u32);
         Ok(())
@@ -453,6 +509,9 @@ impl Memory {
             return Err(AccessError::new(Access::Store, addr, "store address not aligned on halfword boundary "));
         }
         self.check_access(Access::Store, addr)?;
+        if self.text_word(addr) {
+            return self.store_text(addr, value as u32);
+        }
         self.note_store(addr, value as u32);
         self.write(addr, 2, value as u32);
         Ok(())
@@ -464,6 +523,9 @@ impl Memory {
             return Err(AccessError::new(Access::Store, addr, "store address not aligned on word boundary "));
         }
         self.check_access(Access::Store, addr)?;
+        if self.text_word(addr) {
+            return self.store_text(addr, value);
+        }
         self.note_store(addr, value);
         self.write(addr, 4, value);
         Ok(())
@@ -480,7 +542,7 @@ impl Memory {
                 "fetch address for text segment not aligned to word boundary ",
             ));
         }
-        match Segment::of(pc) {
+        match self.layout.segment(pc) {
             Some(s) if s.is_code() => Ok(self.has_code(pc).then(|| self.peek32(pc))),
             Some(_) if self.self_modifying => Ok(Some(self.peek32(pc))),
             _ => Err(AccessError::new(Access::Load, pc, "fetch address for text segment out of range ")),
@@ -491,23 +553,25 @@ impl Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::DEFAULT;
 
     #[test]
     fn segments_follow_mars() {
-        assert_eq!(Segment::of(0x0040_0000), Some(Segment::Text));
-        assert_eq!(Segment::of(0x007f_fffc), Some(Segment::Text));
-        assert_eq!(Segment::of(0x0080_0000), None);
-        assert_eq!(Segment::of(DATA_BASE), Some(Segment::Data));
-        assert_eq!(Segment::of(0x103f_ffff), Some(Segment::Data));
-        assert_eq!(Segment::of(0x1040_0000), None);
-        assert_eq!(Segment::of(SP_INIT), Some(Segment::Stack));
-        assert_eq!(Segment::of(STACK_BASE), Some(Segment::Stack));
-        assert_eq!(Segment::of(STACK_BASE + 1), None);
-        assert_eq!(Segment::of(STACK_LIMIT), None);
-        assert_eq!(Segment::of(EXCEPTION_HANDLER), Some(Segment::KernelText));
-        assert_eq!(Segment::of(KDATA_BASE), Some(Segment::KernelData));
-        assert_eq!(Segment::of(0xffff_000c), Some(Segment::Mmio));
-        assert_eq!(Segment::of(0), None);
+        assert_eq!(DEFAULT.segment(0x0040_0000), Some(Segment::Text));
+        assert_eq!(DEFAULT.segment(0x007f_fffc), Some(Segment::Text));
+        assert_eq!(DEFAULT.segment(0x0080_0000), None);
+        assert_eq!(DEFAULT.segment(DATA_BASE), Some(Segment::Data));
+        assert_eq!(DEFAULT.segment(0x103f_ffff), Some(Segment::Data));
+        assert_eq!(DEFAULT.segment(0x1040_0000), None);
+        assert_eq!(DEFAULT.segment(SP_INIT), Some(Segment::Stack));
+        assert_eq!(DEFAULT.segment(STACK_BASE), Some(Segment::Stack));
+        assert_eq!(DEFAULT.segment(STACK_BASE + 1), None);
+        assert_eq!(DEFAULT.segment(STACK_LIMIT), None);
+        assert_eq!(DEFAULT.segment(EXCEPTION_HANDLER), Some(Segment::KernelText));
+        assert_eq!(DEFAULT.segment(KDATA_BASE), Some(Segment::KernelData));
+        assert_eq!(DEFAULT.segment(0xffff_000c), Some(Segment::Mmio));
+        assert_eq!(DEFAULT.segment(0xffff_ffff), None, "MARS's MMIO limit is exclusive");
+        assert_eq!(DEFAULT.segment(0), None);
     }
 
     #[test]
@@ -536,8 +600,36 @@ mod tests {
         assert_eq!(m.load8(0).unwrap_err().message, "address out of range 0x00000000");
         assert_eq!(m.store8(0x0080_0000, 0).unwrap_err().access, Access::Store);
         assert_eq!(m.load32(TEXT_BASE).unwrap_err().message, "Cannot read directly from text segment!0x00400000");
+        assert!(m.load32(KTEXT_BASE).unwrap_err().message.starts_with("DEVELOPER: You must use getStatement()"));
         m.self_modifying = true;
         assert_eq!(m.load32(TEXT_BASE), Ok(0));
+    }
+
+    #[test]
+    fn self_modifying_text_is_words() {
+        let mut m = Memory::new();
+        m.self_modifying = true;
+        m.load(TEXT_BASE, &0x1122_3344u32.to_le_bytes());
+        m.add_code(TEXT_BASE, TEXT_BASE + 4);
+        // As MARS: a byte load reads the low byte of the word; not at a word's address, MARS's
+        // statement lookup fails.
+        assert_eq!((m.load8(TEXT_BASE).unwrap(), m.load16(TEXT_BASE).unwrap()), (0x44, 0x3344));
+        let e = m.load8(TEXT_BASE + 2).unwrap_err();
+        assert_eq!(
+            (e.access, e.message.as_str()),
+            (Access::Load, "fetch address for text segment not aligned to word boundary 0x00400002")
+        );
+        assert_eq!(m.store8(TEXT_BASE + 1, 1).unwrap_err().access, Access::Load);
+        // A byte store replaces the word, and makes a new word code.
+        m.store8(TEXT_BASE, 0xAB).unwrap();
+        assert_eq!(m.peek32(TEXT_BASE), 0xAB);
+        assert_eq!(m.load32(TEXT_BASE + 4), Ok(0), "no statement there");
+        assert_eq!(m.fetch(TEXT_BASE + 8), Ok(None));
+        let n = m.code_ranges();
+        m.store32(TEXT_BASE + 8, 0x2408_0005).unwrap();
+        assert_eq!(m.fetch(TEXT_BASE + 8), Ok(Some(0x2408_0005)));
+        m.truncate_code(n);
+        assert_eq!(m.fetch(TEXT_BASE + 8), Ok(None));
     }
 
     #[test]

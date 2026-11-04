@@ -137,7 +137,7 @@ impl Cpu {
             // bc1f / bc1t
             8 if ft & 2 == 0 => {
                 if self.fcc(ft >> 2) == (ft & 1 == 1) {
-                    self.pc = self.pc.wrapping_add(f.simm << 2);
+                    self.jump(self.pc.wrapping_add(f.simm << 2));
                 }
             }
             16 => self.single(f, ft, fs, fd, funct)?,

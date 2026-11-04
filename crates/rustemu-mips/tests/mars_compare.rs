@@ -288,11 +288,17 @@ fn shown_regs() -> Vec<usize> {
 }
 
 fn run_core(code: &[u32]) -> Outcome {
+    run_core_with(code, false)
+}
+
+/// [`run_core`], with delayed branching or not.
+fn run_core_with(code: &[u32], delayed: bool) -> Outcome {
     let mut mem = Memory::new();
     let bytes: Vec<u8> = code.iter().flat_map(|w| w.to_le_bytes()).collect();
     mem.load(TEXT_BASE, &bytes);
     mem.add_code(TEXT_BASE, TEXT_BASE + bytes.len() as u32);
     let mut cpu = Cpu::new();
+    cpu.delayed_branching = delayed;
     let mut error = None;
     for _ in 0..10_000 {
         match cpu.step(&mut mem) {
@@ -312,6 +318,11 @@ fn run_core(code: &[u32]) -> Outcome {
 }
 
 fn run_mars(mars: &Path, dir: &Path, src: &str) -> Outcome {
+    run_mars_with(mars, dir, src, &[])
+}
+
+/// [`run_mars`] with MARS's `options` (`db`: delayed branching).
+fn run_mars_with(mars: &Path, dir: &Path, src: &str, options: &[&str]) -> Outcome {
     let file = dir.join("prog.asm");
     std::fs::write(&file, src).unwrap();
     let mut cmd = Command::new("java");
@@ -320,7 +331,7 @@ fn run_mars(mars: &Path, dir: &Path, src: &str) -> Outcome {
     } else {
         cmd.arg("-cp").arg(mars).arg("Mars");
     }
-    cmd.arg("nc").arg("10000");
+    cmd.arg("nc").args(options).arg("10000");
     for r in shown_regs() {
         cmd.arg(format!("${}", NAMES[r]));
     }
@@ -373,6 +384,33 @@ fn random_programs_match_mars() {
     }
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(errors, 0, "{errors} of {count} programs differ from MARS");
+}
+
+/// The same random programs with delayed branching (MARS's `db`): the instruction after each
+/// branch and jump executes, a branch in a delay slot postpones the first one, `jal` and `jalr`
+/// link past the slot, and a trap in a slot ends the program there.
+#[test]
+fn delayed_branching_matches_mars() {
+    let Some(mars) = std::env::var_os("MARS") else {
+        eprintln!("MARS is not set: skipping the comparison with MARS");
+        return;
+    };
+    let mars = Path::new(&mars).canonicalize().expect("MARS exists");
+    let count: u64 = std::env::var("MARS_PROGRAMS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let first: u64 = std::env::var("MARS_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let dir = std::env::temp_dir().join(format!("rustemu_mars_db_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut errors = 0;
+    for seed in first..first + count {
+        let (src, code) = program(seed);
+        let (ours, theirs) = (run_core_with(&code, true), run_mars_with(&mars, &dir, &src, &["db"]));
+        if ours != theirs {
+            errors += 1;
+            eprintln!("seed {seed}: differs\n--- program\n{src}--- core\n{ours:?}\n--- MARS\n{theirs:?}\n");
+        }
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(errors, 0, "{errors} of {count} programs differ from MARS with delayed branching");
 }
 
 #[test]
@@ -476,6 +514,7 @@ fn services_match_mars() {
             rustemu_mips::Chunk { addr: DATA_BASE, bytes: data, code: false },
         ],
         entry: TEXT_BASE,
+        settings: Default::default(),
     })
     .unwrap();
     let ev = m.run(100_000);
