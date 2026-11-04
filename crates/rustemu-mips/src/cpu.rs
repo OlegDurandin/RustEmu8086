@@ -8,8 +8,8 @@
 //! address holds code, execution continues there, otherwise the program stops with MARS's
 //! message (`Runtime exception at 0x00400008: arithmetic overflow`).
 //!
-//! Coprocessor 1 (floating point) is not emulated yet: its instructions raise a reserved
-//! instruction exception.
+//! Coprocessor 1 (floating point) is in [`crate::fpu`]. External interrupts of the keyboard and
+//! display ([`crate::mmio`]) are raised by the machine before an instruction.
 
 use crate::memory::{self, Access, AccessError, Memory, hex};
 
@@ -65,6 +65,15 @@ pub enum ExcCode {
     /// operation): Cause, EPC and BadVAddr are not changed, but the exception handler (when there
     /// is one) is still entered.
     Runtime = 31,
+    /// An external interrupt of the keyboard: exception code 0 with Cause bit 8 (MARS encodes the
+    /// device in the code, which Cause gets shifted left by 2).
+    KeyboardInterrupt = 0x40,
+    /// An external interrupt of the display: exception code 0 with Cause bit 9.
+    DisplayInterrupt = 0x80,
+    /// The Digital Lab Sim's counter: Cause bit 10 (MARS's mask keeps it set afterwards).
+    TimerInterrupt = 0x100,
+    /// The Digital Lab Sim's hexadecimal keyboard: Cause bit 11.
+    HexKeyboardInterrupt = 0x200,
 }
 
 /// An exception raised by an instruction (see [`Cpu::step`]).

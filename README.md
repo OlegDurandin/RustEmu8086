@@ -66,7 +66,7 @@ Then press **F8** (or **Step**) a few times. Went too far? **⇧F8** steps back.
 - **Share a program as a link.** The code is packed into the link itself; a teacher sends it, and the student
   opens a ready example.
 - **MIPS32 too.** Switch the processor to MIPS32 (toolbar, or the badge on a tablet) for a workspace of its own: the
-  MARS assembler syntax, floating point (coprocessor 1), system calls (`syscall`), a Run I/O console, registers grouped by use, flat memory, and the
+  MARS assembler syntax, floating point (coprocessor 1), system calls (`syscall`), a Run I/O console, MARS's keyboard and display, bitmap display and Digital Lab Sim in memory, registers grouped by use, flat memory, and the
   same step back, breakpoints and watches. Each processor keeps its own program; switching loses nothing. A MIPS
   reference (instructions with what each pseudo-instruction becomes, `syscall` services, registers) is built in,
   and the `rustemu` command line runs MIPS programs too.
@@ -102,6 +102,8 @@ The [wiki](https://github.com/OlegDurandin/RustEmu8086/wiki) is the user guide, 
   [emu8086.inc library](https://github.com/OlegDurandin/RustEmu8086/wiki/Emu8086-inc-library);
 - [BIOS and DOS interrupts](https://github.com/OlegDurandin/RustEmu8086/wiki/BIOS-and-DOS-interrupts),
   [Virtual devices](https://github.com/OlegDurandin/RustEmu8086/wiki/Virtual-devices);
+- [MIPS32](https://github.com/OlegDurandin/RustEmu8086/wiki/MIPS32) — the second processor: MARS syntax, system
+  calls, floating point, macros, memory-mapped devices;
 - [Web version](https://github.com/OlegDurandin/RustEmu8086/wiki/Web-version),
   [Tablet layout](https://github.com/OlegDurandin/RustEmu8086/wiki/Tablet-layout),
   [Keyboard shortcuts](https://github.com/OlegDurandin/RustEmu8086/wiki/Keyboard-shortcuts);
@@ -140,9 +142,9 @@ MIT — see [LICENSE](LICENSE).
 The MIT license does not cover the Emu8086 materials (Emu8086 was an 8086 emulator published at emu8086.com; the
 site and the company no longer exist):
 
-- the **examples** in `examples/` (except `hello_nasm.asm` and `boot_nasm.asm`) are files from the Emu8086
-  distribution, unchanged (only the text encoding of `thermometer.asm` was converted), and belong to the authors of
-  Emu8086;
+- the **examples** in `examples/` (except `hello_nasm.asm`, `boot_nasm.asm` and the MIPS examples in
+  `examples/mips/`) are files from the Emu8086 distribution, unchanged (only the text encoding of `thermometer.asm`
+  was converted), and belong to the authors of Emu8086;
 - the **`emu8086.inc` library** (`crates/rustemu-asm/inc/`) reproduces the Emu8086 library: its macros and
   procedures, their names, parameters and behaviour belong to the authors of Emu8086; the text of the file was
   written for RustEmu8086.

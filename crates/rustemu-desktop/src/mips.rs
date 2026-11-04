@@ -13,6 +13,13 @@ pub(crate) fn emulator_ui(app: &mut App, ui: &mut Ui) {
         ui.menu_button("file", |ui| file_menu(app, ui));
         ui.menu_button("debug", |ui| debug_menu(app, ui));
         ui.menu_button("view", |ui| view_menu(app, ui));
+        ui.menu_button("tools", |ui| {
+            ui.set_min_width(300.0);
+            let w = &mut app.windows;
+            ui.checkbox(&mut w[Tool::Bitmap], "Bitmap Display");
+            ui.checkbox(&mut w[Tool::DigitalLab], "Digital Lab Sim");
+            ui.checkbox(&mut w[Tool::MmioDisplay], "Keyboard and Display MMIO Simulator");
+        });
         ui.menu_button("help", |ui| {
             use rustemu_ui::reference_ui::Tab;
             for (tab, label) in [

@@ -25,10 +25,11 @@ Material from Emu8086
 
 The MIT License above does not apply to the following.
 
-* examples/ - all files except hello_nasm.asm and boot_nasm.asm are the example
-  programs shipped with Emu8086 (the 8086 microprocessor emulator formerly
-  published at emu8086.com; the website and the company no longer exist),
-  included unchanged except for the character encoding of thermometer.asm.
+* examples/ - all files except hello_nasm.asm, boot_nasm.asm and the MIPS
+  examples in examples/mips/ are the example programs shipped with Emu8086
+  (the 8086 microprocessor emulator formerly published at emu8086.com; the
+  website and the company no longer exist), included unchanged except for the
+  character encoding of thermometer.asm.
   They belong to the authors of Emu8086.
 
 * crates/rustemu-asm/inc/emu8086.inc reproduces the emu8086.inc library of

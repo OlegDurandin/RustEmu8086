@@ -757,8 +757,8 @@ fn registers_article(ui: &mut Ui, l: Lang) {
             ("0x90000000", ".kdata: kernel data", ".kdata: данные ядра"),
             (
                 "0xFFFF0000",
-                "memory-mapped devices of MARS (not emulated yet)",
-                "устройства MARS в памяти (пока не эмулируются)",
+                "memory-mapped I/O: the keyboard and display (below)",
+                "ввод-вывод через память: клавиатура и дисплей (ниже)",
             ),
         ] {
             ui.monospace(addr);
@@ -769,5 +769,64 @@ fn registers_article(ui: &mut Ui, l: Lang) {
     ui.weak(l.pick(
         "Words are little-endian. Reading or writing outside these segments, or a word at an address that is not a multiple of 4, raises an address error exception.",
         "Слова хранятся младшим байтом вперёд. Чтение или запись вне этих сегментов, а также слово по адресу, не кратному 4, вызывают исключение address error.",
+    ));
+    devices_article(ui, l);
+}
+
+/// MARS's memory-mapped devices: the Keyboard and Display MMIO Simulator and the Bitmap Display.
+fn devices_article(ui: &mut Ui, l: Lang) {
+    section(ui, l.pick("Memory-mapped devices", "Устройства в памяти"));
+    ui.label(l.pick(
+        "The Keyboard and Display MMIO Simulator (Tools menu of the emulator window) is four words of memory:",
+        "Keyboard and Display MMIO Simulator (меню tools окна эмулятора) — это четыре слова памяти:",
+    ));
+    egui::Grid::new("mips_mmio_ref").striped(true).spacing([16.0, 3.0]).show(ui, |ui| {
+        for (addr, en, ru) in [
+            (
+                "0xFFFF0000",
+                "receiver control: bit 0 — a key is ready, bit 1 — interrupt enable",
+                "управление приёмником: бит 0 — есть клавиша, бит 1 — разрешение прерывания",
+            ),
+            (
+                "0xFFFF0004",
+                "receiver data: the key's character; reading it (lw, lb at this address) clears the ready bit",
+                "данные приёмника: символ клавиши; чтение (lw, lb по этому адресу) сбрасывает бит готовности",
+            ),
+            (
+                "0xFFFF0008",
+                "transmitter control: bit 0 — the display is ready, bit 1 — interrupt enable",
+                "управление передатчиком: бит 0 — дисплей готов, бит 1 — разрешение прерывания",
+            ),
+            (
+                "0xFFFF000C",
+                "transmitter data: a character stored here (sw, sb) while the display is ready is shown after the delay",
+                "данные передатчика: символ, записанный сюда (sw, sb), пока дисплей готов, показывается после задержки",
+            ),
+        ] {
+            ui.monospace(addr);
+            ui.label(l.pick(en, ru));
+            ui.end_row();
+        }
+    });
+    ui.label(l.pick(
+        "A program polls the ready bit before reading a key or storing a character. The display is busy for the delay set in the tool (5 instructions by default). Character 12 (form feed) clears the display; 7 (bell) makes it a terminal and puts the cursor at column = bits 20..31 and row = bits 8..19 of the stored word.",
+        "Программа опрашивает бит готовности, прежде чем читать клавишу или записывать символ. Дисплей занят на время задержки, заданной в окне инструмента (по умолчанию 5 инструкций). Символ 12 (form feed) очищает дисплей; 7 (bell) превращает его в терминал и ставит курсор в столбец = биты 20..31 и строку = биты 8..19 записанного слова.",
+    ));
+    ui.label(l.pick(
+        "Interrupts: with bit 1 of a control register and bit 0 of Status set (and not inside a handler), a key, or the display becoming ready, interrupts the program before its next instruction: Cause gets code 0 with bit 8 (keyboard) or 9 (display), EPC the instruction's address, and execution goes to the handler at 0x80000180; eret returns.",
+        "Прерывания: если установлены бит 1 регистра управления и бит 0 Status (и программа не в обработчике), клавиша или готовность дисплея прерывают программу перед следующей инструкцией: в Cause — код 0 и бит 8 (клавиатура) или 9 (дисплей), в EPC — адрес инструкции, выполнение переходит в обработчик по адресу 0x80000180; eret возвращает.",
+    ));
+    ui.code(
+        "        li   $t0, 0xffff0000\nwait:   lw   $t1, 8($t0)        # transmitter control\n        andi $t1, $t1, 1\n        beqz $t1, wait          # not ready yet\n        sw   $a0, 12($t0)       # display the character in $a0",
+    );
+    ui.add_space(4.0);
+    ui.label(l.pick(
+        "The Bitmap Display (Tools menu) shows words of memory as pixels, row by row from its base address (0x10010000 by default): 0x00RRGGBB. Its window sets the size of a unit (one word) and of the display in pixels: 512 x 256 with 1 x 1 units is 512 x 256 words.",
+        "Bitmap Display (меню tools) показывает слова памяти как пиксели, строка за строкой от базового адреса (по умолчанию 0x10010000): 0x00RRGGBB. В его окне задаются размер единицы (одно слово) и дисплея в пикселях: 512 x 256 при единице 1 x 1 — это 512 x 256 слов.",
+    ));
+    ui.add_space(4.0);
+    ui.label(l.pick(
+        "The Digital Lab Sim (Tools menu): bytes 0xFFFF0010 and 0xFFFF0011 light the segments of the right and the left display (bit 0 = a … bit 6 = g, bit 7 = the point). A program scans the hexadecimal keyboard by storing a row (1, 2, 4, 8) to 0xFFFF0012 and reading 0xFFFF0014: the row bit and the column bit << 4 of the key pressed in that row, 0 if none (key 2: 0x41). Bits 4..7 of the row byte enable the keyboard interrupt (Cause bit 11). A non-zero byte at 0xFFFF0013 starts the counter: an interrupt (Cause bit 10) every 30 instructions of .text and accesses to these bytes. These interrupts only need the program to be outside the handler.",
+        "Digital Lab Sim (меню tools): байты 0xFFFF0010 и 0xFFFF0011 зажигают сегменты правого и левого индикатора (бит 0 = a … бит 6 = g, бит 7 = точка). Программа опрашивает шестнадцатеричную клавиатуру, записывая строку (1, 2, 4, 8) в 0xFFFF0012 и читая 0xFFFF0014: бит строки и бит столбца << 4 нажатой в этой строке клавиши, 0 — если её нет (клавиша 2: 0x41). Биты 4..7 байта строки разрешают прерывание клавиатуры (бит 11 Cause). Ненулевой байт в 0xFFFF0013 запускает счётчик: прерывание (бит 10 Cause) каждые 30 инструкций из .text и обращений к этим байтам. Для этих прерываний программе достаточно быть вне обработчика.",
     ));
 }
