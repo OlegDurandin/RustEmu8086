@@ -299,6 +299,7 @@ impl App {
 
     /// Advances the emulation for this frame (a panic of the emulator stops the program).
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.apply_mips_devices();
         self.catching(|app| app.tick_inner(ctx));
         self.sync_mips_files();
     }

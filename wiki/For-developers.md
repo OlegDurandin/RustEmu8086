@@ -42,7 +42,7 @@ browser.
 |---|---|
 | `rustemu-target` | the boundary between a processor and the rest: the `Target` trait (steps, step back, breakpoints, memory, disassembly, registers by name). No dependencies |
 | `rustemu-core` | the 8086 processor (+ 80186 extensions), 1 MB of memory, `Machine` (loading, steps, step back, breakpoints), BIOS, DOS, video, devices, disassembler, 8087; `Machine` implements `Target`. No GUI dependencies |
-| `rustemu-mips` | MIPS32: the integer instruction set, memory and exceptions of MARS, its system services (`syscall`), a text console, files in a sandbox, step back; the assembler of MARS's dialect and a disassembler; `impl Target` |
+| `rustemu-mips` | MIPS32 as in MARS: the integer instructions and coprocessor 1 (floating point), memory and exceptions, the system services (`syscall`), a text console, files in a sandbox, the memory-mapped devices (keyboard and display, Digital Lab Sim), step back; the assembler of MARS's dialect with its macros and `.include`, a disassembler; `impl Target` |
 | `rustemu-asm` | the Emu8086 / MASM and NASM assembler: preprocessor, multi-pass assembly, encoding, listing; the built-in `emu8086.inc` |
 | `rustemu-session` | glue between the assembler and the emulator through `Target`: source line ↔ address, debugger expressions, call stack, Step Over / Out; the 8086 part (program formats, floppies) in `x86.rs` |
 | `rustemu-cli` | the `rustemu` program |
@@ -83,11 +83,14 @@ cargo test -p rustemu-desktop -p rustemu-tablet   # UI tests, PNG snapshots in t
   compared with it byte for byte.
 - **Emu8086 examples** (the `examples` folder, files from the Emu8086 distribution, unchanged):
   `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` assembles and runs all 84 examples. Our own
-  test programs are in `tests/programs`.
+  test programs are in `tests/programs`, the MIPS examples (ours) in `examples/mips`.
 - **MARS** (the MIPS core): random programs run on the core and on the real MARS and are compared — registers,
-  HI/LO, memory, exceptions; the assembler's machine code and data against MARS's for every form of every
-  instruction: `MARS=<Mars.jar or a folder with Mars.class> cargo test -p rustemu-mips --test mars_compare --
-  --nocapture`.
+  HI/LO, memory, exceptions, the output of the system services; floating point programs — the `$f` registers,
+  condition flags and memory; the assembler's machine code and data against MARS's for every form of every
+  instruction; programs with macros and `.include` — code or the same error messages:
+  `MARS=<Mars.jar or a folder with Mars.class> cargo test -p rustemu-mips --test mars_compare -- --nocapture`.
+  `--test mmio_compare` (the same `MARS`) drives MARS's own Keyboard and Display MMIO Simulator and Digital Lab
+  Sim (compiled with `javac`, no window shown) and compares the display, the segments, registers and interrupts.
 - **binutils** (the MIPS assembler): every basic instruction form with random operands, assembled by RustEmu8086 and
   by `mipsel-linux-gnu-as`, word by word, when the binutils are installed (`brew install
   mipsel-linux-gnu-binutils`).

@@ -113,6 +113,8 @@ pub struct Settings {
     pub drive_c_source_folder: bool,
     /// What the MIPS workspace remembers (the 8086 one keeps it in the fields above).
     pub mips: ArchSettings,
+    /// Settings of the MIPS keyboard, display and bitmap display.
+    pub mips_devices: crate::mips_devices::DeviceSettings,
 }
 
 /// What the workspace of a processor other than the 8086 remembers between runs.
@@ -205,6 +207,7 @@ impl Default for Settings {
             sessions: Vec::new(),
             drive_c_source_folder: false,
             mips: ArchSettings::default(),
+            mips_devices: Default::default(),
         }
     }
 }
@@ -663,6 +666,8 @@ pub struct App {
     pub drive_dir: PathBuf,
     /// State of the MIPS tools (console input, register being edited, selection).
     pub mips: crate::mips_ui::MipsState,
+    /// State of the MIPS keyboard and display and of the bitmap display.
+    pub devices: crate::mips_devices::DevicesState,
     /// The workspaces of the other processors (see [`App::switch_arch`]).
     pub(crate) parked: Vec<Workspace>,
 }
@@ -740,6 +745,7 @@ impl App {
             converter_text: String::new(),
             drive_dir: crate::platform::vdrive_dir(),
             mips: Default::default(),
+            devices: Default::default(),
             parked: Vec::new(),
         };
         app.swap_workspace(&mut w);

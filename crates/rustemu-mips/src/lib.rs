@@ -19,6 +19,7 @@ pub mod files;
 pub mod fpu;
 pub mod machine;
 pub mod memory;
+pub mod mmio;
 pub mod random;
 pub mod syscall;
 pub mod target;

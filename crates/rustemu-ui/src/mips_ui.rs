@@ -320,8 +320,16 @@ pub fn registers_ui(app: &mut App, ui: &mut Ui) {
         flags_ui(app, ui, now.fcc, prev.fcc);
     }
     if group == RegGroup::Cp0 && now.cp0[rustemu_mips::cpu::cp0::EPC] != 0 {
-        let code = now.cp0[rustemu_mips::cpu::cp0::CAUSE] >> 2 & 31;
+        let cause = now.cp0[rustemu_mips::cpu::cp0::CAUSE];
+        let code = cause >> 2 & 31;
         let what = match code {
+            // MARS marks the device of an external interrupt in Cause bit 8 or 9.
+            0 if cause & 0x100 != 0 => "interrupt of the MMIO keyboard",
+            0 if cause & 0x200 != 0 => "interrupt of the MMIO display",
+            // The Digital Lab Sim's bits 10 and 11 stay set (MARS's mask keeps them).
+            0 if cause & 0xC00 == 0x400 => "interrupt of the Digital Lab Sim's counter",
+            0 if cause & 0xC00 == 0x800 => "interrupt of the Digital Lab Sim's keyboard",
+            0 if cause & 0xC00 != 0 => "interrupt of the Digital Lab Sim (counter or keyboard)",
             4 => "address error on a load or fetch",
             5 => "address error on a store",
             8 => "syscall",

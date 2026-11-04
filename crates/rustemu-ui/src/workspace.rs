@@ -348,7 +348,7 @@ mod tests {
         };
         assert_eq!(tree.tiles.get_pane(&t.active.unwrap()), Some(&Tool::Editor));
         (
-            app.windows[Tool::Memory],
+            app.windows[Tool::Watch],
             app.windows[Tool::Stack],
             app.windows[Tool::Devices],
             app.windows[Tool::Breakpoints],
@@ -356,7 +356,7 @@ mod tests {
         sync(&mut tree, &mut app);
         assert_eq!(
             layout(&tree, tree.root.unwrap()),
-            "h[v[tabs[editor, source], tabs[breakpoints]], v[tabs[emulator], tabs[memory]], \
+            "h[v[tabs[editor, source], tabs[breakpoints]], v[tabs[emulator], tabs[watch]], \
              v[tabs[screen], tabs[stack, virtual devices]]]"
         );
         // Closed tools lose their tabs; an empty group goes away when the tree is simplified.
@@ -364,11 +364,11 @@ mod tests {
         sync(&mut tree, &mut app);
         tree.simplify(&egui_tiles::SimplificationOptions { all_panes_must_have_tabs: true, ..Default::default() });
         assert!(tree.tiles.find_pane(&Tool::Emulator).is_none());
-        // The emulator comes back above the memory.
+        // The emulator comes back above the watch.
         app.windows[Tool::Emulator] = true;
         sync(&mut tree, &mut app);
         let s = layout(&tree, tree.root.unwrap());
-        assert!(s.contains("v[tabs[emulator], tabs[memory]]"), "{s}");
+        assert!(s.contains("v[tabs[emulator], tabs[watch]]"), "{s}");
         // A tool opened when nothing of its column is open gets a column of its own.
         let mut app = App::with_settings(crate::app::Settings::default());
         app.windows[Tool::Watch] = true;

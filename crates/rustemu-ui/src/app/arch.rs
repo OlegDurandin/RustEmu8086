@@ -240,7 +240,7 @@ impl App {
             | Tool::Log
             | Tool::ValueViewer
             | Tool::Library => x86,
-            Tool::RunIo => !x86,
+            Tool::RunIo | Tool::MmioDisplay | Tool::Bitmap | Tool::DigitalLab => !x86,
             _ => true,
         }
     }

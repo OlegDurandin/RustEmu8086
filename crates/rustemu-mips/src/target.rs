@@ -30,6 +30,8 @@ struct Snapshot {
     input: VecDeque<u8>,
     heap: u32,
     random: BTreeMap<i32, JavaRandom>,
+    mmio: crate::mmio::KeyboardDisplay,
+    lab: crate::mmio::DigitalLab,
     finished: Option<Finish>,
     loaded: bool,
     waiting: bool,
@@ -282,6 +284,8 @@ impl Target for Machine {
             input: self.input.clone(),
             heap: self.heap,
             random: self.random.clone(),
+            mmio: self.mmio.clone(),
+            lab: self.lab.clone(),
             finished: self.finished,
             loaded: self.loaded,
             waiting: self.waiting,
@@ -297,6 +301,15 @@ impl Target for Machine {
         self.input = s.input;
         self.heap = s.heap;
         self.random = s.random;
+        // The device's settings stay.
+        self.lab = s.lab;
+        self.mmio = crate::mmio::KeyboardDisplay {
+            delay: self.mmio.delay,
+            display_after_delay: self.mmio.display_after_delay,
+            technique: self.mmio.technique,
+            terminal_size: self.mmio.terminal_size,
+            ..s.mmio
+        };
         self.finished = s.finished;
         self.loaded = s.loaded;
         self.waiting = s.waiting;

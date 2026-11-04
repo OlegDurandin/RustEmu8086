@@ -33,9 +33,10 @@ emulator windows and the tools that were open last time appear on **emulate**.
 
 In **options → windows** you can choose **panels**: tools open as tabs of the workspace and do not overlap. On the
 left — the editor (with the source, listing and reference tabs next to it), in the middle — the emulator with
-memory, watch, ALU and FPU below it; on the right — the screen, with what the emulator buttons **vars**, **debug**,
+watch, ALU and FPU below it; on the right — the screen, with what the emulator buttons **vars**, **debug**,
 **stack** open below it, plus the log and the devices; under the editor — breakpoints and call stack. The
-**flags** window (and the *lexical flag analyser*) is a small floating window, as in Emu8086. A tab can be dragged
+**flags** window (and the *lexical flag analyser*) is a small floating window, as in Emu8086; **memory** floats too,
+so the emulator keeps its height. A tab can be dragged
 to another group or to the edge of a neighbouring panel, the borders between panels can be moved, and the cross on
 a tab closes the tool. The layout is remembered. **Emulator → Reset window layout** (or the **reset** button in
 **options**) restores the default layout.

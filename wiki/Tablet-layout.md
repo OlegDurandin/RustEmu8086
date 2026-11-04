@@ -92,7 +92,8 @@ after *Hide* it does not come back until the next wait).
   Emu8086 interface;
 - windows: **Drive C: files** (in the browser), Virtual devices, Variables, Symbol table, Listing, ALU, Stop on
   condition; **Debug log** — the DEBUG.EXE-style console on the Debugger tab (in the MIPS workspace the menu has
-  only its windows: no drive, devices, FPU or debug log; the reference is MIPS's);
+  only its windows: no 8086 drive, devices, FPU or debug log, but MARS's Keyboard and Display MMIO Simulator,
+  Bitmap Display and Digital Lab Sim; the reference is MIPS's);
 - tools: Reference, Calculator, Base converter, ASCII codes;
 - *Desktop layout* — switch to the Emu8086 interface; **Options** — the assembler syntax (auto / Emu8086 / NASM)
   and *all options…*; About.

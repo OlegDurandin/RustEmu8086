@@ -16,6 +16,8 @@ usage:
       -o <out>           MIPS: write the text segment as binary (MARS's dump .text)
   rustemu run <file> [options]                  run .asm/.s/.com/.exe/.bin/.boot headless
       --input <text>     keyboard input (\\n = Enter); otherwise stdin is used
+      --keys <text>      MIPS: keys typed on MARS's MMIO keyboard, one each time the
+                         program has read the previous one (\\n = Enter)
       --args <text>      DOS command line parameters (PSP:80h)
       --max <n>          instruction limit (default 100000000)
       --regs             print the registers at the end
@@ -194,6 +196,8 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
     // Enter is CR for DOS, a new line for MIPS's console.
     let enter = if mips { "\n" } else { "\r" };
     let mut input: Option<Vec<u8>> = opt(args, "--input").map(|t| t.replace("\\n", enter).into_bytes());
+    let mut keys: std::collections::VecDeque<u8> =
+        opt(args, "--keys").unwrap_or("").replace("\\n", "\n").bytes().collect();
     let mut stdout = std::io::stdout();
     let mut printed = 0;
     let mut executed = 0u64;
@@ -231,7 +235,14 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             if executed > max { Event::Budget } else { s.target.step() }
         } else {
             s.target.set_history(false);
-            run_chunk(&mut s, &mut executed, max)
+            // MARS's keyboard holds one key: the next goes when the program has read it.
+            if let Some(m) = s.mips_mut()
+                && m.mem.peek32(rustemu_mips::mmio::RECEIVER_CONTROL) & 1 == 0
+                && let Some(k) = keys.pop_front()
+            {
+                m.mmio_key(k);
+            }
+            run_chunk(&mut s, &mut executed, max, if keys.is_empty() { 1_000_000 } else { 10_000 })
         };
         // `printed` counts every byte written: the output keeps only its last megabyte or so.
         let (out, dropped) = (s.target.output(), s.target.output_dropped());
@@ -297,6 +308,13 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             eprintln!("[printer] {}", String::from_utf8_lossy(m.sys.dev.printer.bytes()));
         }
     }
+    if let Some(m) = s.mips()
+        && !m.mmio.text().is_empty()
+    {
+        // The display of MARS's Keyboard and Display MMIO Simulator (bytes as Latin-1).
+        let text: String = m.mmio.text().iter().map(|&b| b as char).collect();
+        eprintln!("\n[MMIO display]\n{}", text.trim_end());
+    }
     Ok(code)
 }
 
@@ -333,10 +351,11 @@ fn registers_text(s: &Session) -> String {
     )
 }
 
-/// Runs one bounded chunk and charges only the steps that were actually
-/// consumed before an event such as input or a timed wait stopped execution.
-fn run_chunk(s: &mut Session, executed: &mut u64, max: u64) -> Event {
-    let budget = max.saturating_sub(*executed).min(1_000_000);
+/// Runs one bounded chunk (at most `chunk` instructions, `max` in all) and charges only the
+/// steps that were actually consumed before an event such as input or a timed wait stopped
+/// execution.
+fn run_chunk(s: &mut Session, executed: &mut u64, max: u64, chunk: u64) -> Event {
+    let budget = max.saturating_sub(*executed).min(chunk);
     let (event, done) = s.target.run_counted(budget);
     *executed = executed.saturating_add(done);
     if event == Event::Budget && *executed < max { Event::Continue } else { event }
@@ -423,11 +442,11 @@ mod tests {
         session.target.set_history(false);
         let mut executed = 0;
 
-        assert_eq!(run_chunk(&mut session, &mut executed, 100_000_000), Event::Sleeping);
+        assert_eq!(run_chunk(&mut session, &mut executed, 100_000_000, 1_000_000), Event::Sleeping);
         let first = executed;
         assert!(first < 100, "only a few setup instructions should run, got {first}");
 
-        assert_eq!(run_chunk(&mut session, &mut executed, 100_000_000), Event::Sleeping);
+        assert_eq!(run_chunk(&mut session, &mut executed, 100_000_000, 1_000_000), Event::Sleeping);
         assert_eq!(executed - first, 1, "re-polling the blocked BIOS service is one step");
     }
 
