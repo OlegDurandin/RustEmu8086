@@ -770,6 +770,10 @@ fn registers_article(ui: &mut Ui, l: Lang) {
         "Words are little-endian. Reading or writing outside these segments, or a word at an address that is not a multiple of 4, raises an address error exception.",
         "Слова хранятся младшим байтом вперёд. Чтение или запись вне этих сегментов, а также слово по адресу, не кратному 4, вызывают исключение address error.",
     ));
+    ui.weak(l.pick(
+        "These are the addresses of MARS's default memory configuration. Its compact configurations (the settings menu of the emulator window) fit in 32 KB: data at 0 and text at 0x3000, or text at 0 and data at 0x2000; the kernel at 0x4000 (the exception handler at 0x4180), the devices at 0x7F00.",
+        "Это адреса конфигурации памяти MARS по умолчанию. Его компактные конфигурации (меню settings окна эмулятора) умещаются в 32 КБ: данные с 0 и код с 0x3000 или код с 0 и данные с 0x2000; ядро — с 0x4000 (обработчик исключений — 0x4180), устройства — с 0x7F00.",
+    ));
     devices_article(ui, l);
 }
 

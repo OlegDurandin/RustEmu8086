@@ -41,7 +41,7 @@ fn image(code: &[u32], data: &[u8]) -> Image {
     if !data.is_empty() {
         chunks.push(Chunk { addr: DATA_BASE, bytes: data.to_vec(), code: false });
     }
-    Image { chunks, entry: TEXT_BASE }
+    Image { chunks, entry: TEXT_BASE, settings: Default::default() }
 }
 
 fn machine(code: &[u32], data: &[u8]) -> Machine {
@@ -337,9 +337,17 @@ fn the_exception_handler_takes_service_errors() {
 #[test]
 fn loading_checks_the_segments() {
     let mut m = Machine::new();
-    let bad = Image { chunks: vec![Chunk { addr: DATA_BASE, bytes: vec![0; 4], code: true }], entry: DATA_BASE };
+    let bad = Image {
+        chunks: vec![Chunk { addr: DATA_BASE, bytes: vec![0; 4], code: true }],
+        entry: DATA_BASE,
+        settings: Default::default(),
+    };
     assert!(m.load(&bad).unwrap_err().contains("outside the text segment"));
-    let bad = Image { chunks: vec![Chunk { addr: 0x103f_fffe, bytes: vec![0; 4], code: false }], entry: TEXT_BASE };
+    let bad = Image {
+        chunks: vec![Chunk { addr: 0x103f_fffe, bytes: vec![0; 4], code: false }],
+        entry: TEXT_BASE,
+        settings: Default::default(),
+    };
     assert!(m.load(&bad).is_err());
 }
 

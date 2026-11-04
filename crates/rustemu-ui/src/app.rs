@@ -115,6 +115,8 @@ pub struct Settings {
     pub mips: ArchSettings,
     /// Settings of the MIPS keyboard, display and bitmap display.
     pub mips_devices: crate::mips_devices::DeviceSettings,
+    /// MARS's settings for MIPS programs (delayed branching, memory configuration…).
+    pub mars: crate::mars_settings::MarsSettings,
 }
 
 /// What the workspace of a processor other than the 8086 remembers between runs.
@@ -208,6 +210,7 @@ impl Default for Settings {
             drive_c_source_folder: false,
             mips: ArchSettings::default(),
             mips_devices: Default::default(),
+            mars: Default::default(),
         }
     }
 }

@@ -29,6 +29,14 @@ usage:
 
   --arch <a>             8086 or mips; by default .s files and sources written for MIPS
                          (registers like $t0, syscall) are MIPS32 programs (MARS)
+
+MARS's settings (MIPS, asm and run; MARS's own option in brackets):
+  --delayed-branching    branches take effect after their delay slot (db)
+  --self-modifying       loads and stores in the text segment, code in data (smc)
+  --start-at-main        start at the global label main (sm)
+  --no-pseudo            pseudo-instructions are errors (np)
+  --warnings-are-errors  warnings stop the assembly (we)
+  --memory <config>      Default, CompactDataAtZero or CompactTextAtZero (mc)
 ";
 
 fn main() -> ExitCode {
@@ -89,12 +97,31 @@ fn source_text(path: &Path) -> Result<Option<String>, String> {
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-/// Assembles MIPS source `text` of file `path`, its `.include` files read from disk; the errors as
-/// `file: line L column C: message`, warnings printed.
-fn assemble_mips(path: &Path, text: &str) -> Result<rustemu_mips::asm::Program, String> {
+/// MARS's settings from the options (see [`USAGE`]).
+fn mips_settings(args: &[String]) -> Result<rustemu_mips::Settings, String> {
+    let memory = match opt(args, "--memory") {
+        None => rustemu_mips::MemoryConfig::Default,
+        Some(m) => rustemu_mips::MemoryConfig::from_id(m).ok_or_else(|| {
+            format!("unknown memory configuration '{m}' (Default, CompactDataAtZero, CompactTextAtZero)")
+        })?,
+    };
+    Ok(rustemu_mips::Settings {
+        delayed_branching: flag(args, "--delayed-branching"),
+        self_modifying: flag(args, "--self-modifying"),
+        start_at_main: flag(args, "--start-at-main"),
+        pseudo_instructions: !flag(args, "--no-pseudo"),
+        warnings_are_errors: flag(args, "--warnings-are-errors"),
+        memory,
+    })
+}
+
+/// Assembles MIPS source `text` of file `path` with the settings of the options, its `.include`
+/// files read from disk; the errors as `file: line L column C: message`, warnings printed.
+fn assemble_mips(path: &Path, text: &str, args: &[String]) -> Result<rustemu_mips::asm::Program, String> {
     let name = path.display().to_string();
+    let settings = mips_settings(args)?;
     let mut read = |p: &str| std::fs::read(p).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
-    let prog = rustemu_mips::asm::assemble_with(&name, text, &mut read).map_err(|e| e.to_string())?;
+    let prog = rustemu_mips::asm::assemble_settings(&name, text, &mut read, &settings).map_err(|e| e.to_string())?;
     for w in &prog.warnings {
         eprintln!("{}: warning: {w}", prog.files[w.file].name);
     }
@@ -102,14 +129,15 @@ fn assemble_mips(path: &Path, text: &str) -> Result<rustemu_mips::asm::Program, 
 }
 
 fn cmd_asm_mips(path: &Path, text: &str, args: &[String]) -> Result<u8, String> {
-    let prog = assemble_mips(path, text)?;
+    let prog = assemble_mips(path, text, args)?;
     let words: usize = prog.statements.iter().map(|s| s.words.len()).sum();
     let data: u32 = prog.data.iter().map(|d| d.len).sum();
     println!("{} (MIPS32): {words} instructions, {data} bytes of data", path.display());
     if let Some(out) = opt(args, "-o") {
         let bytes = prog.text_bytes();
         std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
-        println!("text segment -> {out} ({} bytes from 0x00400000)", bytes.len());
+        let base = prog.image.settings.layout().text_base;
+        println!("text segment -> {out} ({} bytes from 0x{base:08x})", bytes.len());
     }
     if flag(args, "-l") {
         let lst = path.with_extension("lst");
@@ -178,7 +206,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
         }
         let text = text.ok_or("a MIPS program is run from its source (.s / .asm)")?;
         let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-        let prog = assemble_mips(&path, &text)?;
+        let prog = assemble_mips(&path, &text, args)?;
         s.load_mips(prog, &name)?;
     } else {
         s.command_line = opt(args, "--args").unwrap_or("").to_string();

@@ -21,11 +21,13 @@ pub mod machine;
 pub mod memory;
 pub mod mmio;
 pub mod random;
+pub mod settings;
 pub mod syscall;
 pub mod target;
 
 pub use console::Console;
-pub use cpu::{Cpu, ExcCode, Exception, Step};
+pub use cpu::{Cpu, Delay, ExcCode, Exception, Step};
 pub use machine::{Chunk, Finish, Image, Machine};
 pub use memory::{Access, AccessError, Memory, Segment};
+pub use settings::{Layout, MemoryConfig, Settings};
 pub use target::AsMips;

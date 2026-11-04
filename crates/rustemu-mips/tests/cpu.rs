@@ -488,7 +488,7 @@ fn step_back_with_the_journal() {
     cpu = before;
     assert_eq!(mem.peek8(DATA_BASE + 3), 0);
     assert_eq!(cpu.pc, TEXT_BASE + 12, "back at the store");
-    assert_eq!(memory::Segment::of(DATA_BASE + 3), Some(memory::Segment::Data));
+    assert_eq!(rustemu_mips::settings::DEFAULT.segment(DATA_BASE + 3), Some(memory::Segment::Data));
 }
 
 #[test]

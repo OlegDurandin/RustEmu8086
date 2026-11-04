@@ -20,6 +20,7 @@ use crate::files::{Files, Storage};
 use crate::memory::{self, Memory, Segment};
 use crate::mmio::{DeviceState, DigitalLab, DisplayUndo, KeyboardDisplay, LabState};
 use crate::random::JavaRandom;
+use crate::settings::Settings;
 
 /// Instructions step back can undo.
 pub const HISTORY_DEPTH: usize = 2000;
@@ -63,6 +64,9 @@ pub struct Image {
     pub chunks: Vec<Chunk>,
     /// The first instruction executed (usually the start of `.text`).
     pub entry: u32,
+    /// The settings the program was assembled with; the machine runs it with them (memory
+    /// configuration, delayed branching, self-modifying code).
+    pub settings: Settings,
 }
 
 /// What a `syscall` changes outside registers and memory, saved to step back over it.
@@ -94,6 +98,8 @@ struct Snapshot {
     sys: Option<Box<SysState>>,
     /// The keyboard and display before the step, when the step changed them.
     device: Option<Box<DeviceUndo>>,
+    /// Number of the memory's code ranges before the step (a self-modifying store adds one).
+    code: usize,
 }
 
 /// Bytes of one journal entry.
@@ -145,6 +151,8 @@ pub struct Machine {
     pub instant_waits: bool,
     /// The time syscall 30 reports, in milliseconds since 1970 (None: the computer's clock).
     pub fixed_time: Option<u64>,
+    /// The settings of the loaded program (see [`Image::settings`]).
+    pub settings: Settings,
 }
 
 impl Default for Machine {
@@ -183,17 +191,22 @@ impl Machine {
             sleep_until: None,
             instant_waits: false,
             fixed_time: None,
+            settings: Settings::default(),
         }
     }
 
     /// Powers the machine on again: nothing loaded, the console empty, files closed (the storage,
     /// the breakpoints and the settings stay).
     pub fn reset(&mut self) {
-        self.cpu = Cpu::new();
+        let layout = self.settings.layout();
+        self.cpu = Cpu::with_layout(layout);
+        self.cpu.delayed_branching = self.settings.delayed_branching;
         self.mem.clear();
+        self.mem.layout = *layout;
+        self.mem.self_modifying = self.settings.self_modifying;
         self.console.clear();
         self.input.clear();
-        self.heap = memory::HEAP_BASE;
+        self.heap = layout.heap_base;
         self.files.reset();
         self.file_error = None;
         self.random.clear();
@@ -206,12 +219,13 @@ impl Machine {
         self.lab.reset();
     }
 
-    /// Loads a program after a reset.
+    /// Loads a program after a reset, with the settings it was assembled with.
     pub fn load(&mut self, image: &Image) -> Result<(), String> {
+        let layout = image.settings.layout();
         for c in &image.chunks {
             let end = c.addr.checked_add(c.bytes.len() as u32).ok_or("the program does not fit in memory")?;
-            let seg = Segment::of(c.addr);
-            let fits = c.bytes.is_empty() || (seg.is_some() && Segment::of(end - 1) == seg);
+            let seg = layout.segment(c.addr);
+            let fits = c.bytes.is_empty() || (seg.is_some() && layout.segment(end - 1) == seg);
             if !fits || (c.code && !seg.is_some_and(Segment::is_code)) {
                 return Err(format!(
                     "{} bytes at {} are outside the {} segment",
@@ -221,6 +235,7 @@ impl Machine {
                 ));
             }
         }
+        self.settings = image.settings;
         self.reset();
         for c in &image.chunks {
             self.mem.load(c.addr, &c.bytes);
@@ -312,6 +327,7 @@ impl Machine {
             finished: self.finished,
             sys: self.at_syscall().then(|| Box::new(self.sys_state())),
             device: None,
+            code: self.mem.code_ranges(),
         };
         let (device, lab) = (self.mmio.state, self.lab.state);
         self.mem.set_journaling(true);
@@ -344,7 +360,12 @@ impl Machine {
             Some(code) => {
                 let pc = self.cpu.pc;
                 let e = self.cpu.raise(&self.mem, code, "External Interrupt".into(), pc, None, false);
-                if e.handled { Event::Continue } else { Event::Error(e.report()) }
+                if e.handled {
+                    self.cpu.end_step();
+                    Event::Continue
+                } else {
+                    Event::Error(e.report())
+                }
             }
             None => self.execute(),
         };
@@ -353,7 +374,7 @@ impl Machine {
             let status = self.cpu.cp0[crate::cpu::cp0::STATUS];
             let fetched = ev != Event::WaitingInput;
             self.mmio.after_instruction(&mut self.mem, status, fetched);
-            let text = fetched && Segment::of(self.cpu.pc) == Some(Segment::Text);
+            let text = fetched && self.mem.layout.segment(self.cpu.pc) == Some(Segment::Text);
             self.lab.after_instruction(&mut self.mem, status, text);
         }
         ev
@@ -368,7 +389,14 @@ impl Machine {
             }
             Step::Exception(e) if e.handled => Event::Continue,
             Step::Exception(e) => Event::Error(e.report()),
-            Step::Syscall => self.syscall(),
+            Step::Syscall => {
+                let ev = self.syscall();
+                // The service is over: the end of the step (not when it waits or stops).
+                if matches!(ev, Event::Continue | Event::Sleeping) {
+                    self.cpu.end_step();
+                }
+                ev
+            }
         }
     }
 
@@ -412,6 +440,7 @@ impl Machine {
             let (a, v) = self.journal.pop_back().expect("the journal holds the step's entries");
             self.mem.restore(a, v);
         }
+        self.mem.truncate_code(s.code);
         self.cpu = s.cpu;
         self.finished = s.finished;
         self.sleep_until = None;
