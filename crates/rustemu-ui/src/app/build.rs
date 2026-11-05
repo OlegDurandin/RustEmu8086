@@ -182,14 +182,65 @@ impl App {
             .map(|(_, t)| t.to_string())
     }
 
+    /// The files MARS's settings assemble with the program: the exception handler file, the
+    /// other `.asm` / `.s` files of its folder (by name). None in the browser.
+    fn mips_project_files(
+        &self,
+    ) -> Result<(Option<rustemu_mips::asm::SourceFile>, Vec<rustemu_mips::asm::SourceFile>), String> {
+        use rustemu_mips::asm::SourceFile;
+        let s = &self.settings.mars;
+        if self.front.browser {
+            return Ok((None, Vec::new()));
+        }
+        let read = |p: &Path| {
+            std::fs::read(p)
+                .map(|b| SourceFile { name: p.display().to_string(), text: String::from_utf8_lossy(&b).into_owned() })
+                .map_err(|e| format!("{}: {e}", p.display()))
+        };
+        let handler = match s.exception_handler_enabled && !s.exception_handler.trim().is_empty() {
+            true => {
+                Some(read(Path::new(s.exception_handler.trim())).map_err(|e| format!("exception handler file {e}"))?)
+            }
+            false => None,
+        };
+        let mut others = Vec::new();
+        if s.assemble_all
+            && let Some(path) = &self.doc.path
+            && let Some(dir) = path.parent()
+            && let Ok(entries) = std::fs::read_dir(dir)
+        {
+            let mut paths: Vec<_> = entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p != path && p.is_file())
+                .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm") || e.eq_ignore_ascii_case("s")))
+                .collect();
+            // MARS's order: the .asm files, then the .s ones.
+            paths.sort_by_key(|p| (!p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm")), p.clone()));
+            for p in paths {
+                others.push(read(&p)?);
+            }
+        }
+        Ok((handler, others))
+    }
+
     /// Assembles the editor text as a MIPS program (MARS's assembler), with the files it includes.
     fn assemble_mips(&mut self) -> Option<rustemu_mips::asm::Program> {
         self.build.messages.clear();
         self.clear_errors();
         let name = self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
+        let (handler, others) = match self.mips_project_files() {
+            Ok(f) => f,
+            Err(e) => {
+                self.build.failed = true;
+                self.build.messages.push(Message { text: e.clone(), loc: None, span: None, error: true });
+                self.status = e;
+                return None;
+            }
+        };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let settings = self.settings.mars.mips();
-            rustemu_mips::asm::assemble_settings(&name, &self.doc.text, &mut |p| self.mips_include(p), &settings)
+            let program = rustemu_mips::asm::SourceFile { name: name.clone(), text: self.doc.text.clone() };
+            rustemu_mips::asm::assemble_files(program, handler, others, &mut |p| self.mips_include(p), &settings)
         }));
         let result = match result {
             Ok(r) => r,
@@ -265,6 +316,9 @@ impl App {
                 (short, f.text.lines().map(str::to_string).collect())
             })
             .collect();
+        if let Some(m) = self.session.mips_mut() {
+            m.program_arguments = self.settings.mars.arguments();
+        }
         if let Err(e) = self.session.load_mips(p, &name) {
             self.build.failed = true;
             self.notice("Load", &e);

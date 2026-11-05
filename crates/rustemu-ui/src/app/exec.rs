@@ -266,6 +266,9 @@ impl App {
             Event::Sleeping => {
                 self.status = "Waiting (INT 15h/86h)...".into();
             }
+            Event::WaitingInput if self.session.mips().is_some_and(|m| m.dialog().is_some()) => {
+                self.status = "Waiting for the dialog window of the syscall".into();
+            }
             Event::WaitingInput if t.arch() == rustemu_session::Arch::Mips32 => {
                 self.status = "Waiting for input - type it in the Run I/O console".into();
                 self.mips.focus_request = true;

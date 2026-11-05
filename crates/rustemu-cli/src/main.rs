@@ -37,6 +37,10 @@ MARS's settings (MIPS, asm and run; MARS's own option in brackets):
   --no-pseudo            pseudo-instructions are errors (np)
   --warnings-are-errors  warnings stop the assembly (we)
   --memory <config>      Default, CompactDataAtZero or CompactTextAtZero (mc)
+  --project              assemble all .asm and .s files of the program's folder with it (p)
+  --exception-handler <file>  assemble this file first (Settings -> Exception Handler)
+  --program-args <text>  run: arguments for the program, separated by spaces (pa);
+                         $a0 = their number, $a1 = the array of their addresses
 ";
 
 fn main() -> ExitCode {
@@ -112,6 +116,8 @@ fn mips_settings(args: &[String]) -> Result<rustemu_mips::Settings, String> {
         pseudo_instructions: !flag(args, "--no-pseudo"),
         warnings_are_errors: flag(args, "--warnings-are-errors"),
         memory,
+        // No windows here: input comes from the console.
+        popup_input: false,
     })
 }
 
@@ -121,7 +127,34 @@ fn assemble_mips(path: &Path, text: &str, args: &[String]) -> Result<rustemu_mip
     let name = path.display().to_string();
     let settings = mips_settings(args)?;
     let mut read = |p: &str| std::fs::read(p).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
-    let prog = rustemu_mips::asm::assemble_settings(&name, text, &mut read, &settings).map_err(|e| e.to_string())?;
+    let file = |p: &Path| {
+        std::fs::read(p)
+            .map(|b| rustemu_mips::asm::SourceFile {
+                name: p.display().to_string(),
+                text: String::from_utf8_lossy(&b).into_owned(),
+            })
+            .map_err(|e| format!("{}: {e}", p.display()))
+    };
+    let handler = opt(args, "--exception-handler").map(|h| file(Path::new(h))).transpose()?;
+    // MARS's project mode: the other .asm and .s files of the folder (the .asm ones first).
+    let mut others = Vec::new();
+    if flag(args, "--project") {
+        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let me = path.canonicalize().ok();
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file() && p.canonicalize().ok() != me)
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm") || e.eq_ignore_ascii_case("s")))
+            .collect();
+        paths.sort_by_key(|p| (!p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm")), p.clone()));
+        for p in paths {
+            others.push(file(&p)?);
+        }
+    }
+    let program = rustemu_mips::asm::SourceFile { name, text: text.to_string() };
+    let prog =
+        rustemu_mips::asm::assemble_files(program, handler, others, &mut read, &settings).map_err(|e| e.to_string())?;
     for w in &prog.warnings {
         eprintln!("{}: warning: {w}", prog.files[w.file].name);
     }
@@ -203,6 +236,10 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
         let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf();
         if let Some(m) = s.mips_mut() {
             m.files.storage = rustemu_mips::files::Storage::Host(dir);
+            // No windows: dialogs (syscall 50..59) print their text and take a line of input.
+            m.dialogs_in_console = true;
+            m.program_arguments =
+                opt(args, "--program-args").unwrap_or("").split_whitespace().map(str::to_string).collect();
         }
         let text = text.ok_or("a MIPS program is run from its source (.s / .asm)")?;
         let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());

@@ -108,7 +108,7 @@ forces it. See [Command line](Command-line).
 
 - The instructions of MARS — 77 integer and those of coprocessor 1 — and its pseudo-instructions, directives
   `.text .data .ktext .kdata .word .half .byte .float .double .ascii .asciiz .space .align .extern .globl .eqv .set`, `%hi` / `%lo`.
-- System calls 1–17, 30–36, 40–44: printing (floats and doubles too), reading, `sbrk`, exit, files (on drive C:, shared with DOS
+- System calls 1–17, 30–36, 40–44 and the dialogs 50–59: printing (floats and doubles too), reading, `sbrk`, exit, files (on drive C:, shared with DOS
   programs: its folder on the Mac, the **drive C:** window in the browser, where they are kept and can be downloaded), time, `sleep`, random numbers.
 - Exceptions (overflow, unaligned access, addresses outside the segments, traps) and a handler at `0x80000180`.
 - Floating point as in MARS: `float` in one register, `double` in an even register and the next one (an odd
@@ -118,10 +118,26 @@ forces it. See [Command line](Command-line).
 - MARS's memory-mapped devices: the Keyboard and Display MMIO Simulator, the Bitmap Display and the Digital Lab
   Sim (see below).
 - MARS's settings: delayed branching, self-modifying code, start at `main`, no pseudo-instructions, warnings as
-  errors, the compact memory configurations (see below).
+  errors, the compact memory configurations, input in dialogs, program arguments, an exception handler file and
+  programs of several files (see below).
 
-Not yet: dialogs (50–59); of MARS's settings, program arguments, an exception handler file, input in dialogs and
-assembling all files of a folder.
+Not yet: MARS's other tools (Data Cache Simulator, BHT Simulator, Instruction Statistics, MIPS X-Ray…).
+
+## Dialogs (syscall 50–59)
+
+MARS's dialog services open a window and the program waits for the answer, as in MARS:
+
+| `$v0` | window | result |
+|---|---|---|
+| 50 | the message at `$a0`, Yes / No / Cancel | `$a0` = 0, 1, 2 (−1: the window was closed) |
+| 51, 52, 53 | the message and a field for an integer, a float, a double | `$a0` / `$f0`, and `$a1` = 0 OK, −1 not a number, −2 Cancel, −3 nothing typed |
+| 54 | the message and a field for a string into the buffer `$a1` of `$a2` bytes | the buffer (a new line when there is room, a zero byte), `$a1` = 0, −2, −3, or −4 when it was longer |
+| 55 | the message; `$a1`: 0 error, 1 information, 2 warning, 3 question | — |
+| 56, 57, 58, 59 | the message followed by `$a1`, `$f12` (float or double) or the string at `$a1` | — |
+
+Numbers are taken as Java takes them: an integer without spaces around it (Integer.parseInt), floats with
+spaces, `NaN`, `Infinity`. On the command line there are no windows: a message is printed, and a question or an
+input takes a line of input (for 50: `y`, `yes` or `0` is Yes, `n`, `no` or `1` is No, anything else Cancel).
 
 ## Macros and .include
 
@@ -221,6 +237,10 @@ so and offers *Reassemble and load (F9)*.
 | Initialize Program Counter to global 'main' if defined | `sm` | execution starts at `main` when the program declares `.globl main` |
 | Permit extended (pseudo) instructions and formats | `np` turns it off | off: `li`, `la`, `move`, `lw $t0, label`… are errors ("Extended (pseudo) instruction or format not permitted.  See Settings.") |
 | Assembler warnings are considered errors | `we` | a warning (a `.byte` value out of range…) stops the assembly |
+| Popup dialog for input syscalls (5,6,7,8,12) | — | the reading services ask in a "MIPS Keyboard Input" window instead of the Run I/O console; the console shows `**** user input : …`, as in MARS |
+| Program arguments provided to MIPS program | `pa` | the arguments (separated by spaces) are stored under the stack at each load: `$a0` = their number, `$a1` = the address of the array of their addresses, `$sp` below it |
+| Assemble all files in directory | `p` | the `.asm` and `.s` files of the program's folder are assembled with it (see below; not in the browser) |
+| Exception handler | — | this file is assembled first with every program, its `.ktext` code handles the exceptions (not in the browser) |
 | Memory configuration | `mc` | where the segments are, see below |
 
 As in MARS, a few details are MARS's own:
@@ -248,5 +268,42 @@ In a compact configuration every address fits in 16 bits: `la`, `lw $t0, label` 
 with a label take one instruction instead of two, as in MARS. The memory window's buttons, the Bitmap Display's
 base addresses and the devices follow the configuration of the loaded program.
 
+With *Assemble all files in directory* or an exception handler file a program is several files, assembled as MARS
+assembles them: the handler first, then the program, then the other files (`.asm` before `.s`, by name). Each file
+has its own labels, macros and `.eqv`; a label declared `.globl` (and `.extern` data) is seen by all files, and a
+second global label of the same name is an error; `.text` and `.data` go on from one file to the next. The code
+list and the source window show the lines of every file.
+
 The command line has the same settings: `--delayed-branching`, `--self-modifying`, `--start-at-main`,
-`--no-pseudo`, `--warnings-are-errors`, `--memory <config>` (see [Command line](Command-line)).
+`--no-pseudo`, `--warnings-are-errors`, `--memory <config>`, `--project`, `--exception-handler <file>`,
+`--program-args <text>` (see [Command line](Command-line)).
+
+The settings, programs of several files, the program arguments and the input services are checked against MARS
+run with the same options and files: random programs with delayed branching (branches and traps in delay slots,
+`jal`, `jalr`), programs for each setting, the assembled code and data of several files with MARS's errors.
+The dialog windows follow MARS's sources (its Swing dialogs cannot be driven by a test). As MARS's two
+modes differ there, a character (syscall 12) and a string longer than its buffer are read as MARS's Run I/O pane
+reads them: a key without Enter; the input ends when the buffer is full.
+
+## Differences from MARS
+
+RustEmu8086 runs MIPS programs as MARS 4.6 does, and is checked against it (see above). Where it does otherwise,
+on purpose or because MARS's way is tied to its own windows:
+
+| | MARS | RustEmu8086 |
+|---|---|---|
+| Strings in the source and input | each character's low byte | UTF-8 (Cyrillic, symbols); ASCII is the same |
+| `%hi(label)` / `%lo(label)` | not supported | accepted, as in GNU as |
+| `swr $t1,100` | its table forgets `($1)`: the second instruction is a `nop` | `swr` with `($1)`, as the other forms |
+| After a runtime error | PC is past the instruction | PC stays on it (the code list shows where the error is) |
+| Memory-mapped devices | connected with "Connect to MIPS" | always connected |
+| Keyboard of the MMIO simulator | a key typed before the last one was read replaces it | the window holds the keys typed and gives them one by one, each after the previous one was read |
+| Bitmap Display | paints a unit when the program writes it | shows memory as it is (after a step back too) |
+| Input on the command line (`nc`) | a line per read | as MARS's Run I/O pane: a character without Enter, a string ends when the buffer is full |
+| Dialogs (50–59) on the command line | Swing windows | the message is printed, the answer is a line of input |
+| Program arguments | stored when the run starts | stored when the program is loaded (seen in the registers before the run) |
+| MIDI (31, 33) | plays | silent (33 waits for the duration) |
+| Assemble all files in directory | the folder's order (as the system lists it) | `.asm` files, then `.s` files, by name |
+| Exception handler file, all files of a folder | everywhere | the desktop app and the command line (the browser has no folders) |
+| Other tools | Data Cache Simulator, BHT Simulator, Instruction Statistics, MIPS X-Ray, Floating Point Representation… | not there |
+| Settings of the editor and windows | MARS's | RustEmu8086's own (themes, panels, the reference) |
