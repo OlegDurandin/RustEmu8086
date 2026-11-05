@@ -69,9 +69,11 @@ count db 3
 - Операнды `byte` / `word` / `dword` без `ptr`, `[es:di]`, `short` / `near` / `far`, `seg:off`.
 - Операторы как в NASM, с его порядком: `?:`, логические `|| ^^ &&`, сравнения (истина — 1), затем `| ^ &`, сдвиги,
   `+ -`, `* / %`.
-- Препроцессор: `%define` (в том числе с параметрами: `%define SQ(x) ((x)*(x))`), `%undef`, `%assign`,
-  `%macro … %endmacro` с `%1…%9` и `%%метка`, `%rep`, `%if / %elif / %else / %endif`, `%ifdef`, `%ifndef`,
-  `%include`, `%error`.
+- Препроцессор: `%define` (в том числе с параметрами: `%define SQ(x) ((x)*(x))`), `%xdefine`, `%undef`,
+  `%assign`, `%macro … %endmacro` с `%1…%9` и `%%метка`, `%rep`, `%if / %elif / %else / %endif`, `%ifdef`,
+  `%ifndef`, `%include`, `%error`. Один `%define` может использовать другие (`%define B (A+A)`): как в NASM, его
+  текст раскрывается там, где он используется, по действующим там определениям, а `%xdefine` раскрывает его сразу;
+  имя внутри собственного текста не раскрывается.
 - Структуры: `struc … endstruc` (поля `.x resw 1` → смещение `имя.x`, размер `имя_size`) и `istruc … at … iend`.
 
 ```nasm
