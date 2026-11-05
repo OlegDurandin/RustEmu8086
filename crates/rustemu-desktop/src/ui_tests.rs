@@ -1728,3 +1728,28 @@ fn mars_settings() {
     assert_eq!((m.cpu.regs[8], m.mem.layout.text_base), (11, 0x3000));
     assert!(!rustemu_ui::mars_settings::changed_since_load(h.state()));
 }
+
+#[test]
+fn mips_dialogs() {
+    use rustemu_session::Arch;
+    let mut h = harness(App::with_settings(Settings { last_file: None, ..Default::default() }));
+    h.run();
+    h.state_mut().switch_arch(Arch::Mips32);
+    h.state_mut().doc.text = ".data\nq: .asciiz \"How many apples?\"\nr: .asciiz \"You have \"\n.text\n    li $v0, 51\n    la $a0, q\n    syscall\n    move $a1, $a0\n    li $v0, 56\n    la $a0, r\n    syscall\n    li $v0, 10\n    syscall\n".into();
+    h.state_mut().emulate();
+    h.state_mut().start_run();
+    run_frames(&mut h, 3);
+    assert!(h.state().session.mips().unwrap().dialog().is_some(), "the program waits on the dialog");
+    h.get_by_label("How many apples?");
+    h.event(egui::Event::Text("7".into()));
+    run_frames(&mut h, 1);
+    save(&mut h, "49_mips_dialog_input");
+    h.get_by_label("OK").click();
+    run_frames(&mut h, 3);
+    h.get_by_label("You have 7");
+    h.get_by_label("OK").click();
+    run_frames(&mut h, 3);
+    let m = h.state().session.mips().unwrap();
+    assert!(m.dialog().is_none());
+    assert_eq!(m.finished, Some(rustemu_mips::Finish::Exit(0)));
+}

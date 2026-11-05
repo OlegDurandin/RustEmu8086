@@ -153,6 +153,16 @@ pub struct Machine {
     pub fixed_time: Option<u64>,
     /// The settings of the loaded program (see [`Image::settings`]).
     pub settings: Settings,
+    /// The dialog (syscall 50..59) the program waits on (see [`crate::dialog`]).
+    pub(crate) dialog: Option<crate::dialog::Dialog>,
+    /// The answer to it, for the repeated step.
+    pub(crate) dialog_answer: Option<crate::dialog::DialogAnswer>,
+    /// Dialogs without windows: messages to the console, answers from lines of input (the
+    /// command line).
+    pub dialogs_in_console: bool,
+    /// Arguments given to the program (MARS's "program arguments"): stored under the stack at
+    /// each load, `$a0` = their number, `$a1` = the address of the array of their addresses.
+    pub program_arguments: Vec<String>,
 }
 
 impl Default for Machine {
@@ -192,6 +202,10 @@ impl Machine {
             instant_waits: false,
             fixed_time: None,
             settings: Settings::default(),
+            dialog: None,
+            dialog_answer: None,
+            dialogs_in_console: false,
+            program_arguments: Vec::new(),
         }
     }
 
@@ -215,6 +229,8 @@ impl Machine {
         self.clear_history();
         self.waiting = false;
         self.sleep_until = None;
+        self.dialog = None;
+        self.dialog_answer = None;
         self.mmio.reset(&mut self.mem);
         self.lab.reset();
     }
@@ -244,8 +260,48 @@ impl Machine {
             }
         }
         self.cpu.pc = image.entry;
+        self.store_program_arguments();
         self.loaded = true;
         Ok(())
+    }
+
+    /// Stores [`Machine::program_arguments`] as MARS's `ProgramArgumentList`: the strings from
+    /// the stack base down (each with its zero byte), below them (or below `$sp` when they fit
+    /// above it) the array of their addresses ending with 0 and their number; `$sp` points to the
+    /// number, `$a0` holds it, `$a1` the address of the array.
+    fn store_program_arguments(&mut self) {
+        if self.program_arguments.is_empty() {
+            return;
+        }
+        let layout = self.settings.layout();
+        // (MARS's int arithmetic.)
+        let mut high = layout.stack_base as i32;
+        let mut starts = Vec::new();
+        for arg in &self.program_arguments {
+            self.mem.load(high as u32, &[0]);
+            high -= 1;
+            for &b in arg.as_bytes().iter().rev() {
+                self.mem.load(high as u32, &[b]);
+                high -= 1;
+            }
+            starts.push(high + 1);
+        }
+        let mut sp = layout.sp as i32;
+        if high < sp {
+            sp = high - high % 4 - 4;
+        }
+        let word = |mem: &mut Memory, at: i32, v: u32| mem.load(at as u32, &v.to_le_bytes());
+        word(&mut self.mem, sp, 0);
+        sp -= 4;
+        for &s in starts.iter().rev() {
+            word(&mut self.mem, sp, s as u32);
+            sp -= 4;
+        }
+        word(&mut self.mem, sp, starts.len() as u32);
+        sp -= 4;
+        self.cpu.set_reg(crate::cpu::SP, (sp + 4) as u32);
+        self.cpu.set_reg(4, starts.len() as u32);
+        self.cpu.set_reg(5, (sp + 8) as u32);
     }
 
     // ---- input ----
@@ -281,7 +337,8 @@ impl Machine {
 
     /// The program waits for input.
     pub fn is_waiting_input(&self) -> bool {
-        self.waiting
+        // An answered dialog is input that is there.
+        self.waiting && self.dialog_answer.is_none()
     }
 
     // ---- execution ----
@@ -444,6 +501,8 @@ impl Machine {
         self.cpu = s.cpu;
         self.finished = s.finished;
         self.sleep_until = None;
+        self.dialog = None;
+        self.dialog_answer = None;
         if let Some(d) = s.device {
             self.mmio.state = d.state;
             self.lab.state = d.lab;

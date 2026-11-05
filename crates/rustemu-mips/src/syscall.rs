@@ -18,8 +18,8 @@
 //! `syscall` instruction — except the errors of the file services (13, 14, 15): as in MARS, they
 //! return −1 in `$v0` and the program goes on (it is its job to check); only a bad address of the
 //! name or the buffer raises an exception. Floating-point services (2, 3, 6, 7, 43, 44) use `$f12`
-//! and `$f0` and print numbers as Java does (`1.0E7`); the dialog services (50..59) need MARS's
-//! dialog windows, which do not exist yet.
+//! and `$f0` and print numbers as Java does (`1.0E7`). The dialog services (50..59) wait for the
+//! interface to show the window and answer (see [`crate::dialog`]).
 
 use rustemu_target::Event;
 
@@ -126,7 +126,7 @@ pub fn java_double(x: f64) -> String {
 /// The text of a number as Java's `Float.parseFloat` / `Double.parseDouble` takes it (after
 /// `trim`): `NaN`, `Infinity` with a sign, or a decimal number with an optional exponent and an
 /// optional `f`/`d` suffix. None otherwise (hexadecimal floats are not taken).
-fn java_number_text(text: &[u8]) -> Option<String> {
+pub(crate) fn java_number_text(text: &[u8]) -> Option<String> {
     let t = std::str::from_utf8(text).ok()?.trim_matches(|c: char| c <= ' ');
     let unsigned = t.strip_prefix(['+', '-']).unwrap_or(t);
     if unsigned == "NaN" {
@@ -194,7 +194,12 @@ impl Machine {
     }
 
     /// The zero-terminated string at `addr`.
-    fn c_string(&self, mut addr: u32) -> Result<Vec<u8>, Fail> {
+    fn c_string(&self, addr: u32) -> Result<Vec<u8>, Fail> {
+        Ok(self.c_string_raw(addr)?)
+    }
+
+    /// The zero-terminated string at `addr`, read as the program would (an address error stops).
+    pub(crate) fn c_string_raw(&self, mut addr: u32) -> Result<Vec<u8>, AccessError> {
         let mut s = Vec::new();
         loop {
             match self.mem.load8(addr)? {
@@ -221,6 +226,27 @@ impl Machine {
         let line: Vec<u8> = self.input.drain(..n).collect();
         self.console.write(&line);
         Some(line)
+    }
+
+    /// Input for service `service`: from the Run I/O console ([`Machine::take_input`]), or with
+    /// MARS's setting "popup dialog for input syscalls" from its "MIPS Keyboard Input" window
+    /// (asking `prompt`; the console then shows `**** user input : text`). None until there.
+    fn read_input(&mut self, service: u32, max: Option<usize>, prompt: &str) -> Option<Vec<u8>> {
+        if !self.settings.popup_input || self.dialogs_in_console {
+            return self.take_input(max);
+        }
+        let text = match self.dialog_answer.take() {
+            Some(crate::dialog::DialogAnswer::Ok(t)) => t,
+            // Swing hands over its "no value" object, a string.
+            Some(_) => "uninitializedValue".to_string(),
+            None => {
+                let kind = crate::dialog::DialogKind::KeyboardInput;
+                self.dialog = Some(crate::dialog::Dialog { service, kind, message: prompt.to_string() });
+                return None;
+            }
+        };
+        self.console.write(format!("**** user input : {text}\n").as_bytes());
+        Some(text.into_bytes())
     }
 
     /// The result of a file service in `$v0`: the value, or −1 for an error (whose message is
@@ -254,7 +280,9 @@ impl Machine {
             2 => self.print(&java_float(f32::from_bits(self.cpu.fpr[12]))),
             3 => self.print(&java_double(self.cpu.f64(12))),
             6 => {
-                let Some(line) = self.take_input(None) else { return Ok(Done::Block) };
+                let Some(line) = self.read_input(6, None, "Enter a float value (syscall 6)") else {
+                    return Ok(Done::Block);
+                };
                 let v: f32 = java_number_text(&line)
                     .and_then(|t| t.parse().ok())
                     .ok_or_else(|| Fail::syscall("invalid float input (syscall 6)".into()))?;
@@ -262,7 +290,9 @@ impl Machine {
                 Ok(Done::Continue)
             }
             7 => {
-                let Some(line) = self.take_input(None) else { return Ok(Done::Block) };
+                let Some(line) = self.read_input(7, None, "Enter a double value (syscall 7)") else {
+                    return Ok(Done::Block);
+                };
                 let v: f64 = java_number_text(&line)
                     .and_then(|t| t.parse().ok())
                     .ok_or_else(|| Fail::syscall("invalid double input (syscall 7)".into()))?;
@@ -276,7 +306,9 @@ impl Machine {
                 Ok(Done::Continue)
             }
             5 => {
-                let Some(line) = self.take_input(None) else { return Ok(Done::Block) };
+                let Some(line) = self.read_input(5, None, "Enter an integer value (syscall 5)") else {
+                    return Ok(Done::Block);
+                };
                 let v =
                     parse_java_int(&line).ok_or_else(|| Fail::syscall("invalid integer input (syscall 5)".into()))?;
                 self.cpu.set_reg(V0, v as u32);
@@ -285,7 +317,8 @@ impl Machine {
             8 => {
                 let max = (a1 as i32).saturating_sub(1);
                 let (max, add_null) = if max < 0 { (0, false) } else { (max as usize, true) };
-                let Some(mut line) = self.take_input(Some(max)) else { return Ok(Done::Block) };
+                let prompt = format!("Enter a string of maximum length {max} (syscall 8)");
+                let Some(mut line) = self.read_input(8, Some(max), &prompt) else { return Ok(Done::Block) };
                 if line.last() == Some(&b'\n') {
                     line.pop();
                 }
@@ -321,7 +354,9 @@ impl Machine {
                 Ok(Done::Continue)
             }
             12 => {
-                let Some(line) = self.take_input(Some(1)) else { return Ok(Done::Block) };
+                let Some(line) = self.read_input(12, Some(1), "Enter a character value (syscall 12)") else {
+                    return Ok(Done::Block);
+                };
                 let c = *line.first().ok_or_else(|| Fail::syscall("invalid char input (syscall 12)".into()))?;
                 self.cpu.set_reg(V0, c as u32);
                 Ok(Done::Continue)
@@ -422,7 +457,22 @@ impl Machine {
                 (self.cpu.fpr[0], self.cpu.fpr[1]) = (b as u32, (b >> 32) as u32);
                 Ok(Done::Continue)
             }
-            50..=59 => Err(Fail::syscall(format!("syscall {service} shows a dialog window, which is not supported"))),
+            50..=59 => {
+                let d = self.dialog_of(service)?;
+                let answer = match self.dialog_answer.take() {
+                    Some(a) => a,
+                    None if self.dialogs_in_console => match self.console_dialog(&d) {
+                        Some(a) => a,
+                        None => return Ok(Done::Block),
+                    },
+                    None => {
+                        self.dialog = Some(d);
+                        return Ok(Done::Block);
+                    }
+                };
+                self.apply_dialog(&d, answer)?;
+                Ok(Done::Continue)
+            }
             _ => Err(Fail::syscall(format!("invalid or unimplemented syscall service: {service} "))),
         }
     }

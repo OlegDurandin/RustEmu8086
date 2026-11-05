@@ -1130,3 +1130,131 @@ fn macros_match_mars() {
     std::fs::remove_dir_all(&root).ok();
     assert_eq!(failures, 0, "{failures} of {} macro / .include cases differ from MARS", MACRO_CASES.len());
 }
+
+/// Reads an integer, a float, a double, a string (buffer of 16) and an integer, then prints them
+/// back separated by `|`.
+const INPUT_PROGRAM: &str = ".data
+buf: .space 16
+.text
+    li $v0, 5
+    syscall
+    move $s0, $v0
+    li $v0, 6
+    syscall
+    mov.s $f20, $f0
+    li $v0, 7
+    syscall
+    mov.d $f22, $f0
+    la $a0, buf
+    li $a1, 16
+    li $v0, 8
+    syscall
+    li $v0, 5
+    syscall
+    move $s1, $v0
+    move $a0, $s0
+    li $v0, 1
+    syscall
+    li $a0, '|'
+    li $v0, 11
+    syscall
+    mov.s $f12, $f20
+    li $v0, 2
+    syscall
+    li $a0, '|'
+    li $v0, 11
+    syscall
+    mov.d $f12, $f22
+    li $v0, 3
+    syscall
+    li $a0, '|'
+    li $v0, 11
+    syscall
+    la $a0, buf
+    li $v0, 4
+    syscall
+    li $a0, '|'
+    li $v0, 11
+    syscall
+    move $a0, $s1
+    li $v0, 1
+    syscall
+";
+
+/// MARS's input services read from the console (`nc`: a line each) as from its Run I/O pane
+/// when each line fits: integers, floats and doubles as Java parses them (spaces, signs, `f`,
+/// `NaN`, out of range), strings shorter than the buffer, and the errors of bad numbers. (A
+/// character, and a string longer than its buffer, are read differently by MARS's two modes;
+/// RustEmu8086 reads as the Run I/O pane does.)
+#[test]
+fn input_services_match_mars() {
+    let Some(mars) = std::env::var_os("MARS") else {
+        eprintln!("MARS is not set: skipping the comparison with MARS");
+        return;
+    };
+    let mars = Path::new(&mars).canonicalize().expect("MARS exists");
+    let dir = std::env::temp_dir().join(format!("rustemu_mars_input_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("input.asm");
+    std::fs::write(&file, INPUT_PROGRAM).unwrap();
+    let prog = rustemu_mips::asm::assemble(INPUT_PROGRAM).unwrap();
+    let inputs = [
+        "42\n2.5\n1e300\nhello\n-7\n",
+        " 42 \n+3.5f\nNaN\n\n0\n",
+        "-2147483648\n-Infinity\n2.5e-310\nfourteen chars\n2147483647\n",
+        "1\n0.1\n0.1d\nwith  spaces\n+0\n",
+        "abc\n",
+        "2147483648\n",
+        "1\nx\n",
+        "1\n1\n.\n",
+        "1\n1\n1\nok\n12a\n",
+    ];
+    let mut failures = 0;
+    for input in inputs {
+        let mut m = rustemu_mips::Machine::new();
+        m.load(&prog.image).unwrap();
+        m.push_text(input);
+        let ev = m.run(100_000);
+        // The console echoes what was typed (as the Run I/O pane does), then the program's output.
+        let console = m.console.text();
+        let typed: String = input.chars().take(console.len()).collect();
+        let ours_out = console.strip_prefix(typed.as_str()).unwrap_or(&console).to_string();
+        let ours_err = match ev {
+            rustemu_target::Event::Error(e) => Some(e),
+            _ => None,
+        };
+        let mut cmd = Command::new("java");
+        if mars.extension().is_some_and(|e| e == "jar") {
+            cmd.arg("-jar").arg(&mars);
+        } else {
+            cmd.arg("-cp").arg(&mars).arg("Mars");
+        }
+        let mut child = cmd
+            .arg("nc")
+            .arg(&file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("java runs");
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+        let their_err = text.lines().find_map(|l| l.find("Runtime exception at ").map(|i| l[i..].trim().to_string()));
+        let their_out = if their_err.is_some() {
+            String::new()
+        } else {
+            String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_string()
+        };
+        let ours_out = if ours_err.is_some() { String::new() } else { ours_out };
+        if (ours_out.as_str(), &ours_err) != (their_out.as_str(), &their_err) {
+            failures += 1;
+            eprintln!(
+                "input {input:?} differs:\n--- ours\n{ours_out:?}\n{ours_err:?}\n--- MARS\n{their_out:?}\n{their_err:?}\n"
+            );
+        }
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(failures, 0, "{failures} of {} inputs differ from MARS", inputs.len());
+}
