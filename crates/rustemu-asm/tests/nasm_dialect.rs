@@ -375,6 +375,47 @@ times 2 ; a comment
 nop
 ",
     ),
+    (
+        // Text substitutions rescanned (TODO item 20): a %define using others, one redefined
+        // between uses, %xdefine expanded at once, a %define standing for a function-like one
+        // and the other way round, a %define inside its own text.
+        "nested_defines",
+        "bits 16
+org 100h
+%define a 1
+%define b (a+a)
+%define c b*b
+mov ax, c
+%define late x*2
+%define x 3
+mov bx, late
+%define x 4
+mov cx, late
+%xdefine eager x+1
+%define x 10
+mov dx, eager
+%define f(v) (v+k)
+%define k 5
+%define g f(2)
+mov si, g
+%define n n
+n: mov di, n
+ret
+",
+    ),
+    (
+        // A %define inside its own text next to a function-like one: expanded once, as NASM.
+        "self_define",
+        "bits 16
+org 100h
+%define a a+1
+%define f(v) (v)
+mov ax, f(1)+a
+ret
+%undef a
+a equ 5
+",
+    ),
 ];
 
 #[test]
