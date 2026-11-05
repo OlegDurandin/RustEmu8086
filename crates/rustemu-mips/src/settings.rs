@@ -290,6 +290,9 @@ pub struct Settings {
     pub warnings_are_errors: bool,
     /// The memory configuration (MARS's `mc`).
     pub memory: MemoryConfig,
+    /// The reading services (5..8, 12) take their input from a dialog window instead of the
+    /// Run I/O console (MARS's "popup dialog for input syscalls"; no command line option).
+    pub popup_input: bool,
 }
 
 impl Default for Settings {
@@ -301,6 +304,7 @@ impl Default for Settings {
             pseudo_instructions: true,
             warnings_are_errors: false,
             memory: MemoryConfig::Default,
+            popup_input: false,
         }
     }
 }

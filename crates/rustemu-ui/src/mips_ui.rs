@@ -29,6 +29,8 @@ pub struct MipsState {
     pub group: RegGroup,
     /// A word of the memory window being edited: its address and the text typed.
     pub mem_edit: Option<(u32, String)>,
+    /// The text typed in an input dialog (syscall 51..54).
+    pub dialog_text: String,
 }
 
 /// The registers the panel shows, one group at a time.
@@ -525,6 +527,9 @@ pub fn console_ui(app: &mut App, ui: &mut Ui) {
     });
     let state = match finished {
         Some(f) => RichText::new(format!("-- program is finished running (exit code {}) --", f.code())).weak(),
+        None if app.session.mips().is_some_and(|m| m.dialog().is_some()) => {
+            RichText::new("waiting for the dialog window").color(crate::colors::warn(ui))
+        }
         None if waiting => RichText::new("waiting for input").color(crate::colors::warn(ui)),
         None if app.run != RunMode::Paused => RichText::new("running").weak(),
         None => RichText::new(" ").weak(),
@@ -921,6 +926,80 @@ fn statement_at(app: &App, a: u32) -> Option<&rustemu_mips::asm::Statement> {
     let st = &app.session.mips_program.as_ref()?.statements;
     let i = st.partition_point(|s| s.addr <= a).checked_sub(1)?;
     st.get(i).filter(|s| a < s.addr.wrapping_add(4 * s.words.len() as u32))
+}
+
+/// The window of a dialog service (syscall 50..59) the program waits on, as MARS's `JOptionPane`:
+/// a question with Yes / No / Cancel, an input field with OK / Cancel, a message with OK.
+/// Answering while the program is paused completes the `syscall` at once.
+pub fn dialog_window(app: &mut App, ctx: &egui::Context) {
+    use rustemu_mips::{DialogAnswer, DialogKind};
+    let Some(d) = app.session.mips().and_then(|m| m.dialog()).cloned() else { return };
+    let title = match d.kind {
+        DialogKind::Confirm => "Select an Option",
+        DialogKind::Message(t) => t.title(),
+        DialogKind::KeyboardInput => "MIPS Keyboard Input",
+        _ => "Input",
+    };
+    let mut answer = None;
+    let mut open = true;
+    egui::Window::new(format!("{title} (syscall {})", d.service))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.set_min_width(260.0);
+            let question = ui.label(&d.message).id;
+            ui.add_space(6.0);
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            match d.kind {
+                DialogKind::Confirm => {
+                    ui.horizontal(|ui| {
+                        for (label, a) in
+                            [("Yes", DialogAnswer::Yes), ("No", DialogAnswer::No), ("Cancel", DialogAnswer::Cancel)]
+                        {
+                            if ui.button(label).clicked() {
+                                answer = Some(a);
+                            }
+                        }
+                    });
+                }
+                DialogKind::Message(_) => {
+                    if ui.button("OK").clicked() || enter {
+                        answer = Some(DialogAnswer::Ok(String::new()));
+                    }
+                }
+                _ => {
+                    let r = ui
+                        .add(egui::TextEdit::singleline(&mut app.mips.dialog_text).desired_width(240.0))
+                        .labelled_by(question);
+                    if !r.has_focus() && !r.lost_focus() {
+                        r.request_focus();
+                    }
+                    let submit = r.lost_focus() && enter;
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() || submit {
+                            answer = Some(DialogAnswer::Ok(std::mem::take(&mut app.mips.dialog_text)));
+                        }
+                        // MARS's keyboard input window has OK only.
+                        if d.kind != DialogKind::KeyboardInput && ui.button("Cancel").clicked() {
+                            answer = Some(DialogAnswer::Cancel);
+                        }
+                    });
+                }
+            }
+        });
+    if !open {
+        answer = Some(DialogAnswer::Closed);
+    }
+    let Some(a) = answer else { return };
+    app.mips.dialog_text.clear();
+    if let Some(m) = app.session.mips_mut() {
+        m.answer_dialog(a);
+    }
+    if app.run == RunMode::Paused {
+        app.single_step();
+    }
 }
 
 #[cfg(test)]

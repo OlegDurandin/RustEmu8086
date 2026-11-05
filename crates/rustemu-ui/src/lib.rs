@@ -46,6 +46,7 @@ pub mod workspace;
 pub fn windows(app: &mut app::App, ctx: &egui::Context, host: &mut dyn tools::Host) {
     tools::windows(app, ctx, host);
     dialogs::dialogs(app, ctx);
+    mips_ui::dialog_window(app, ctx);
 }
 
 /// Window options of the desktop applications.
