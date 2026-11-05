@@ -14,6 +14,7 @@
 pub mod asm;
 pub mod console;
 pub mod cpu;
+pub mod dialog;
 pub mod disasm;
 pub mod files;
 pub mod fpu;
@@ -27,6 +28,7 @@ pub mod target;
 
 pub use console::Console;
 pub use cpu::{Cpu, Delay, ExcCode, Exception, Step};
+pub use dialog::{Dialog, DialogAnswer, DialogKind, MessageType};
 pub use machine::{Chunk, Finish, Image, Machine};
 pub use memory::{Access, AccessError, Memory, Segment};
 pub use settings::{Layout, MemoryConfig, Settings};

@@ -45,6 +45,9 @@ rustemu run sum.asm --trace                  # every instruction with registers
 | `--keys <text>` | MIPS: keys of MARS's MMIO keyboard (`\n` is Enter) |
 | `--delayed-branching`, `--self-modifying`, `--start-at-main`, `--no-pseudo`, `--warnings-are-errors` | MIPS (also `asm`): MARS's settings, its options `db`, `smc`, `sm`, `np`, `we` |
 | `--memory <config>` | MIPS (also `asm`): MARS's memory configuration: `Default`, `CompactDataAtZero`, `CompactTextAtZero` (its `mc`) |
+| `--project` | MIPS (also `asm`): assemble the `.asm` and `.s` files of the program's folder with it (MARS's `p`) |
+| `--exception-handler <file>` | MIPS (also `asm`): assemble this file first (MARS's exception handler setting) |
+| `--program-args <text>` | MIPS: arguments for the program, separated by spaces (MARS's `pa`): `$a0` their number, `$a1` the array of their addresses |
 
 The exit code of `rustemu run` is the program's exit code (AL in INT 21h, function 4Ch), so scripts can check the
 result:
@@ -87,7 +90,9 @@ rustemu disasm sort.bin --arch mips --mars   # MARS's basic notation: $8, branch
 The exit code is the code of `exit2` (syscall 17), 0 after `exit` (syscall 10) or when the program runs past its
 last instruction; an exception without a handler prints the error and returns 5. File services (13–16) work in
 the program's folder. `--keys` types on MARS's MMIO keyboard (one key each time the program has read the
-previous one); what the program sent to the MMIO display is printed at the end after `[MMIO display]`. A trace line:
+previous one); what the program sent to the MMIO display is printed at the end after `[MMIO display]`. The
+dialogs (syscall 50–59) have no windows here: a message is printed, a question or an input takes a line of
+input. A trace line:
 
 ```
 00400004  3c011001  lui $at, 0x1001              v0=00000004 a0=00000000 t0=00000000 t1=00000000 sp=7fffeffc

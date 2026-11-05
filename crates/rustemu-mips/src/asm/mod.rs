@@ -13,6 +13,10 @@
 //! - `%hi(label)` / `%lo(label)` (an extension over MARS, as in GNU as): `lui $t0, %hi(x)` +
 //!   `addiu $t0, $t0, %lo(x)` (or `lw $t1, %lo(x)($t0)`) load the address of `x`.
 //!
+//! - Several files ([`assemble_files`]), as MARS assembles an exception handler file or all the
+//!   files of a folder: each has its own labels, macros and `.eqv`; a label declared `.globl` (and
+//!   `.extern` data) is in the global table all files see; `.text` and `.data` go on from one
+//!   file to the next.
 //! - Macros (`.macro name (%a, %b)` … `.end_macro`) and `.include "file"`, by MARS's rules: a
 //!   macro is chosen by its name and number of arguments (the last one defined wins), its body
 //!   lines are substituted as text (MARS's `Macro.getSubstitutedLine`: each parameter token, from
@@ -271,6 +275,8 @@ impl DataKind {
 
 /// A statement waiting for the second pass.
 struct Pending {
+    /// The file (unit of assembly) of the statement: its labels resolve the operands.
+    unit: usize,
     place: Place,
     tokens: Vec<Token>,
     form: &'static Form,
@@ -342,11 +348,18 @@ const KERNEL: usize = 1;
 struct Asm {
     settings: Settings,
     layout: &'static Layout,
-    /// Names declared global (`.globl`).
-    globals: Vec<String>,
+    /// The labels the current file declares global (`.globl`), moved to [`Asm::global`] at its end.
+    globals: Vec<(Token, Place)>,
     errors: Vec<AsmError>,
     warnings: Vec<AsmError>,
+    /// The labels of the current file: address, labels data.
     symbols: HashMap<String, (u32, bool)>,
+    /// The global labels (`.globl`, `.extern`), seen by every file.
+    global: HashMap<String, (u32, bool)>,
+    /// The labels of each file assembled, for the second pass.
+    unit_symbols: Vec<HashMap<String, (u32, bool)>>,
+    /// Index of the current file among the files assembled.
+    unit: usize,
     eqv: HashMap<String, Vec<Token>>,
     in_data: bool,
     text_space: usize,
@@ -387,6 +400,9 @@ impl Asm {
             settings,
             layout,
             globals: Vec::new(),
+            global: HashMap::new(),
+            unit_symbols: Vec::new(),
+            unit: 0,
             errors: Vec::new(),
             warnings: Vec::new(),
             symbols: HashMap::new(),
@@ -503,6 +519,36 @@ impl Asm {
         } else {
             self.instruction(tokens);
         }
+    }
+
+    /// Moves the labels the file declared `.globl` to the global table (MARS's `transferGlobals`).
+    fn transfer_globals(&mut self) {
+        for (label, place) in std::mem::take(&mut self.globals) {
+            self.place = place;
+            match self.symbols.get(&label.text).copied() {
+                None => self.error(label.col, format!("\"{}\" declared global label but not defined.", label.text)),
+                Some(_) if self.global.contains_key(&label.text) => {
+                    self.error(label.col, format!("\"{}\" already defined as global in a different file.", label.text))
+                }
+                Some(v) => {
+                    self.symbols.remove(&label.text);
+                    self.global.insert(label.text.clone(), v);
+                }
+            }
+        }
+    }
+
+    /// Writes label address `v` into the `len` bytes of data at `at`.
+    fn store_label(&mut self, at: u32, len: u32, v: u32) {
+        for i in 0..len {
+            self.data.insert(at + i, (v >> (8 * i)) as u8);
+        }
+    }
+
+    /// A label's address and kind: the current file's, else the global one (MARS's
+    /// `getAddressLocalOrGlobal`).
+    fn lookup(&self, name: &str) -> Option<(u32, bool)> {
+        self.symbols.get(name).or_else(|| self.global.get(name)).copied()
     }
 
     fn define(&mut self, label: &Token, addr: u32, data: bool) {
@@ -680,7 +726,7 @@ impl Asm {
             return self.error(m.col, format!("\"{}\" is not a valid text segment address", addr as i32));
         }
         self.text_addr[self.text_space] = addr.wrapping_add(words * 4);
-        self.pending.push(Pending { place: self.place.clone(), tokens, form, addr });
+        self.pending.push(Pending { unit: self.unit, place: self.place.clone(), tokens, form, addr });
     }
 
     fn need_data(&mut self, d: &Token) -> bool {
@@ -744,9 +790,9 @@ impl Asm {
                 let Some(size) = int_arg(std::slice::from_ref(size)).filter(|&n| n >= 0) else {
                     return self.error(d.col, format!("\"{}\" requires a non-negative integer size", d.text));
                 };
-                if !self.symbols.contains_key(&label.text) {
-                    let addr = self.extern_addr;
-                    self.define(label, addr, true);
+                // As MARS: straight into the global table, unless it is there.
+                if !self.global.contains_key(&label.text) {
+                    self.global.insert(label.text.clone(), (self.extern_addr, true));
                     self.extern_addr = self.extern_addr.wrapping_add(size as u32);
                 }
             }
@@ -754,10 +800,12 @@ impl Asm {
                 if args.is_empty() {
                     return self.error(d.col, format!("\"{}\" directive requires at least one argument.", d.text));
                 }
-                if let Some(a) = args.iter().find(|a| a.kind != Kind::Ident) {
-                    self.error(a.col, format!("\"{}\" directive argument must be label.", d.text));
+                for a in args {
+                    if a.kind != Kind::Ident {
+                        return self.error(d.col, format!("\"{}\" directive argument must be label.", d.text));
+                    }
+                    self.globals.push((a.clone(), self.place.clone()));
                 }
-                self.globals.extend(args.iter().map(|a| a.text.clone()));
             }
             ".eqv" => match args {
                 [n, rest @ ..] if n.kind == Kind::Ident && !rest.is_empty() => {
@@ -923,7 +971,7 @@ impl Asm {
                     self.write(*v as u32 as u64, len, t.col).is_some()
                 }
                 Kind::Ident => {
-                    let known = self.symbols.get(&t.text).map(|s| s.0);
+                    let known = self.lookup(&t.text).map(|s| s.0);
                     let Some(at) = self.write(known.unwrap_or(0) as u64, len, t.col) else { return false };
                     if known.is_none() {
                         self.forward.push((at, len, t.clone(), self.place.clone()));
@@ -943,7 +991,7 @@ impl Asm {
     /// The value of a label operand or a `%hi` / `%lo`, as a token text (MARS replaces labels by
     /// their addresses before expanding pseudo-instructions).
     fn resolve(&mut self, t: &Token) -> Option<Token> {
-        let lookup = |s: &Asm, name: &str| s.symbols.get(name).map(|v| v.0);
+        let lookup = |s: &Asm, name: &str| s.lookup(name).map(|v| v.0);
         match &t.kind {
             Kind::Ident => match lookup(self, &t.text) {
                 Some(a) => Some(Token { kind: Kind::Int(a as i32), text: (a as i32).to_string(), col: t.col }),
@@ -994,8 +1042,7 @@ impl Asm {
                 }
                 Kind::Ident => {
                     let target = self
-                        .symbols
-                        .get(&t.text)
+                        .lookup(&t.text)
                         .map(|s| s.0)
                         .ok_or(format!("Symbol \"{}\" not found in symbol table.", t.text))?;
                     let v = match b.format {
@@ -1265,38 +1312,94 @@ pub fn assemble_settings(
     read: &mut dyn FnMut(&str) -> Option<String>,
     settings: &Settings,
 ) -> Result<Program, AsmErrors> {
-    let mut files = vec![SourceFile { name: name.to_string(), text: source.to_string() }];
-    let mut lines = Vec::new();
+    let program = SourceFile { name: name.to_string(), text: source.to_string() };
+    assemble_files(program, None, Vec::new(), read, settings)
+}
+
+/// Assembles a program of several files as MARS does: `exception_handler` (MARS's setting
+/// "include this exception handler file") first, then `program`, then `others` (MARS's "assemble
+/// all files in directory"). [`Program::files`] has the program first, then the other files and
+/// the included ones; labels are local to their file unless declared `.globl`.
+pub fn assemble_files(
+    program: SourceFile,
+    exception_handler: Option<SourceFile>,
+    others: Vec<SourceFile>,
+    read: &mut dyn FnMut(&str) -> Option<String>,
+    settings: &Settings,
+) -> Result<Program, AsmErrors> {
     let names = |files: &[SourceFile]| files.iter().map(|f| f.name.clone()).collect();
-    if let Err(e) = include_lines(&mut files, 0, read, &mut Vec::new(), &mut lines, 0) {
-        return Err(AsmErrors { errors: vec![e], files: names(&files) });
+    // The files in their order of assembly, as indices into `files`.
+    let mut files = vec![program];
+    let mut order = Vec::new();
+    if let Some(h) = exception_handler {
+        files.push(h);
+        order.push(files.len() - 1);
+    }
+    order.push(0);
+    for f in others {
+        files.push(f);
+        order.push(files.len() - 1);
+    }
+    let mut units = Vec::new();
+    for &f in &order {
+        let mut lines = Vec::new();
+        if let Err(e) = include_lines(&mut files, f, read, &mut Vec::new(), &mut lines, 0) {
+            return Err(AsmErrors { errors: vec![e], files: names(&files) });
+        }
+        units.push(lines);
     }
     let mut asm = Asm::new(*settings);
-    asm.lines = lines;
-    for i in 0..asm.lines.len() {
-        asm.index = i;
-        asm.place = Place { file: asm.lines[i].file, line: asm.lines[i].line, calls: Vec::new(), text: None };
-        let text = asm.lines[i].text.clone();
-        asm.line(&text);
-    }
-    if let Some(m) = asm.defining.take() {
-        let l = &asm.lines[m.from];
-        asm.place = Place { file: l.file, line: l.line, calls: Vec::new(), text: None };
-        asm.error(0, "Macro started but not ended (no .end_macro directive)");
-    }
-    for (at, len, t, place) in std::mem::take(&mut asm.forward) {
-        asm.place = Place { calls: Vec::new(), ..place };
-        match asm.symbols.get(&t.text) {
-            Some(&(v, _)) => {
-                for i in 0..len {
-                    asm.data.insert(at + i, (v >> (8 * i)) as u8);
-                }
+    let mut accumulated = Vec::new();
+    for (u, lines) in units.into_iter().enumerate() {
+        // What a file starts with (MARS's first pass for each file).
+        asm.unit = u;
+        asm.lines = lines;
+        asm.symbols.clear();
+        asm.eqv.clear();
+        asm.macros.clear();
+        asm.counter = 0;
+        asm.globals.clear();
+        asm.in_data = false;
+        asm.auto_align = true;
+        asm.last_data = None;
+        for i in 0..asm.lines.len() {
+            asm.index = i;
+            asm.place = Place { file: asm.lines[i].file, line: asm.lines[i].line, calls: Vec::new(), text: None };
+            let text = asm.lines[i].text.clone();
+            asm.line(&text);
+        }
+        if let Some(m) = asm.defining.take() {
+            let l = &asm.lines[m.from];
+            asm.place = Place { file: l.file, line: l.line, calls: Vec::new(), text: None };
+            asm.error(0, "Macro started but not ended (no .end_macro directive)");
+        }
+        asm.transfer_globals();
+        // Data referring to labels not known yet: this file's or global ones; the others may be
+        // global labels of a later file.
+        for (at, len, t, place) in std::mem::take(&mut asm.forward) {
+            match asm.lookup(&t.text) {
+                Some((v, _)) => asm.store_label(at, len, v),
+                None => accumulated.push((at, len, t, place)),
             }
+        }
+        asm.unit_symbols.push(std::mem::take(&mut asm.symbols));
+    }
+    for (at, len, t, place) in accumulated {
+        asm.place = Place { calls: Vec::new(), ..place };
+        match asm.global.get(&t.text) {
+            Some(&(v, _)) => asm.store_label(at, len, v),
             None => asm.error(t.col, format!("Symbol \"{}\" not found in symbol table.", t.text)),
         }
     }
     let pending = std::mem::take(&mut asm.pending);
-    let statements: Vec<Statement> = pending.iter().filter_map(|p| asm.build(p)).collect();
+    let mut statements = Vec::new();
+    for p in &pending {
+        if asm.symbols.is_empty() || asm.unit != p.unit {
+            asm.unit = p.unit;
+            asm.symbols = asm.unit_symbols[p.unit].clone();
+        }
+        statements.extend(asm.build(p));
+    }
     if settings.warnings_are_errors && asm.errors.is_empty() && !asm.warnings.is_empty() {
         // As MARS: the warnings stop the assembly.
         asm.errors = std::mem::take(&mut asm.warnings);
@@ -1305,7 +1408,6 @@ pub fn assemble_settings(
         asm.errors.sort_by_key(|e| (e.file, e.line, e.col));
         return Err(AsmErrors { errors: asm.errors, files: names(&files) });
     }
-    let mut statements = statements;
     statements.sort_by_key(|s| s.addr);
     let code = statements.iter().flat_map(|s| {
         s.words.iter().enumerate().flat_map(move |(k, w)| {
@@ -1318,14 +1420,17 @@ pub fn assemble_settings(
     chunks.extend(chunks_of(asm.data.iter().map(|(&a, &b)| (a, b)), false, layout));
     // MARS's `RegisterFile.initializeProgramCounter(startAtMain)`: the global label `main`, if it
     // labels code.
-    let main =
-        asm.symbols.get("main").map(|s| s.0).filter(|&a| asm.globals.iter().any(|g| g == "main") && layout.in_code(a));
+    let main = asm.global.get("main").map(|s| s.0).filter(|&a| layout.in_code(a));
     let entry = match main {
         Some(a) if settings.start_at_main => a,
         _ => layout.text_base,
     };
-    let mut symbols: Vec<Symbol> =
-        asm.symbols.iter().map(|(n, &(addr, data))| Symbol { name: n.clone(), addr, data }).collect();
+    let mut symbols: Vec<Symbol> = asm
+        .unit_symbols
+        .iter()
+        .chain(std::iter::once(&asm.global))
+        .flat_map(|table| table.iter().map(|(n, &(addr, data))| Symbol { name: n.clone(), addr, data }))
+        .collect();
     symbols.sort_by(|a, b| (a.addr, &a.name).cmp(&(b.addr, &b.name)));
     Ok(Program {
         image: Image { chunks, entry, settings: *settings },

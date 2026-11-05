@@ -98,11 +98,16 @@ fn run_mars(mars: &Path, dir: &Path, case: &Case) -> Outcome {
     // The output is what comes before the registers, and MARS ends it with a new line of its own.
     let end = stdout.find("\n$").unwrap_or(stdout.len());
     let output = &stdout[..end];
+    // MARS's own lines: its messages (an error follows the program's output on the same line),
+    // the warnings, "Processing terminated due to errors.".
     o.output = output
         .lines()
-        .filter(|l| !l.contains("Runtime exception") && !l.starts_with("Error"))
+        .filter(|l| !l.starts_with("Warning in ") && *l != "Processing terminated due to errors.")
+        .map(|l| l.find("Error in ").map_or(l, |i| &l[..i]))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+        .trim_end_matches('\n')
+        .to_string();
     if !o.messages.is_empty() && o.regs.is_empty() {
         o.output.clear();
     }
@@ -455,6 +460,7 @@ const DEFAULTS: Settings = Settings {
     pseudo_instructions: true,
     warnings_are_errors: false,
     memory: MemoryConfig::Default,
+    popup_input: false,
 };
 
 #[test]
@@ -554,4 +560,88 @@ fn settings_match_mars() {
     }
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(failures, 0, "{failures} of {} cases differ from MARS", CASES.len());
+}
+
+/// Prints the number of arguments, `$sp` and `$a1`, then each argument on its line.
+const ARGS: &str = "
+.text
+    move $s0, $a0
+    move $s1, $a1
+    li $v0, 1
+    syscall
+    li $v0, 11
+    li $a0, 32
+    syscall
+    li $v0, 34
+    move $a0, $sp
+    syscall
+    li $v0, 11
+    li $a0, 32
+    syscall
+    li $v0, 34
+    move $a0, $s1
+    syscall
+next:
+    beqz $s0, done
+    li $v0, 11
+    li $a0, 10
+    syscall
+    lw $a0, 0($s1)
+    li $v0, 4
+    syscall
+    addi $s1, $s1, 4
+    addi $s0, $s0, -1
+    j next
+done:
+";
+
+fn run_with_arguments(args: &[&str], settings: &Settings) -> String {
+    let p = assemble_settings("", ARGS, &mut |_| None, settings).unwrap();
+    let mut m = Machine::new();
+    m.program_arguments = args.iter().map(|a| a.to_string()).collect();
+    m.load(&p.image).unwrap();
+    assert_eq!(m.run(10_000), Event::Terminated(0));
+    m.console.text()
+}
+
+#[test]
+fn program_arguments_as_mars_stores_them() {
+    // "ab" and "c": the strings end at 0x7ffffffc, the array goes below $sp... here they fit
+    // above $sp, so the array starts at the initial $sp.
+    assert_eq!(run_with_arguments(&["ab", "c"], &DEFAULTS), "2 0x7fffeff0 0x7fffeff4\nab\nc");
+    assert_eq!(run_with_arguments(&[], &DEFAULTS), "0 0x7fffeffc 0x00000000");
+}
+
+#[test]
+fn program_arguments_match_mars() {
+    let Some(mars) = std::env::var_os("MARS") else {
+        eprintln!("MARS is not set: skipping the comparison with MARS");
+        return;
+    };
+    let mars = Path::new(&mars).canonicalize().expect("MARS exists");
+    let dir = std::env::temp_dir().join(format!("rustemu_mars_args_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("args.s");
+    std::fs::write(&file, ARGS).unwrap();
+    let long = "x".repeat(5000);
+    let cases: Vec<(Vec<&str>, Settings)> = vec![
+        (vec!["one"], DEFAULTS),
+        (vec!["ab", "c", "def"], DEFAULTS),
+        (vec![&long, "tail"], DEFAULTS),
+        (vec!["compact", "args"], compact(MemoryConfig::CompactDataAtZero)),
+    ];
+    for (args, settings) in cases {
+        let ours = run_with_arguments(&args, &settings);
+        let mut cmd = Command::new("java");
+        if mars.extension().is_some_and(|e| e == "jar") {
+            cmd.arg("-jar").arg(&mars);
+        } else {
+            cmd.arg("-cp").arg(&mars).arg("Mars");
+        }
+        let out =
+            cmd.arg("nc").args(settings.mars_options()).arg(&file).arg("pa").args(&args).output().expect("java runs");
+        let theirs = String::from_utf8_lossy(&out.stdout).to_string();
+        assert_eq!(ours, theirs.strip_suffix('\n').unwrap_or(&theirs), "arguments {:?}", &args[..args.len().min(3)]);
+    }
+    std::fs::remove_dir_all(&dir).ok();
 }
