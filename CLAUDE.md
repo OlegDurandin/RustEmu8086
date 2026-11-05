@@ -97,7 +97,7 @@ Cargo workspace (корневой `Cargo.toml` — виртуальный ман
 - **Корпус Emu8086**: `cargo test -p rustemu-session --test emu8086_corpus -- --nocapture` — собирает и
   прогоняет все примеры `examples/` (84 из Emu8086 + 2 NASM), плюс загрузка micro-os с виртуальной дискеты. Сейчас: всё собирается и выполняется без ошибок
   (кроме `fasm_compatibility.asm` — синтаксис FASM не поддерживается).
-- **Курс** (`course/` — только локально, в .gitignore, на GitHub не отправлять; без папки тест пропускается; уроки по-русски, программы `course/programs/*.asm` со строками проверки `;! input/output/screen/endless`):
+- **Курс** — отдельный репозиторий github.com/OlegDurandin/rustemu-course (с 2026-11-05), клон — в `course/` (в .gitignore этого репозитория) или по пути `COURSE_DIR`; без него тест пропускается; уроки по-русски, программы `course/programs/*.asm` (8086, строки проверки `;! input/output/screen/endless`) и `*.s` (MIPS32, `#!`, `#! mars: db …` — настройки MARS):
   `cargo test -p rustemu-ui --test course` запускает программы и сверяет ссылки «▶ Открыть в эмуляторе» (`share::fragment`)
   и тексты программ в уроках (после `<!-- program: имя -->`); `COURSE_UPDATE_LINKS=1` — обновить их.
 - **Сверка MIPS с MARS** (`rustemu-mips/tests/mars_compare.rs`): случайные программы (арифметика с переполнением,

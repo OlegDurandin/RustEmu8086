@@ -1,7 +1,7 @@
 //! The course in `course/`: every program assembles and runs as its `;!` lines say, and every
 //! link and listing in the lessons shows the current text of its program.
 //!
-//! `;! input: 12\n30\n` — keys to type (`\n` is Enter); `;! output: text` — text the program
+//! `;! input: 12\n30\n` (`#!` in MIPS programs) — keys to type (`\n` is Enter); `;! output: text` — text the program
 //! prints; `;! screen: text` — text on the screen at the end; `;! endless` — the program does not
 //! end (it runs for a while, then its output is checked).
 //!
@@ -9,22 +9,30 @@
 //! ```asm block after `<!-- program: file.asm -->`. `COURSE_UPDATE_LINKS=1 cargo test -p rustemu-ui
 //! --test course` rewrites both from `course/programs/` (the template `_*.md` is skipped).
 //!
-//! The course is kept outside the repository; without `course/` the tests are skipped.
+//! MIPS32 programs (`.s`) run on the MIPS machine; `;! mars: db smc …` gives MARS's settings by
+//! its command line options (`db`, `smc`, `sm`, `np`, `we`, `mc <config>`), and their links carry
+//! `&arch=MIPS32`.
+//!
+//! The course is a repository of its own (github.com/OlegDurandin/rustemu-course), cloned into
+//! `course/` (ignored here) or anywhere `COURSE_DIR` names; without it the tests are skipped.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use rustemu_core::Event;
-use rustemu_session::Session;
+use rustemu_session::{Arch, Session};
 use rustemu_ui::app::WEB_URL;
 
-/// The course directory, or `None` (with a note) when it is not there.
+/// The course directory (`COURSE_DIR`, else `course/` of the workspace), or `None` (with a note)
+/// when it is not there.
 fn course() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../course");
+    let dir = std::env::var_os("COURSE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../course"));
     if dir.is_dir() {
         Some(dir)
     } else {
-        eprintln!("no course/ directory, skipping");
+        eprintln!("no course at {}, skipping", dir.display());
         None
     }
 }
@@ -42,7 +50,8 @@ fn files(dir: &Path, ext: &str) -> Vec<PathBuf> {
 /// Values of the `;! key: value` lines (`;! key` alone gives "").
 fn tags<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
     text.lines()
-        .filter_map(|l| l.trim().strip_prefix(";!"))
+        // `;!` in 8086 programs, `#!` in MIPS ones (their comments).
+        .filter_map(|l| l.trim().strip_prefix(";!").or_else(|| l.trim().strip_prefix("#!")))
         .filter_map(|l| {
             let (k, v) = l.split_once(':').unwrap_or((l, ""));
             (k.trim() == key).then(|| v.trim())
@@ -55,9 +64,67 @@ fn screen(s: &Session) -> String {
     (0..80 * 25u32).map(|i| s.x86().unwrap().sys.mem.read8(0xB8000 + i * 2) as char).collect()
 }
 
+/// A program for MIPS32 (MARS's syntax): its file is `.s`.
+fn is_mips(name: &str) -> bool {
+    name.ends_with(".s")
+}
+
+/// The programs of the course: 8086 (`.asm`) and MIPS32 (`.s`).
+fn program_files(dir: &Path) -> Vec<PathBuf> {
+    let mut v = files(dir, "asm");
+    v.extend(files(dir, "s"));
+    v
+}
+
+/// MARS's settings of `;! mars: …` (its command line options).
+fn mars_settings(text: &str) -> rustemu_mips::Settings {
+    let mut s = rustemu_mips::Settings::default();
+    let options = tags(text, "mars").join(" ");
+    let mut words = options.split_whitespace();
+    while let Some(o) = words.next() {
+        match o {
+            "db" => s.delayed_branching = true,
+            "smc" => s.self_modifying = true,
+            "sm" => s.start_at_main = true,
+            "np" => s.pseudo_instructions = false,
+            "we" => s.warnings_are_errors = true,
+            "mc" => s.memory = words.next().and_then(rustemu_mips::MemoryConfig::from_id).expect("mc <config>"),
+            _ => panic!("unknown MARS option {o}"),
+        }
+    }
+    s
+}
+
+/// Runs a MIPS program with its input and checks its output.
+fn check_mips(name: &str, text: &str) -> Vec<String> {
+    let mut s = Session::new_mips();
+    if let Err(e) = s.load_mips_source_with(name, text, &mars_settings(text)) {
+        return vec![format!("{name}: {e}")];
+    }
+    let m = s.mips_mut().unwrap();
+    m.instant_waits = true;
+    m.dialogs_in_console = true;
+    m.push_text(&tags(text, "input").concat().replace("\\n", "\n"));
+    let ev = m.run(10_000_000);
+    let mut problems = Vec::new();
+    if ev != Event::Terminated(0) {
+        problems.push(format!("{name}: ended with {ev:?}"));
+    }
+    let output = m.console.text();
+    for want in tags(text, "output") {
+        if !output.contains(want) {
+            problems.push(format!("{name}: no {want:?} in the output {output:?}"));
+        }
+    }
+    problems
+}
+
 fn check(path: &Path) -> Vec<String> {
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     let text = std::fs::read_to_string(path).unwrap();
+    if is_mips(&name) {
+        return check_mips(&name, &text);
+    }
     let sandbox = std::env::temp_dir().join(format!("rustemu_course_{}_{name}", std::process::id()));
     std::fs::create_dir_all(&sandbox).unwrap();
     let mut s = Session::new();
@@ -110,7 +177,7 @@ fn check(path: &Path) -> Vec<String> {
 #[test]
 fn course_programs_run_as_described() {
     let Some(course) = course() else { return };
-    let problems: Vec<String> = files(&course.join("programs"), "asm").iter().flat_map(|p| check(p)).collect();
+    let problems: Vec<String> = program_files(&course.join("programs")).iter().flat_map(|p| check(p)).collect();
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
 }
 
@@ -186,7 +253,8 @@ fn lesson_links_open_the_current_programs() {
             let fresh = link_name(link).and_then(|name| {
                 let code = std::fs::read_to_string(programs.join(name)).ok()?;
                 linked.insert(name.to_string());
-                Some(rustemu_ui::share::fragment(name, &code, false))
+                let arch = if is_mips(name) { Arch::Mips32 } else { Arch::I8086 };
+                Some(rustemu_ui::share::fragment_for(arch, name, &code, false))
             });
             match fresh {
                 Some(f) if f == link => out.push_str(link),
@@ -207,7 +275,7 @@ fn lesson_links_open_the_current_programs() {
             std::fs::write(&lesson, out).unwrap();
         }
     }
-    for p in files(&programs, "asm") {
+    for p in program_files(&programs) {
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
         if !linked.contains(&name) {
             problems.push(format!("{name}: no lesson links to it"));
