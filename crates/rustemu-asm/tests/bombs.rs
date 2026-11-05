@@ -54,3 +54,37 @@ fn deep_expressions_are_errors() {
         .unwrap();
     assert_eq!(p.file_bytes()[..6], [0xB8, 1, 0, 0xBB, 0xC9, 0x00]);
 }
+
+/// Text substitutions (`%define`, text `EQU`) are rescanned, so chains of them are bounded
+/// (TODO item 20): a name never expands inside its own text, nesting is limited, and so is the
+/// length a line may grow to.
+#[test]
+fn text_substitution_bombs_stop() {
+    // Each %define doubles the text of the next: 2^40 without a limit.
+    let mut doubling = String::from("bits 16\norg 100h\n%define d0 1\n");
+    for i in 1..40 {
+        doubling += &format!("%define d{i} d{}+d{}\n", i - 1, i - 1);
+    }
+    doubling += "mov ax, d39\n";
+    let (at, msg) = error_of(&doubling);
+    assert!(msg.contains("longer than"), "{msg}");
+    assert_eq!(at, 43);
+    // A chain longer than the nesting limit.
+    let mut chain = String::from("org 100h\nx0 equ <1>\n");
+    for i in 1..100 {
+        chain += &format!("x{i} equ <x{}>\n", i - 1);
+    }
+    chain += "mov ax, x99\nret\n";
+    let (_, msg) = error_of(&chain);
+    assert!(msg.contains("nested deeper than"), "{msg}");
+    // Names that refer to each other stop instead of looping.
+    let (_, msg) = error_of("bits 16\norg 100h\n%define a b\n%define b a\nmov ax, a\n");
+    assert!(msg.contains("undefined symbol"), "{msg}");
+}
+
+/// MASM text equates refer to each other too (TODO item 20).
+#[test]
+fn nested_text_equates() {
+    let p = assemble_str("org 100h\na equ <1>\nb equ <a+a>\nc equ <(b)*3>\nmov ax, c\nret\n").unwrap();
+    assert_eq!(p.file_bytes(), [0xB8, 6, 0, 0xC3]);
+}

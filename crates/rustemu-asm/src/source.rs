@@ -169,9 +169,71 @@ fn substitute(text: &str, map: &HashMap<String, String>) -> String {
     substitute_with(text, map, false)
 }
 
-/// Replaces whole identifiers (outside strings) using `map`. In MASM `&` glues tokens and is
-/// removed; in NASM (`nasm`) `&` is an operator and backquotes delimit strings.
+/// Replaces whole identifiers (outside strings) using `map`, once (macro parameters). In MASM `&`
+/// glues tokens and is removed; in NASM (`nasm`) `&` is an operator and backquotes delimit strings.
 fn substitute_with(text: &str, map: &HashMap<String, String>, nasm: bool) -> String {
+    substitute_in(text, map, nasm, None).unwrap_or_else(|_| text.to_string())
+}
+
+/// Most nested text substitutions in one line (a chain of `%define`s or text `EQU`s).
+pub const MAX_SUBSTITUTION_DEPTH: usize = 64;
+/// Longest line text substitutions may make, in bytes.
+pub const MAX_SUBSTITUTED_LEN: usize = 64 * 1024;
+
+/// What a rescanning substitution is expanding: the names being replaced (they are not replaced
+/// again inside their own text, as in NASM and the C preprocessor).
+struct Expanding {
+    names: Vec<String>,
+}
+
+/// Replaces the text equates / `%define`s of `map` in `text`, and again in what they bring in
+/// (NASM and MASM rescan a substituted text), until nothing is left to replace. A name is not
+/// replaced inside its own text, so `%define a a+1` and `a` → `b` → `a` stop. Errors: more than
+/// [`MAX_SUBSTITUTION_DEPTH`] nested names or a line longer than [`MAX_SUBSTITUTED_LEN`].
+fn expand_text(text: &str, map: &HashMap<String, String>, nasm: bool) -> Result<String, String> {
+    substitute_in(text, map, nasm, Some(&mut Expanding { names: Vec::new() }))
+}
+
+/// Puts the value `v` of name `id` into `out`: as it is (one pass), or itself expanded.
+fn push_value(
+    out: &mut String,
+    id: &str,
+    v: &str,
+    map: &HashMap<String, String>,
+    nasm: bool,
+    rec: &mut Option<&mut Expanding>,
+) -> Result<(), String> {
+    match rec {
+        None => out.push_str(v),
+        Some(st) => {
+            let key = id.to_ascii_uppercase();
+            if st.names.contains(&key) {
+                // Inside its own text: left as it is.
+                out.push_str(id);
+            } else {
+                if st.names.len() >= MAX_SUBSTITUTION_DEPTH {
+                    return Err(format!("text substitution nested deeper than {MAX_SUBSTITUTION_DEPTH} ({id})"));
+                }
+                st.names.push(key);
+                let e = substitute_in(v, map, nasm, Some(&mut **st))?;
+                st.names.pop();
+                out.push_str(&e);
+            }
+        }
+    }
+    if out.len() > MAX_SUBSTITUTED_LEN {
+        return Err(format!("text substitution makes the line longer than {MAX_SUBSTITUTED_LEN} bytes"));
+    }
+    Ok(())
+}
+
+/// The substitution itself: one pass when `rec` is None, rescanning otherwise.
+fn substitute_in(
+    text: &str,
+    map: &HashMap<String, String>,
+    nasm: bool,
+    mut rec: Option<&mut Expanding>,
+) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -187,7 +249,7 @@ fn substitute_with(text: &str, map: &HashMap<String, String>, nasm: bool) -> Str
                 }
                 let id: String = chars[i + 1..j].iter().collect();
                 if let Some(v) = map.get(&id.to_ascii_uppercase()) {
-                    out.push_str(v);
+                    push_value(&mut out, &id, v, map, nasm, &mut rec)?;
                     i = if j < chars.len() && chars[j] == '&' { j + 1 } else { j };
                     continue;
                 }
@@ -215,7 +277,7 @@ fn substitute_with(text: &str, map: &HashMap<String, String>, nasm: bool) -> Str
             }
             let id: String = chars[i..j].iter().collect();
             match map.get(&id.to_ascii_uppercase()) {
-                Some(v) => out.push_str(v),
+                Some(v) => push_value(&mut out, &id, v, map, nasm, &mut rec)?,
                 None => out.push_str(&id),
             }
             i = j;
@@ -236,7 +298,7 @@ fn substitute_with(text: &str, map: &HashMap<String, String>, nasm: bool) -> Str
         out.push(c);
         i += 1;
     }
-    out
+    Ok(out)
 }
 
 struct ConstEnv<'a>(&'a HashMap<String, i64>);
@@ -346,6 +408,9 @@ impl<'a> Preprocessor<'a> {
                 let first_word = rest.split_whitespace().next().unwrap_or("");
                 let after_first = rest[first_word.len()..].trim();
                 let line = match word.as_str() {
+                    "xdefine" | "ixdefine" if function_define(rest).is_none() => {
+                        Some(format!("%XDEFINE {first_word} {after_first}"))
+                    }
                     "define" | "xdefine" | "idefine" | "ixdefine" => match function_define(rest) {
                         Some(Ok((name, params, body))) => {
                             self.nasm_functions.insert(name.to_ascii_uppercase(), (params, body));
@@ -568,9 +633,46 @@ impl<'a> Preprocessor<'a> {
             let mut l = l;
             let (fw1, fw2) = first_words(&l.text);
             // Names tested by IFDEF and friends must not be replaced by their text.
-            let names_line = matches!(fw1.as_str(), "IFDEF" | "IFNDEF" | "ELSEIFDEF" | "ELSEIFNDEF" | "%UNDEF");
-            if !self.text_equs.is_empty() && fw2 != "EQU" && !names_line {
-                l.text = substitute_with(&l.text, &self.text_equs, self.nasm);
+            // (%XDEFINE expands its own value below.)
+            let names_line =
+                matches!(fw1.as_str(), "IFDEF" | "IFNDEF" | "ELSEIFDEF" | "ELSEIFNDEF" | "%UNDEF" | "%XDEFINE");
+            // The name of a text equate is not replaced; in NASM only the `%define`s translated to
+            // `name EQU <text>` are such lines (NASM replaces in its own `equ` lines too).
+            let defines_text = fw2 == "EQU" && (!self.nasm || angle_equ(&l.text));
+            if !self.text_equs.is_empty() && !defines_text && !names_line {
+                // A %define may stand for a use of a function-like one (`%define b f(2)`), whose
+                // body may use %defines again: both, until the line stays the same.
+                let mut failed = None;
+                for _ in 0..MAX_SUBSTITUTION_DEPTH {
+                    let text = match expand_text(&l.text, &self.text_equs, self.nasm) {
+                        Ok(text) => text,
+                        Err(msg) => {
+                            failed = Some(msg);
+                            break;
+                        }
+                    };
+                    if !self.nasm || self.nasm_functions.is_empty() {
+                        l.text = text;
+                        break;
+                    }
+                    // Again only when a function-like %define brought new text: rescanning what
+                    // is already expanded would expand a name inside its own text.
+                    match expand_functions(&text, &self.nasm_functions) {
+                        Ok(f) if f == text => {
+                            l.text = text;
+                            break;
+                        }
+                        Ok(f) => l.text = f,
+                        Err(msg) => {
+                            failed = Some(msg);
+                            break;
+                        }
+                    }
+                }
+                if let Some(msg) = failed {
+                    self.error(&l, msg);
+                    continue;
+                }
             }
             let code = strip_comment(&l.text).trim().to_string();
             let (w1, w2) = first_words(&code);
@@ -678,6 +780,19 @@ impl<'a> Preprocessor<'a> {
                     let name = w2.clone();
                     self.text_equs.remove(&name);
                     self.defined.remove(&name);
+                    continue;
+                }
+                // `%xdefine name value`: the value is expanded now, with the definitions in force.
+                "%XDEFINE" if self.nasm => {
+                    let name = code.split_whitespace().nth(1).unwrap_or("").to_ascii_uppercase();
+                    let value = code.split_whitespace().skip(2).collect::<Vec<_>>().join(" ");
+                    match expand_text(&value, &self.text_equs, true) {
+                        Ok(v) => {
+                            self.text_equs.insert(name.clone(), v);
+                            self.defined.insert(name);
+                        }
+                        Err(msg) => self.error(&l, msg),
+                    }
                     continue;
                 }
                 "%ERROR" if self.nasm => {
@@ -877,6 +992,13 @@ impl<'a> Preprocessor<'a> {
 }
 
 /// A line that defines or undefines a NASM macro (function-like ones are not expanded in it).
+/// `name EQU <text>`: a text equate with its text in angle brackets.
+fn angle_equ(line: &str) -> bool {
+    let mut words = strip_comment(line).trim().splitn(3, char::is_whitespace);
+    let (_, equ, rest) = (words.next(), words.next(), words.next().unwrap_or("").trim_start());
+    equ.is_some_and(|w| w.eq_ignore_ascii_case("equ")) && rest.starts_with('<')
+}
+
 fn defines_something(line: &str) -> bool {
     let code = strip_comment(line).trim_start().to_ascii_lowercase();
     ["%define", "%xdefine", "%idefine", "%ixdefine", "%undef", "%macro", "%imacro"]

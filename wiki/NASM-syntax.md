@@ -71,9 +71,11 @@ takes the addresses after it but is not written to the file.
 - Operands `byte` / `word` / `dword` without `ptr`, `[es:di]`, `short` / `near` / `far`, `seg:off`.
 - Operators as in NASM, with its precedence: `?:`, logical `|| ^^ &&`, comparisons (true is 1), then `| ^ &`,
   shifts, `+ -`, `* / %`.
-- Preprocessor: `%define` (including with parameters: `%define SQ(x) ((x)*(x))`), `%undef`, `%assign`,
-  `%macro … %endmacro` with `%1…%9` and `%%label`, `%rep`, `%if / %elif / %else / %endif`, `%ifdef`, `%ifndef`,
-  `%include`, `%error`.
+- Preprocessor: `%define` (including with parameters: `%define SQ(x) ((x)*(x))`), `%xdefine`, `%undef`,
+  `%assign`, `%macro … %endmacro` with `%1…%9` and `%%label`, `%rep`, `%if / %elif / %else / %endif`, `%ifdef`,
+  `%ifndef`, `%include`, `%error`. A `%define` may use others (`%define B (A+A)`): as in NASM, its text is expanded
+  where it is used, with the definitions in force there, while `%xdefine` expands it at once; a name is not
+  expanded inside its own text.
 - Structures: `struc … endstruc` (fields `.x resw 1` → offset `name.x`, size `name_size`) and
   `istruc … at … iend`.
 
