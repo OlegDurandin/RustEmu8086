@@ -1205,6 +1205,8 @@ fn input_services_match_mars() {
         "1\n0.1\n0.1d\nwith  spaces\n+0\n",
         "1\n0x1.8p1f\n-0X1.8P1D\nhex input\n0\n",
         "1\n0x1.00000100000000000001p0\n0x1p-1074F\nrounding\n0\n",
+        "1\n0x1p-149\n-0x1p-1074\nsubnormal\n0\n",
+        "1\n461394.125\n0.1\nhalfway\n0\n",
         "1\n0x1p+\n",
         "1\n1\n0x1.8\n",
         "abc\n",
