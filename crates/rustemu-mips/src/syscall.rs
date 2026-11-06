@@ -70,8 +70,16 @@ impl From<AccessError> for Fail {
 
 /// `Float.toString` / `Double.toString` of Java (19 and later): the shortest digits that give the
 /// value back, as `1.0`, `0.001` or `1.0E7`, `1.2E-5` (scientific outside `1e-3..1e7`).
-fn java_number(digits_exp: String, negative: bool, plain: bool) -> String {
-    // `digits_exp` is Rust's shortest scientific form: `1.2345e-5`.
+fn java_number(value: impl std::fmt::LowerExp, negative: bool, plain: bool) -> String {
+    let shortest = format!("{value:e}");
+    // Use Rust's shortest representation to find the necessary precision, then round at
+    // that precision with ties to even, as Java does (Rust's shortest uses ties away).
+    // When one digit suffices, Java also considers two-digit decimals: appending .0 would
+    // print 5.0E-324 instead of the closer 4.9E-324. Plain notation needs no padding.
+    let mantissa = shortest.split_once('e').unwrap().0;
+    let precision = mantissa.bytes().filter(u8::is_ascii_digit).count() - 1;
+    let precision = if plain { precision } else { precision.max(1) };
+    let digits_exp = format!("{value:.precision$e}");
     let (mantissa, exp) = digits_exp.split_once('e').unwrap_or((&digits_exp, "0"));
     let exp: i32 = exp.parse().unwrap_or(0);
     let digits: String = mantissa.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -105,7 +113,7 @@ pub fn java_float(x: f32) -> String {
         return if x.is_sign_negative() { "-0.0" } else { "0.0" }.into();
     }
     let a = x.abs();
-    java_number(format!("{a:e}"), x < 0.0, (1e-3..1e7).contains(&a))
+    java_number(a, x < 0.0, (1e-3..1e7).contains(&a))
 }
 
 /// Java's `Double.toString`.
@@ -120,7 +128,7 @@ pub fn java_double(x: f64) -> String {
         return if x.is_sign_negative() { "-0.0" } else { "0.0" }.into();
     }
     let a = x.abs();
-    java_number(format!("{a:e}"), x < 0.0, (1e-3..1e7).contains(&a))
+    java_number(a, x < 0.0, (1e-3..1e7).contains(&a))
 }
 
 /// `Integer.parseInt(text.trim())`: optional sign, decimal digits, in range.
@@ -473,6 +481,22 @@ mod tests {
             ["NaN", "Infinity", "-0.0", "1.23456789E8"]
         );
         assert_eq!([java_float(0.1), java_float(1.0 / 3.0), java_float(3e10)], ["0.1", "0.33333334", "3.0E10"]);
+    }
+
+    #[test]
+    fn floating_output_matches_java() {
+        // Java-generated expectations exercise both signs, tiny subnormals, the transition
+        // to normal numbers, extremes and random bit patterns without requiring a local JDK.
+        for line in include_str!("../tests/data/java_float_output.tsv").lines().filter(|l| !l.starts_with('#')) {
+            let fields: Vec<_> = line.split('\t').collect();
+            let bits = u64::from_str_radix(fields[1], 16).unwrap();
+            let actual = if fields[0] == "32" {
+                java_float(f32::from_bits(bits as u32))
+            } else {
+                java_double(f64::from_bits(bits))
+            };
+            assert_eq!(actual, fields[2], "{}-bit value {}", fields[0], fields[1]);
+        }
     }
 
     #[test]
