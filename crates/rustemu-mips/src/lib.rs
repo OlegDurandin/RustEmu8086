@@ -18,6 +18,7 @@ pub mod dialog;
 pub mod disasm;
 pub mod files;
 pub mod fpu;
+mod java_float;
 pub mod machine;
 pub mod memory;
 pub mod mmio;

@@ -123,25 +123,6 @@ pub fn java_double(x: f64) -> String {
     java_number(format!("{a:e}"), x < 0.0, (1e-3..1e7).contains(&a))
 }
 
-/// The text of a number as Java's `Float.parseFloat` / `Double.parseDouble` takes it (after
-/// `trim`): `NaN`, `Infinity` with a sign, or a decimal number with an optional exponent and an
-/// optional `f`/`d` suffix. None otherwise (hexadecimal floats are not taken).
-pub(crate) fn java_number_text(text: &[u8]) -> Option<String> {
-    let t = std::str::from_utf8(text).ok()?.trim_matches(|c: char| c <= ' ');
-    let unsigned = t.strip_prefix(['+', '-']).unwrap_or(t);
-    if unsigned == "NaN" {
-        return Some("NaN".into());
-    }
-    if unsigned == "Infinity" {
-        return Some(if t.starts_with('-') { "-inf" } else { "inf" }.into());
-    }
-    let t = t.strip_suffix(['f', 'F', 'd', 'D']).unwrap_or(t);
-    let ok = !t.is_empty()
-        && t.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
-        && t.chars().any(|c| c.is_ascii_digit());
-    ok.then(|| t.to_string())
-}
-
 /// `Integer.parseInt(text.trim())`: optional sign, decimal digits, in range.
 fn parse_java_int(text: &[u8]) -> Option<i32> {
     let t = std::str::from_utf8(text).ok()?.trim_matches(|c: char| c <= ' ');
@@ -283,8 +264,7 @@ impl Machine {
                 let Some(line) = self.read_input(6, None, "Enter a float value (syscall 6)") else {
                     return Ok(Done::Block);
                 };
-                let v: f32 = java_number_text(&line)
-                    .and_then(|t| t.parse().ok())
+                let v: f32 = crate::java_float::parse_float(&line)
                     .ok_or_else(|| Fail::syscall("invalid float input (syscall 6)".into()))?;
                 self.cpu.fpr[0] = v.to_bits();
                 Ok(Done::Continue)
@@ -293,8 +273,7 @@ impl Machine {
                 let Some(line) = self.read_input(7, None, "Enter a double value (syscall 7)") else {
                     return Ok(Done::Block);
                 };
-                let v: f64 = java_number_text(&line)
-                    .and_then(|t| t.parse().ok())
+                let v: f64 = crate::java_float::parse_double(&line)
                     .ok_or_else(|| Fail::syscall("invalid double input (syscall 7)".into()))?;
                 let b = v.to_bits();
                 (self.cpu.fpr[0], self.cpu.fpr[1]) = (b as u32, (b >> 32) as u32);
@@ -494,10 +473,6 @@ mod tests {
             ["NaN", "Infinity", "-0.0", "1.23456789E8"]
         );
         assert_eq!([java_float(0.1), java_float(1.0 / 3.0), java_float(3e10)], ["0.1", "0.33333334", "3.0E10"]);
-        let p = |t: &str| java_number_text(t.as_bytes());
-        assert_eq!(p(" 2.5f \n"), Some("2.5".into()));
-        assert_eq!(p("-Infinity"), Some("-inf".into()));
-        assert_eq!([p("inf"), p("nan"), p("abc"), p("")], [None, None, None, None]);
     }
 
     #[test]

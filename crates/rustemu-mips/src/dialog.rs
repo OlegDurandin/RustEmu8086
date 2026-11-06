@@ -190,15 +190,13 @@ impl Machine {
             DialogKind::InputFloat => {
                 self.cpu.fpr[0] = 0;
                 let s = match typed {
-                    Some(t) if !t.is_empty() => {
-                        match crate::syscall::java_number_text(t.as_bytes()).and_then(|n| n.parse::<f32>().ok()) {
-                            Some(v) => {
-                                self.cpu.fpr[0] = crate::fpu::f32_bits(v);
-                                OK
-                            }
-                            None => NOT_A_NUMBER,
+                    Some(t) if !t.is_empty() => match crate::java_float::parse_float(t.as_bytes()) {
+                        Some(v) => {
+                            self.cpu.fpr[0] = crate::fpu::f32_bits(v);
+                            OK
                         }
-                    }
+                        None => NOT_A_NUMBER,
+                    },
                     t => status(t),
                 };
                 self.cpu.set_reg(A1, s as u32);
@@ -206,16 +204,14 @@ impl Machine {
             DialogKind::InputDouble => {
                 (self.cpu.fpr[0], self.cpu.fpr[1]) = (0, 0);
                 let s = match typed {
-                    Some(t) if !t.is_empty() => {
-                        match crate::syscall::java_number_text(t.as_bytes()).and_then(|n| n.parse::<f64>().ok()) {
-                            Some(v) => {
-                                let b = crate::fpu::f64_bits(v);
-                                (self.cpu.fpr[0], self.cpu.fpr[1]) = (b as u32, (b >> 32) as u32);
-                                OK
-                            }
-                            None => NOT_A_NUMBER,
+                    Some(t) if !t.is_empty() => match crate::java_float::parse_double(t.as_bytes()) {
+                        Some(v) => {
+                            let b = crate::fpu::f64_bits(v);
+                            (self.cpu.fpr[0], self.cpu.fpr[1]) = (b as u32, (b >> 32) as u32);
+                            OK
                         }
-                    }
+                        None => NOT_A_NUMBER,
+                    },
                     t => status(t),
                 };
                 self.cpu.set_reg(A1, s as u32);

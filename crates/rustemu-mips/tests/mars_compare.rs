@@ -1182,8 +1182,8 @@ buf: .space 16
 ";
 
 /// MARS's input services read from the console (`nc`: a line each) as from its Run I/O pane
-/// when each line fits: integers, floats and doubles as Java parses them (spaces, signs, `f`,
-/// `NaN`, out of range), strings shorter than the buffer, and the errors of bad numbers. (A
+/// when each line fits: integers, floats and doubles as Java parses them (spaces, signs, suffixes,
+/// hexadecimal literals, `NaN`, out of range), strings shorter than the buffer, and the errors of bad numbers. (A
 /// character, and a string longer than its buffer, are read differently by MARS's two modes;
 /// RustEmu8086 reads as the Run I/O pane does.)
 #[test]
@@ -1203,6 +1203,10 @@ fn input_services_match_mars() {
         " 42 \n+3.5f\nNaN\n\n0\n",
         "-2147483648\n-Infinity\n2.5e-310\nfourteen chars\n2147483647\n",
         "1\n0.1\n0.1d\nwith  spaces\n+0\n",
+        "1\n0x1.8p1f\n-0X1.8P1D\nhex input\n0\n",
+        "1\n0x1.00000100000000000001p0\n0x1p-1074F\nrounding\n0\n",
+        "1\n0x1p+\n",
+        "1\n1\n0x1.8\n",
         "abc\n",
         "2147483648\n",
         "1\nx\n",
