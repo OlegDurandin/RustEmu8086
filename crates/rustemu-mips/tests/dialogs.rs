@@ -82,6 +82,25 @@ fn float_and_double_input() {
 }
 
 #[test]
+fn hexadecimal_float_dialogs() {
+    let m = answered(52, "", ok(" -0X1.8P1f "));
+    assert_eq!((m.cpu.fpr[0], m.cpu.regs[A1]), ((-3.0_f32).to_bits(), 0));
+    // Just above a float midpoint: parsing via double would incorrectly round to 1.0.
+    let m = answered(52, "", ok("0x1.00000100000000000001p0"));
+    assert_eq!((m.cpu.fpr[0], m.cpu.regs[A1]), (0x3f80_0001, 0));
+    let m = answered(53, "", ok("0x1p-1074F"));
+    assert_eq!((m.cpu.f64(0).to_bits(), m.cpu.regs[A1]), (1, 0));
+    for service in [52, 53] {
+        let m = answered(service, "", ok("0x1.8"));
+        assert_eq!((m.cpu.fpr[0], m.cpu.regs[A1] as i32), (0, -1));
+        let m = answered(service, "", ok(""));
+        assert_eq!(m.cpu.regs[A1] as i32, -3);
+        let m = answered(service, "", DialogAnswer::Cancel);
+        assert_eq!(m.cpu.regs[A1] as i32, -2);
+    }
+}
+
+#[test]
 fn string_input_fills_the_buffer_as_mars() {
     let buffer = |size: u32, answer| {
         let m = answered(54, &format!("la $a1, buf\nli $a2, {size}"), answer);

@@ -15,6 +15,33 @@ const A2: u32 = 6;
 const S0: u32 = 16;
 const SYSCALL: u32 = 0x0000_000C;
 
+#[test]
+fn hexadecimal_float_input_services() {
+    for (service, text, bits) in [
+        (6, "0x1.8p1", 3.0_f32.to_bits() as u64),
+        (6, "0x1.00000100000000000001p0", 0x3f80_0001),
+        (7, "0x1p-1074f", 1),
+        (7, "-0x0p0", (-0.0_f64).to_bits()),
+    ] {
+        let mut m = machine(&[li(V0 as u32, service), SYSCALL, li(V0 as u32, 10), SYSCALL], &[]);
+        m.push_text(&format!("{text}\n"));
+        assert_eq!(m.run(100), Event::Terminated(0));
+        let actual = if service == 6 { m.cpu.fpr[0] as u64 } else { m.cpu.f64(0).to_bits() };
+        assert_eq!(actual, bits, "syscall {service}: {text}");
+    }
+    for service in [6, 7] {
+        let mut m = machine(&[li(V0 as u32, service), SYSCALL], &[]);
+        m.push_text("0x1p+\n");
+        let Event::Error(message) = m.run(100) else { panic!("invalid input must fail") };
+        assert!(
+            message.contains(&format!(
+                "invalid {} input (syscall {service})",
+                if service == 6 { "float" } else { "double" }
+            ))
+        );
+    }
+}
+
 fn i(op: u32, rs: u32, rt: u32, imm: i32) -> u32 {
     op << 26 | rs << 21 | rt << 16 | (imm as u32 & 0xFFFF)
 }
