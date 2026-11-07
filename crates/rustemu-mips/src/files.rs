@@ -14,6 +14,8 @@ use std::path::{Component, Path, PathBuf};
 pub const MAX_FILES: usize = 32;
 /// Bytes a program may write to files in one run.
 pub const WRITE_QUOTA: u64 = 16 * 1024 * 1024;
+/// Maximum bytes returned by a single read; callers may retry a short read.
+pub const READ_CHUNK: usize = 64 * 1024;
 
 /// Opening flag: read only.
 pub const O_RDONLY: u32 = 0;
@@ -162,6 +164,7 @@ impl Files {
 
     /// Reads up to `len` bytes from an open file (syscall 14 for descriptors 3..); 0 at its end.
     pub fn read(&mut self, fd: u32, len: usize) -> Result<Vec<u8>, String> {
+        let len = len.min(READ_CHUNK);
         let not_open = || format!("File descriptor {fd} is not open for reading");
         let Some(Some((_, O_RDONLY, handle))) = self.open.get_mut(fd as usize) else { return Err(not_open()) };
         match handle {
@@ -175,7 +178,7 @@ impl Files {
                 let Storage::Memory(files) = &self.storage else { return Err(not_open()) };
                 let data = files.get(name).map_or(&[][..], |d| &d[..]);
                 let start = (*pos).min(data.len());
-                let out = data[start..(start + len).min(data.len())].to_vec();
+                let out = data[start..start.saturating_add(len).min(data.len())].to_vec();
                 *pos = start + out.len();
                 Ok(out)
             }
@@ -183,19 +186,27 @@ impl Files {
         }
     }
 
-    /// Writes `data` to an open file (syscall 15 for descriptors 3..); the number of bytes.
-    pub fn write(&mut self, fd: u32, data: &[u8]) -> Result<usize, String> {
+    /// Validates a write before the caller gathers its buffer from emulated memory.
+    pub(crate) fn check_write(&self, fd: u32, len: usize) -> Result<(), String> {
         let not_open = || format!("File descriptor {fd} is not open for writing");
-        let Some(Some((_, flags, handle))) = self.open.get_mut(fd as usize) else { return Err(not_open()) };
+        let Some(Some((_, flags, _))) = self.open.get(fd as usize) else { return Err(not_open()) };
         if *flags & O_WRONLY == 0 {
             return Err(not_open());
         }
-        if self.written + data.len() as u64 > WRITE_QUOTA {
+        if (len as u64) > WRITE_QUOTA.saturating_sub(self.written) {
             return Err(format!(
                 "IO Exception on write of file with fd {fd}: the program wrote more than {} MB",
                 WRITE_QUOTA >> 20
             ));
         }
+        Ok(())
+    }
+
+    /// Writes `data` to an open file (syscall 15 for descriptors 3..); the number of bytes.
+    pub fn write(&mut self, fd: u32, data: &[u8]) -> Result<usize, String> {
+        self.check_write(fd, data.len())?;
+        let not_open = || format!("File descriptor {fd} is not open for writing");
+        let Some(Some((_, _, handle))) = self.open.get_mut(fd as usize) else { return Err(not_open()) };
         match handle {
             Handle::Host(f) => {
                 f.write_all(data).map_err(|_| format!("IO Exception on write of file with fd {fd}"))?;
@@ -225,6 +236,37 @@ impl Files {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_preflight_checks_quota_without_a_buffer() {
+        let mut f = Files::new(Storage::Memory(BTreeMap::new()));
+        let fd = f.open("data", O_WRONLY).unwrap();
+        assert!(f.check_write(fd, usize::MAX).is_err());
+        f.written = WRITE_QUOTA;
+        assert!(f.check_write(fd, 1).is_err());
+        assert_eq!(f.check_write(fd, 0), Ok(()));
+        let Storage::Memory(files) = &f.storage else { panic!() };
+        assert!(files["data"].is_empty());
+        assert!(f.check_write(99, 0).is_err());
+    }
+
+    #[test]
+    fn large_host_reads_are_bounded_and_preserve_position() {
+        let root = std::env::temp_dir().join(format!("remu_read_limit_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("empty"), []).unwrap();
+        std::fs::write(root.join("data"), vec![42; READ_CHUNK + 3]).unwrap();
+        let mut f = Files::new(Storage::Host(root.clone()));
+        let empty = f.open("empty", O_RDONLY).unwrap();
+        assert_eq!(f.read(empty, i32::MAX as usize).unwrap(), []);
+        let fd = f.open("data", O_RDONLY).unwrap();
+        assert_eq!(f.read(fd, 0).unwrap(), []);
+        assert_eq!(f.read(fd, i32::MAX as usize).unwrap(), vec![42; READ_CHUNK]);
+        assert_eq!(f.read(fd, i32::MAX as usize).unwrap(), [42; 3]);
+        assert_eq!(f.read(fd, i32::MAX as usize).unwrap(), []);
+        f.reset();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn memory_files() {

@@ -254,7 +254,7 @@ impl Machine {
             _ => format!("{} ", d.message),
         };
         let n = self.input.iter().position(|&b| b == b'\n')? + 1;
-        let line: Vec<u8> = self.input.drain(..n).collect();
+        let line = self.consume_input(n);
         self.console.write(message.as_bytes());
         self.console.write(&line);
         let line = text(&line[..line.len() - 1]);

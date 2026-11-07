@@ -302,6 +302,8 @@ on purpose or because MARS's way is tied to its own windows:
 | Input on the command line (`nc`) | a line per read | as MARS's Run I/O pane: a character without Enter, a string ends when the buffer is full |
 | Dialogs (50–59) on the command line | Swing windows | the message is printed, the answer is a line of input |
 | Program arguments | stored when the run starts | stored when the program is loaded (seen in the registers before the run) |
+| File I/O (14, 15) | no corresponding resource limits | reads return at most 64 KiB per call (short reads are possible); writes are limited to 16 MiB per call, and files also have a 16 MiB total write quota per run; exceeding a limit returns −1 in `$v0` |
+| Random streams (40–44) | no corresponding stream limit | up to 4096 streams; creating another raises a syscall exception, existing streams remain usable |
 | MIDI (31, 33) | plays | silent (33 waits for the duration) |
 | Assemble all files in directory | the folder's order (as the system lists it) | `.asm` files, then `.s` files, by name |
 | Exception handler file, all files of a folder | everywhere | the desktop app and the command line (the browser has no folders) |

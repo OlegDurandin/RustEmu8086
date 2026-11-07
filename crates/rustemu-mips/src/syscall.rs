@@ -24,7 +24,7 @@
 use rustemu_target::Event;
 
 use crate::cpu::{ExcCode, V0};
-use crate::files::MAX_FILES;
+use crate::files::{MAX_FILES, READ_CHUNK, WRITE_QUOTA};
 use crate::machine::{Finish, Machine};
 use crate::memory::{self, Access, AccessError};
 use crate::random::JavaRandom;
@@ -212,7 +212,7 @@ impl Machine {
             _ if self.input.len() >= limit => limit,
             _ => return None,
         };
-        let line: Vec<u8> = self.input.drain(..n).collect();
+        let line = self.consume_input(n);
         self.console.write(&line);
         Some(line)
     }
@@ -256,10 +256,16 @@ impl Machine {
 
     /// A random stream; a stream used before its seed is set is seeded from the clock, as
     /// `new Random()`.
-    fn stream(&mut self, id: i32) -> &mut JavaRandom {
+    fn stream(&mut self, id: i32) -> Result<&mut JavaRandom, Fail> {
+        if !self.random.contains_key(&id) && self.random.len() >= crate::machine::MAX_RANDOM_STREAMS {
+            return Err(Fail::syscall(format!(
+                "random stream limit exceeded ({})",
+                crate::machine::MAX_RANDOM_STREAMS
+            )));
+        }
         let clock = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
         let n = self.random.len() as i64;
-        self.random.entry(id).or_insert_with(|| JavaRandom::new(clock ^ n.wrapping_mul(0x2545_F491_4F6C_DD1D)))
+        Ok(self.random.entry(id).or_insert_with(|| JavaRandom::new(clock ^ n.wrapping_mul(0x2545_F491_4F6C_DD1D))))
     }
 
     fn service(&mut self, service: u32) -> Result<Done, Fail> {
@@ -360,7 +366,7 @@ impl Machine {
                     return self.file_result(Err(format!("negative length {len}")));
                 }
                 let data = if a0 == 0 {
-                    let Some(d) = self.take_input(Some(len as usize)) else { return Ok(Done::Block) };
+                    let Some(d) = self.take_input(Some((len as usize).min(READ_CHUNK))) else { return Ok(Done::Block) };
                     d
                 } else {
                     self.barrier = true;
@@ -379,6 +385,19 @@ impl Machine {
                 let len = a2 as i32;
                 if len < 0 {
                     return self.file_result(Err(format!("negative length {len}")));
+                }
+                if len as u64 > WRITE_QUOTA {
+                    return self.file_result(Err(format!("write request exceeds {} MB", WRITE_QUOTA >> 20)));
+                }
+                if a0 != 1
+                    && a0 != 2
+                    && let Err(e) = self.files.check_write(a0, len as usize)
+                {
+                    return self.file_result(Err(e));
+                }
+                // Check the entire source range before allocating or loading MMIO bytes.
+                for i in 0..len as u32 {
+                    self.mem.check_access(Access::Load, a1.wrapping_add(i))?;
                 }
                 let data =
                     (0..len as u32).map(|i| self.mem.load8(a1.wrapping_add(i))).collect::<Result<Vec<u8>, _>>()?;
@@ -418,29 +437,29 @@ impl Machine {
             35 => self.print(&format!("{a0:032b}")),
             36 => self.print(&a0.to_string()),
             40 => {
-                self.stream(a0 as i32).set_seed(a1 as i32 as i64);
+                self.stream(a0 as i32)?.set_seed(a1 as i32 as i64);
                 Ok(Done::Continue)
             }
             41 => {
-                let v = self.stream(a0 as i32).next_int();
+                let v = self.stream(a0 as i32)?.next_int();
                 self.cpu.set_reg(A0, v as u32);
                 Ok(Done::Continue)
             }
             42 => {
                 let v = self
-                    .stream(a0 as i32)
+                    .stream(a0 as i32)?
                     .next_int_below(a1 as i32)
                     .ok_or_else(|| Fail::syscall("Upper bound of range cannot be negative (syscall 42)".into()))?;
                 self.cpu.set_reg(A0, v as u32);
                 Ok(Done::Continue)
             }
             43 => {
-                let v = self.stream(a0 as i32).next_float();
+                let v = self.stream(a0 as i32)?.next_float();
                 self.cpu.fpr[0] = crate::fpu::f32_bits(v);
                 Ok(Done::Continue)
             }
             44 => {
-                let b = crate::fpu::f64_bits(self.stream(a0 as i32).next_double());
+                let b = crate::fpu::f64_bits(self.stream(a0 as i32)?.next_double());
                 (self.cpu.fpr[0], self.cpu.fpr[1]) = (b as u32, (b >> 32) as u32);
                 Ok(Done::Continue)
             }

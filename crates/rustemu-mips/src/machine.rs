@@ -8,7 +8,7 @@
 //!
 //! Step back undoes the instruction (registers, memory, and for `syscall` the console, the input,
 //! the heap and the random generators). File operations cannot be undone: the history stops there.
-//! The history keeps at most [`HISTORY_DEPTH`] steps and [`HISTORY_BYTES`] of memory journal.
+//! The history keeps at most [`HISTORY_DEPTH`] steps and [`HISTORY_BYTES`] of accounted snapshots and memory journal.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
@@ -24,8 +24,10 @@ use crate::settings::Settings;
 
 /// Instructions step back can undo.
 pub const HISTORY_DEPTH: usize = 2000;
-/// Bytes of memory journal the history keeps at most (older steps are forgotten).
+/// Bytes of snapshots and their allocated payloads kept at most (older steps are forgotten).
 pub const HISTORY_BYTES: usize = 64 << 20;
+/// Maximum independent random streams in a machine (syscalls 40..44).
+pub const MAX_RANDOM_STREAMS: usize = 4096;
 
 /// How the program ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,9 +75,9 @@ pub struct Image {
 #[derive(Debug, Clone)]
 struct SysState {
     console_len: usize,
-    input: VecDeque<u8>,
+    input: Vec<u8>,
     heap: u32,
-    random: BTreeMap<i32, JavaRandom>,
+    random: Option<(i32, Option<JavaRandom>)>,
     waiting: bool,
 }
 
@@ -100,6 +102,22 @@ struct Snapshot {
     device: Option<Box<DeviceUndo>>,
     /// Number of the memory's code ranges before the step (a self-modifying store adds one).
     code: usize,
+}
+
+impl Snapshot {
+    /// Accounts inline state and heap allocations owned by this step.
+    fn bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.undo * ENTRY
+            + self.sys.as_ref().map_or(0, |s| std::mem::size_of::<SysState>() + s.input.capacity())
+            + self.device.as_ref().map_or(0, |d| {
+                std::mem::size_of::<DeviceUndo>()
+                    + match &d.display {
+                        Some(DisplayUndo::Text(bytes)) => bytes.capacity(),
+                        _ => 0,
+                    }
+            })
+    }
 }
 
 /// Bytes of one journal entry.
@@ -138,6 +156,9 @@ pub struct Machine {
     /// Steps are recorded for step back (off: faster).
     pub history_enabled: bool,
     history: VecDeque<Snapshot>,
+    history_bytes: usize,
+    /// Consumed bytes recorded only during the current instruction.
+    input_undo: Vec<u8>,
     /// The overwritten bytes of every step in the history, oldest first: each [`Snapshot`] owns
     /// its last `undo` entries.
     journal: VecDeque<(u32, u8)>,
@@ -195,6 +216,8 @@ impl Machine {
             breakpoints: HashSet::new(),
             history_enabled: true,
             history: VecDeque::new(),
+            history_bytes: 0,
+            input_undo: Vec::new(),
             journal: VecDeque::new(),
             barrier: false,
             waiting: false,
@@ -351,11 +374,29 @@ impl Machine {
     fn sys_state(&self) -> SysState {
         SysState {
             console_len: self.console.len(),
-            input: self.input.clone(),
+            input: Vec::new(),
             heap: self.heap,
-            random: self.random.clone(),
+            random: (40..=44).contains(&self.cpu.regs[2]).then(|| {
+                let id = self.cpu.regs[4] as i32;
+                (id, self.random.get(&id).copied())
+            }),
             waiting: self.waiting,
         }
+    }
+
+    /// Consumes input, journaling only the removed bytes rather than the entire queue.
+    pub(crate) fn consume_input(&mut self, n: usize) -> Vec<u8> {
+        let bytes: Vec<u8> = self.input.drain(..n).collect();
+        if self.history_enabled && !self.barrier {
+            if self.input_undo.len().saturating_add(bytes.len()) > HISTORY_BYTES {
+                // The operation still succeeds; its oversized undo is a history barrier.
+                self.barrier = true;
+                self.input_undo.clear();
+            } else {
+                self.input_undo.extend_from_slice(&bytes);
+            }
+        }
+        bytes
     }
 
     /// Executes one instruction.
@@ -378,7 +419,8 @@ impl Machine {
             }
             return ev;
         }
-        let snap = Snapshot {
+        self.input_undo.clear();
+        let mut snap = Snapshot {
             cpu: self.cpu.clone(),
             undo: 0,
             finished: self.finished,
@@ -391,6 +433,9 @@ impl Machine {
         self.barrier = false;
         let ev = self.step_inner();
         let undo = self.mem.drain_journal_into(&mut self.journal);
+        if let Some(sys) = &mut snap.sys {
+            sys.input = std::mem::take(&mut self.input_undo);
+        }
         if self.barrier {
             self.mmio.undo = None;
             self.clear_history();
@@ -402,9 +447,12 @@ impl Machine {
             let display = self.mmio.undo.take();
             let device = (display.is_some() || self.mmio.state != device || self.lab.state != lab)
                 .then(|| Box::new(DeviceUndo { state: device, lab, display }));
-            self.history.push_back(Snapshot { undo, device, ..snap });
-            while self.history.len() > HISTORY_DEPTH || self.journal.len() * ENTRY > HISTORY_BYTES {
+            let snap = Snapshot { undo, device, ..snap };
+            self.history_bytes += snap.bytes();
+            self.history.push_back(snap);
+            while self.history.len() > HISTORY_DEPTH || self.history_bytes > HISTORY_BYTES {
                 let Some(old) = self.history.pop_front() else { break };
+                self.history_bytes -= old.bytes();
                 self.journal.drain(..old.undo);
             }
         }
@@ -493,6 +541,7 @@ impl Machine {
     /// Undoes the last instruction; false when the history is empty.
     pub fn step_back(&mut self) -> bool {
         let Some(s) = self.history.pop_back() else { return false };
+        self.history_bytes -= s.bytes();
         for _ in 0..s.undo {
             let (a, v) = self.journal.pop_back().expect("the journal holds the step's entries");
             self.mem.restore(a, v);
@@ -512,9 +561,17 @@ impl Machine {
         }
         if let Some(sys) = s.sys {
             self.console.truncate(sys.console_len);
-            self.input = sys.input;
+            for b in sys.input.into_iter().rev() {
+                self.input.push_front(b);
+            }
             self.heap = sys.heap;
-            self.random = sys.random;
+            if let Some((id, old)) = sys.random {
+                if let Some(value) = old {
+                    self.random.insert(id, value);
+                } else {
+                    self.random.remove(&id);
+                }
+            }
             self.waiting = sys.waiting;
         }
         true
@@ -525,10 +582,17 @@ impl Machine {
         self.history.len()
     }
 
+    /// Accounted bytes retained by the step-back snapshots and their memory journal.
+    pub fn history_bytes(&self) -> usize {
+        self.history_bytes
+    }
+
     /// Forgets the step-back history.
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.journal.clear();
+        self.history_bytes = 0;
+        self.input_undo = Vec::new();
     }
 
     /// The registers before each recorded step, oldest first (the execution trace).
@@ -541,5 +605,119 @@ impl Machine {
     pub fn last_step(&self) -> Option<(&Cpu, Vec<(u32, u8)>)> {
         let s = self.history.back()?;
         Some((&s.cpu, self.journal.range(self.journal.len() - s.undo..).copied().collect()))
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    fn machine() -> Machine {
+        let mut m = Machine::new();
+        m.load(&crate::asm::assemble("syscall").unwrap().image).unwrap();
+        m
+    }
+
+    fn service(m: &mut Machine, n: u32, a0: u32, a1: u32, a2: u32) -> Event {
+        m.cpu.pc = m.mem.layout.text_base;
+        m.cpu.regs[2] = n;
+        m.cpu.regs[4..7].copy_from_slice(&[a0, a1, a2]);
+        m.step()
+    }
+
+    #[test]
+    fn random_history_is_a_delta_and_replays() {
+        let mut m = machine();
+        for id in 0..MAX_RANDOM_STREAMS as u32 {
+            assert_eq!(service(&mut m, 40, id, 42, 0), Event::Continue);
+        }
+        assert_eq!(m.random.len(), MAX_RANDOM_STREAMS);
+        assert!(m.history_bytes() < 2 << 20, "history must not clone the map");
+        assert!(m.step_back());
+        assert_eq!(m.random.len(), MAX_RANDOM_STREAMS - 1);
+        assert_eq!(m.step(), Event::Continue);
+        assert_eq!(m.random.len(), MAX_RANDOM_STREAMS);
+        for n in 41..=44 {
+            assert_eq!(service(&mut m, n, 0, 100, 0), Event::Continue);
+            let cpu = m.cpu.clone();
+            let state = m.random[&0];
+            assert!(m.step_back());
+            assert_eq!(m.step(), Event::Continue);
+            assert_eq!(m.cpu, cpu);
+            assert_eq!(m.random[&0], state);
+        }
+        assert!(matches!(service(&mut m, 40, MAX_RANDOM_STREAMS as u32, 0, 0), Event::Error(_)));
+        assert_eq!(m.random.len(), MAX_RANDOM_STREAMS);
+        assert_eq!(service(&mut m, 40, 0, 7, 0), Event::Continue, "existing streams still work");
+        m.clear_history();
+        assert_eq!(m.history_bytes(), 0);
+        m.reset();
+        assert!(m.random.is_empty());
+    }
+
+    #[test]
+    fn input_history_keeps_only_consumed_bytes() {
+        let mut m = machine();
+        m.input.extend(std::iter::repeat_n(b'x', 1 << 20));
+        for _ in 0..100 {
+            assert_eq!(service(&mut m, 11, b'A' as u32, 0, 0), Event::Continue);
+        }
+        assert!(m.history_bytes() < 100_000, "printing must not copy pending input");
+        assert_eq!(service(&mut m, 12, 0, 0, 0), Event::Continue);
+        let size = m.history_bytes();
+        assert_eq!(m.pending_input().len(), (1 << 20) - 1);
+        assert!(m.step_back());
+        assert_eq!(m.pending_input().len(), 1 << 20);
+        assert!(size - m.history_bytes() < 1024);
+    }
+
+    #[test]
+    fn consumed_input_counts_toward_the_history_budget() {
+        let mut m = machine();
+        // Invalid integers consume a whole line but do not write memory: only input undo
+        // makes these snapshots large. Repeating them must evict the oldest payloads.
+        let line = format!("{}\n", "x".repeat(1 << 20));
+        for _ in 0..70 {
+            m.input.extend(line.bytes());
+            assert!(matches!(service(&mut m, 5, 0, 0, 0), Event::Error(_)));
+            assert!(m.history_bytes() <= HISTORY_BYTES);
+        }
+        assert!(m.history_len() < 70);
+        assert!(m.history_bytes() > HISTORY_BYTES / 2);
+        let count = m.history_len();
+        for _ in 0..count {
+            assert!(m.step_back());
+        }
+        assert_eq!(m.history_bytes(), 0);
+    }
+
+    #[test]
+    fn large_io_and_invalid_ranges_fail_without_large_buffers() {
+        let mut m = machine();
+        for fd in [1, 3, 99] {
+            assert_eq!(service(&mut m, 15, fd, 0, i32::MAX as u32), Event::Continue);
+            assert_eq!(m.cpu.regs[2], u32::MAX);
+        }
+        m.files = Files::new(Storage::Memory(BTreeMap::from([("data".into(), vec![9, 8])])));
+        let fd = m.files.open("data", crate::files::O_RDONLY).unwrap();
+        let dest = m.mem.layout.data_base;
+        assert_eq!(service(&mut m, 14, fd, dest, i32::MAX as u32), Event::Continue);
+        assert_eq!(m.cpu.regs[2], 2);
+        assert_eq!(m.mem.peek8(dest), 9);
+        assert_eq!(m.mem.peek8(dest + 1), 8);
+        assert_eq!(service(&mut m, 14, fd, 0, i32::MAX as u32), Event::Continue, "EOF writes no memory");
+        assert_eq!(m.cpu.regs[2], 0);
+        m.files.close(fd);
+        let fd = m.files.open("data", crate::files::O_RDONLY).unwrap();
+        assert_eq!(service(&mut m, 14, fd, 0, 0), Event::Continue);
+        assert!(matches!(service(&mut m, 14, fd, 0, 2), Event::Error(_)));
+        // A valid destination/source is still required for nonempty transfers.
+        assert!(matches!(service(&mut m, 15, 1, 0, 4), Event::Error(_)));
+        assert_eq!(service(&mut m, 15, 1, 0, 0), Event::Continue);
+        assert_eq!(m.cpu.regs[2], 0);
+        assert_eq!(m.console.len(), 0);
+        let boundary = m.mem.layout.data_limit - 1;
+        assert!(matches!(service(&mut m, 15, 1, boundary, 2), Event::Error(_)));
+        assert_eq!(m.console.len(), 0, "an invalid range must not print a prefix");
     }
 }
