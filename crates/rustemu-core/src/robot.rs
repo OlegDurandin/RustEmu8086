@@ -59,6 +59,10 @@ pub(crate) struct RobotSnapshot {
 }
 
 impl RobotSnapshot {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.cell_undo.capacity() * std::mem::size_of::<(usize, Cell)>()
+    }
+
     pub(crate) fn is_unchanged(&self, robot: &Robot) -> bool {
         self.cell_undo.is_empty()
             && self.width == robot.width

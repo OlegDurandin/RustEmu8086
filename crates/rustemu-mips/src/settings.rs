@@ -8,7 +8,7 @@
 use crate::memory::Segment;
 
 /// MARS's memory configurations (Settings → Memory Configuration, command line `mc`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MemoryConfig {
     /// The 32-bit address space: text at 0x00400000, data at 0x10000000 (MARS's default).
     #[default]
@@ -272,7 +272,7 @@ impl Layout {
 }
 
 /// MARS's settings that change assembly and execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     /// Delayed branching: the instruction after a branch or jump (its delay slot) executes before
     /// the branch is taken (MARS's `db`; off by default).

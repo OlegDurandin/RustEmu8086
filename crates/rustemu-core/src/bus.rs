@@ -50,6 +50,7 @@ pub trait Bus {
 
 /// Flat 1 MiB memory with an optional write journal (used for "step back").
 pub struct Memory {
+    revision: u64,
     data: Box<[u8]>,
     journal: Option<Vec<(u32, u8)>>,
 }
@@ -61,9 +62,14 @@ impl Default for Memory {
 }
 
 impl Memory {
+    /// Mutation epoch for cached debugger views.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// 1 MiB of zeros, without a journal.
     pub fn new() -> Self {
-        Self { data: vec![0u8; MEM_SIZE].into_boxed_slice(), journal: None }
+        Self { revision: 0, data: vec![0u8; MEM_SIZE].into_boxed_slice(), journal: None }
     }
 
     /// The byte at `addr` (wraps at 1 MiB).
@@ -75,6 +81,7 @@ impl Memory {
     /// Writes a byte at `addr` (wraps at 1 MiB), recording the old value while journaling.
     #[inline]
     pub fn write8(&mut self, addr: u32, val: u8) {
+        self.revision = self.revision.wrapping_add(1);
         let a = (addr & ADDR_MASK) as usize;
         if let Some(j) = &mut self.journal {
             j.push((a as u32, self.data[a]));
@@ -95,6 +102,7 @@ impl Memory {
 
     /// Copies `bytes` into memory starting at `addr` (bypasses the journal).
     pub fn load(&mut self, addr: u32, bytes: &[u8]) {
+        self.revision = self.revision.wrapping_add(1);
         for (i, &b) in bytes.iter().enumerate() {
             self.data[((addr as usize) + i) & ADDR_MASK as usize] = b;
         }
@@ -113,6 +121,7 @@ impl Memory {
 
     /// The whole 1 MiB, writable (bypasses the journal).
     pub fn raw_mut(&mut self) -> &mut [u8] {
+        self.revision = self.revision.wrapping_add(1);
         &mut self.data
     }
 
@@ -140,6 +149,7 @@ impl Memory {
 
     /// Restores bytes recorded in a journal (in reverse order).
     pub fn undo(&mut self, entries: &[(u32, u8)]) {
+        self.revision = self.revision.wrapping_add(1);
         for &(a, v) in entries.iter().rev() {
             self.data[a as usize] = v;
         }
@@ -147,6 +157,7 @@ impl Memory {
 
     /// Fills memory with zeros and empties the journal.
     pub fn clear(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
         self.data.fill(0);
         if let Some(j) = &mut self.journal {
             j.clear();

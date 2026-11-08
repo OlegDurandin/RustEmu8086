@@ -25,6 +25,7 @@ pub use rustemu_target::{Arch, Event, Flow, Frame, FrameKind, Target};
 
 /// A loaded program together with its debug information.
 pub struct Session {
+    step_cache: std::cell::RefCell<Option<step::CachedStep>>,
     /// The emulated computer (the 8086 [`Machine`]; see [`Session::x86`]).
     pub target: Box<dyn Target>,
     /// The assembled program with its debug information (`None` for a binary loaded as is).
@@ -98,6 +99,7 @@ impl Session {
     /// A powered-on machine with nothing loaded.
     pub fn new() -> Self {
         Session {
+            step_cache: Default::default(),
             target: Box::new(Machine::new()),
             program: None,
             loaded: None,
@@ -139,6 +141,7 @@ impl Session {
             Arch::I8086 => self.x86_load(kind, &bytes, program.as_ref())?,
             Arch::Mips32 => return Err("8086 executables cannot run on the MIPS machine".into()),
         }
+        self.step_cache.borrow_mut().take();
         self.program = program;
         self.loaded = Some((kind, bytes));
         self.index_symbols();
@@ -180,6 +183,7 @@ impl Session {
     /// Returns to a state saved with [`Session::save_state`] (breakpoints are kept).
     pub fn restore_state(&mut self, s: SessionState) {
         self.target.restore_state(&s.machine);
+        self.step_cache.borrow_mut().take();
         self.program = s.program;
         self.mips_program = s.mips_program;
         self.loaded = s.loaded;
@@ -190,6 +194,7 @@ impl Session {
     /// "Reset emulator and RAM": a powered-on machine with nothing loaded.
     pub fn unload(&mut self) {
         self.target.reset();
+        self.step_cache.borrow_mut().take();
         self.program = None;
         self.mips_program = None;
         self.loaded = None;

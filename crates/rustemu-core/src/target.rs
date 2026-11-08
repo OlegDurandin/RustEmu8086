@@ -155,6 +155,22 @@ impl Machine {
 }
 
 impl Target for Machine {
+    fn resources(&self) -> rustemu_target::resources::ResourceBudget {
+        use rustemu_target::resources::{Resource, ResourceBudget};
+        let mut b = ResourceBudget::default();
+        b.record(Resource::HistoryBytes, self.history_bytes());
+        b.record(Resource::HistorySteps, self.history_len());
+        b.record(Resource::OutputBytes, self.output.bytes().len());
+        b.record(Resource::DeviceBytes, self.sys.dev.printer.bytes().len());
+        b.record(Resource::FileWriteBytes, self.dos.host_written as usize);
+        b.record(Resource::CreatedFiles, self.dos.host_created as usize);
+        if let Some(d) = self.dos_memory_drive() {
+            b.record(Resource::DriveBytes, d.used());
+            b.record(Resource::DriveEntries, d.files().count() + d.dirs().count());
+        }
+        b
+    }
+
     fn arch(&self) -> Arch {
         Arch::I8086
     }

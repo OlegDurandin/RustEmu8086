@@ -406,6 +406,7 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
 
 fn status_bar(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
+        app.build_status_ui(ui);
         let dirty = if app.dirty() { " •" } else { "" };
         ui.label(RichText::new(format!("{}{dirty}", app.file_name())).strong());
         ui.separator();

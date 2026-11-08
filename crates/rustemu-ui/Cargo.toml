@@ -10,6 +10,8 @@ license.workspace = true
 
 # ---- all platforms --------------------------------------------------------------------------------
 [dependencies]
+rustemu-build.workspace = true
+serde_json = "1"
 rustemu-core.workspace = true
 rustemu-target.workspace = true
 rustemu-mips.workspace = true
@@ -46,7 +48,7 @@ egui = { workspace = true, features = ["monochrome_emoji_fonts"] }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Document", "Element", "File", "FilePropertyBag", "HtmlAnchorElement", "HtmlElement", "Navigator", "Url", "Window"] }
+web-sys = { version = "0.3", features = ["Worker", "MessageEvent", "ErrorEvent", "Event", "WorkerOptions", "WorkerType", "Blob", "BlobPropertyBag", "Document", "Element", "File", "FilePropertyBag", "HtmlAnchorElement", "HtmlElement", "Navigator", "Url", "Window"] }
 
 [dev-dependencies]
 # examples/make_icon.rs

@@ -89,6 +89,7 @@ impl App {
     /// Shows the workspace of `arch`: the current one is paused and kept, the other comes back as
     /// it was left (the first time: with the file it had open at the last start).
     pub fn switch_arch(&mut self, arch: Arch) {
+        self.cancel_build();
         if arch == self.arch() {
             return;
         }

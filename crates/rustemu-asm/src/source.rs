@@ -3,9 +3,9 @@
 
 use std::collections::HashMap;
 
-use crate::AsmError;
 use crate::expr::{Env, ForwardKind, Parser, SegId, SymVal, eval};
 use crate::lexer::{tokenize, tokenize_nasm};
+use crate::{AsmError, Diagnostics};
 
 /// One logical line after preprocessing.
 #[derive(Debug, Clone)]
@@ -64,6 +64,9 @@ pub struct Preprocessor<'a> {
     local_counter: u32,
     /// Errors found while preprocessing.
     pub errors: Vec<AsmError>,
+    pub(crate) cancel: Option<crate::CancelFlag>,
+    pub(crate) source_bytes: usize,
+    source_lines: usize,
     /// The lines produced.
     pub out: Vec<Line>,
     /// NASM dialect: `%` directives, `&` is an operator, backquoted strings.
@@ -73,7 +76,8 @@ pub struct Preprocessor<'a> {
     /// NASM `%define name(params) body` (by upper-case name): expanded where they are used.
     nasm_functions: HashMap<String, (Vec<String>, String)>,
     /// Lines gone through so far (source lines and every line of every expansion).
-    expanded: usize,
+    pub(crate) expanded: usize,
+    pub(crate) expanded_bytes: usize,
     /// The expansion went over [`MAX_EXPANDED_LINES`]: everything stops.
     over: bool,
 }
@@ -86,7 +90,8 @@ const MAX_INCLUDE_DEPTH: usize = 32;
 /// grow to hundreds of millions of lines (minutes and gigabytes, in the window's thread — the
 /// browser's only one); a real program stays far below (64 KB of code is at most 65 536 lines that
 /// make bytes; the largest Emu8086 example has about 300). A bomb stops in about 0.4 s in release.
-pub const MAX_EXPANDED_LINES: usize = 250_000;
+pub const MAX_EXPANDED_LINES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::SourceLines);
 
 /// Words that begin/end blocks we must track while collecting macro bodies.
 fn first_words(text: &str) -> (String, String) {
@@ -331,21 +336,76 @@ impl<'a> Preprocessor<'a> {
             defined: Default::default(),
             local_counter: 0,
             errors: Vec::new(),
+            cancel: None,
+            source_bytes: 0,
+            source_lines: 0,
             out: Vec::new(),
             nasm: false,
             open_files: Vec::new(),
             nasm_functions: HashMap::new(),
             expanded: 0,
+            expanded_bytes: 0,
             over: false,
         }
     }
 
     fn error(&mut self, l: &Line, msg: impl Into<String>) {
-        self.errors.push(AsmError { file: l.file, line: l.line, col: None, len: 0, msg: msg.into() });
+        self.errors.push_diagnostic(AsmError { file: l.file, line: l.line, col: None, len: 0, msg: msg.into() });
+    }
+
+    fn admit_source(&mut self, text: &str) -> bool {
+        use rustemu_target::resources::{Resource, ResourceBudget};
+        let lines = text.lines().count();
+        if let Some((line, _)) =
+            text.lines().enumerate().find(|(_, l)| l.len() > ResourceBudget::limit(Resource::LineBytes))
+        {
+            self.over = true;
+            self.errors.push_diagnostic(AsmError {
+                file: self.files.len(),
+                line: line as u32 + 1,
+                col: None,
+                len: 0,
+                msg: "source line is too long (longer than 65536 bytes)".into(),
+            });
+            return false;
+        }
+        let bad = ResourceBudget::check(Resource::SourceBytes, self.source_bytes, text.len()).is_err()
+            || ResourceBudget::check(Resource::SourceLines, self.source_lines, lines).is_err()
+            || self.files.len() >= ResourceBudget::limit(Resource::SourceFiles);
+        if bad {
+            self.over = true;
+            self.errors.push_diagnostic(AsmError {
+                file: 0,
+                line: 0,
+                col: None,
+                len: 0,
+                msg: "source resource budget exceeded".into(),
+            });
+            return false;
+        }
+        self.source_bytes += text.len();
+        self.source_lines += lines;
+        true
     }
 
     /// Preprocesses the file `name` with `text` and appends its lines to [`Preprocessor::out`].
     pub fn add_file(&mut self, name: &str, text: &str) {
+        if name.len()
+            > rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::SourcePathBytes)
+        {
+            self.over = true;
+            self.errors.push_diagnostic(AsmError {
+                file: 0,
+                line: 0,
+                col: None,
+                len: 0,
+                msg: "source path budget exceeded".into(),
+            });
+            return;
+        }
+        if !self.admit_source(text) {
+            return;
+        }
         let idx = self.files.len();
         self.files.push(name.to_string());
         self.sources.push(text.to_string());
@@ -382,7 +442,9 @@ impl<'a> Preprocessor<'a> {
         let mut in_istruc: Option<(String, String)> = None;
         for (i, raw) in text.lines().enumerate() {
             let n = i as u32 + 1;
-            let err = |s: &mut Self, msg: String| s.errors.push(AsmError { file, line: n, col: None, len: 0, msg });
+            let err = |s: &mut Self, msg: String| {
+                s.errors.push_diagnostic(AsmError { file, line: n, col: None, len: 0, msg })
+            };
             // Function-like %define is expanded everywhere but in the lines that define one.
             let expanded;
             let raw = if self.nasm_functions.is_empty() || defines_something(raw) {
@@ -575,7 +637,7 @@ impl<'a> Preprocessor<'a> {
             out.push((n, line));
         }
         if let Some((name, _)) = in_struc {
-            self.errors.push(AsmError {
+            self.errors.push_diagnostic(AsmError {
                 file,
                 line: 0,
                 col: None,
@@ -584,7 +646,13 @@ impl<'a> Preprocessor<'a> {
             });
         }
         if let Some((name, _)) = in_istruc {
-            self.errors.push(AsmError { file, line: 0, col: None, len: 0, msg: format!("istruc {name} has no iend") });
+            self.errors.push_diagnostic(AsmError {
+                file,
+                line: 0,
+                col: None,
+                len: 0,
+                msg: format!("istruc {name} has no iend"),
+            });
         }
         out
     }
@@ -613,6 +681,32 @@ impl<'a> Preprocessor<'a> {
         let mut cond: Vec<(bool, bool, bool)> = Vec::new();
         let mut i = 0;
         while i < lines.len() {
+            if self.over {
+                break;
+            }
+            if self.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                self.over = true;
+                self.error(&lines[i], "Assembly cancelled");
+                break;
+            }
+            if self.errors.len()
+                >= rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::Diagnostics)
+            {
+                self.over = true;
+                break;
+            }
+            if rustemu_target::resources::ResourceBudget::check(
+                rustemu_target::resources::Resource::ExpandedBytes,
+                self.expanded_bytes,
+                lines[i].text.len(),
+            )
+            .is_err()
+            {
+                self.over = true;
+                self.error(&lines[i], "expanded source byte budget exceeded");
+                return;
+            }
+            self.expanded_bytes += lines[i].text.len();
             let l = lines[i].clone();
             i += 1;
             self.expanded += 1;
@@ -630,6 +724,7 @@ impl<'a> Preprocessor<'a> {
                 }
                 return;
             }
+            let original_len = l.text.len();
             let mut l = l;
             let (fw1, fw2) = first_words(&l.text);
             // Names tested by IFDEF and friends must not be replaced by their text.
@@ -674,6 +769,19 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
             }
+            let growth = l.text.len().saturating_sub(original_len);
+            if rustemu_target::resources::ResourceBudget::check(
+                rustemu_target::resources::Resource::ExpandedBytes,
+                self.expanded_bytes,
+                growth,
+            )
+            .is_err()
+            {
+                self.over = true;
+                self.error(&l, "expanded source byte budget exceeded");
+                return;
+            }
+            self.expanded_bytes += growth;
             let code = strip_comment(&l.text).trim().to_string();
             let (w1, w2) = first_words(&code);
             let active = cond.last().is_none_or(|c| c.0);
@@ -830,6 +938,18 @@ impl<'a> Preprocessor<'a> {
                             self.error(&l, "INCLUDE nesting too deep");
                         }
                         Some((resolved, text)) => {
+                            if resolved.len()
+                                > rustemu_target::resources::ResourceBudget::limit(
+                                    rustemu_target::resources::Resource::SourcePathBytes,
+                                )
+                            {
+                                self.over = true;
+                                self.error(&l, "source path budget exceeded");
+                                return;
+                            }
+                            if !self.admit_source(&text) {
+                                break;
+                            }
                             let idx = self.files.len();
                             self.files.push(resolved.clone());
                             self.sources.push(text.clone());

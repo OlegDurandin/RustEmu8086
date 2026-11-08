@@ -92,13 +92,15 @@ fn arch_of(path: &Path, text: Option<&str>, args: &[String]) -> Result<Arch, Str
 }
 
 /// The text of a source file (None for a binary).
-fn source_text(path: &Path) -> Result<Option<String>, String> {
+fn source_text(path: &Path, args: &[String]) -> Result<Option<String>, String> {
     let binary = ["com", "exe", "bin", "boot"].iter().any(|e| is_ext(path, e));
     if binary {
         return Ok(None);
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+    if opt(args, "--arch").map_or(is_ext(path, "s"), |a| matches!(a.to_ascii_lowercase().as_str(), "mips" | "mips32")) {
+        return rustemu_mips::asm::read_source_file(path).map(Some).map_err(|e| e.to_string());
+    }
+    rustemu_asm::read_source_file(path).map(Some).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// MARS's settings from the options (see [`USAGE`]).
@@ -126,14 +128,18 @@ fn mips_settings(args: &[String]) -> Result<rustemu_mips::Settings, String> {
 fn assemble_mips(path: &Path, text: &str, args: &[String]) -> Result<rustemu_mips::asm::Program, String> {
     let name = path.display().to_string();
     let settings = mips_settings(args)?;
-    let mut read = |p: &str| std::fs::read(p).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
-    let file = |p: &Path| {
-        std::fs::read(p)
-            .map(|b| rustemu_mips::asm::SourceFile {
-                name: p.display().to_string(),
-                text: String::from_utf8_lossy(&b).into_owned(),
-            })
-            .map_err(|e| format!("{}: {e}", p.display()))
+    let mut used = text.len();
+    if used > rustemu_mips::asm::MAX_SOURCE_BYTES {
+        return Err("MIPS source byte budget exceeded".into());
+    }
+    let mut read = |p: &str| rustemu_mips::asm::read_source_file(p).ok();
+    let mut file = |p: &Path| {
+        let text = rustemu_mips::asm::read_source_file(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        used = used.saturating_add(text.len());
+        if used > rustemu_mips::asm::MAX_SOURCE_BYTES {
+            return Err("MIPS source byte budget exceeded".to_string());
+        }
+        Ok(rustemu_mips::asm::SourceFile { name: p.display().to_string(), text })
     };
     let handler = opt(args, "--exception-handler").map(|h| file(Path::new(h))).transpose()?;
     // MARS's project mode: the other .asm and .s files of the folder (the .asm ones first).
@@ -146,7 +152,11 @@ fn assemble_mips(path: &Path, text: &str, args: &[String]) -> Result<rustemu_mip
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.is_file() && p.canonicalize().ok() != me)
             .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm") || e.eq_ignore_ascii_case("s")))
+            .take(rustemu_mips::asm::MAX_SOURCE_FILES)
             .collect();
+        if paths.len() + 1 + usize::from(handler.is_some()) > rustemu_mips::asm::MAX_SOURCE_FILES {
+            return Err("MIPS source file budget exceeded".into());
+        }
         paths.sort_by_key(|p| (!p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm")), p.clone()));
         for p in paths {
             others.push(file(&p)?);
@@ -187,7 +197,7 @@ fn cmd_asm_mips(path: &Path, text: &str, args: &[String]) -> Result<u8, String> 
 
 fn cmd_asm(args: &[String]) -> Result<u8, String> {
     let path = file_arg(args)?;
-    if let Some(text) = source_text(&path)?
+    if let Some(text) = source_text(&path, args)?
         && arch_of(&path, Some(&text), args)? == Arch::Mips32
     {
         return cmd_asm_mips(&path, &text, args);
@@ -198,8 +208,7 @@ fn cmd_asm(args: &[String]) -> Result<u8, String> {
         Some("masm" | "emu8086") => Some(rustemu_asm::Dialect::Masm),
         Some(s) => return Err(format!("unknown syntax '{s}' (nasm or masm)")),
     };
-    let text =
-        String::from_utf8_lossy(&std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).into_owned();
+    let text = rustemu_asm::read_source_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
     let prog = rustemu_asm::assemble_dialect(&path.to_string_lossy(), &text, &mut loader, dialect)
         .map_err(|e| e.to_string())?;
@@ -228,7 +237,7 @@ fn cmd_asm(args: &[String]) -> Result<u8, String> {
 
 fn cmd_run(args: &[String]) -> Result<u8, String> {
     let path = file_arg(args)?;
-    let text = source_text(&path)?;
+    let text = source_text(&path, args)?;
     let mips = arch_of(&path, text.as_deref(), args)? == Arch::Mips32;
     let mut s = if mips { Session::new_mips() } else { Session::new() };
     if mips {
@@ -498,6 +507,20 @@ fn is_ext(p: &Path, e: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mips_file_loader_stops_before_reading_an_oversized_source() {
+        let path = std::env::temp_dir().join(format!("remu_cli_source_limit_{}.asm", std::process::id()));
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len((rustemu_mips::asm::MAX_SOURCE_BYTES * 2) as u64).unwrap();
+        drop(f);
+        let args = vec!["--arch".into(), "mips".into()];
+        let text = source_text(&path, &args).unwrap().unwrap();
+        assert_eq!(text.len(), rustemu_mips::asm::MAX_SOURCE_BYTES + 1);
+        let e = assemble_mips(&path, &text, &args).unwrap_err();
+        assert!(e.contains("source byte budget"));
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn sleeping_only_consumes_steps_actually_executed() {

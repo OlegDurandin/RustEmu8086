@@ -49,9 +49,13 @@ impl App {
         self.build.messages.clear();
         self.clear_errors();
         let dialect = self.settings.syntax.dialect();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            rustemu_asm::assemble_dialect(&name, &self.doc.text, &mut loader, dialect)
-        }));
+        let result = if let Some(rustemu_build::Outcome::X86(result)) = self.build.completed.take() {
+            Ok(result)
+        } else {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rustemu_asm::assemble_dialect(&name, &self.doc.text, &mut loader, dialect)
+            }))
+        };
         let result = match result {
             Ok(r) => r,
             Err(payload) => return self.assembler_panicked(&*payload),
@@ -74,7 +78,7 @@ impl App {
             }
             Err(e) => {
                 self.build.failed = true;
-                for err in &e.errors {
+                for err in e.errors.iter().take(rustemu_mips::asm::MAX_DIAGNOSTICS) {
                     let file = e.files.get(err.file).cloned().unwrap_or_default();
                     let short =
                         Path::new(&file).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or(file.clone());
@@ -115,7 +119,17 @@ impl App {
     /// are the names the errors' `file` indices refer to (0: the editor's program).
     fn mips_messages(&mut self, list: &[rustemu_mips::asm::AsmError], files: &[String], error: bool) {
         let main = self.file_name();
-        for e in list {
+        let limit = rustemu_mips::asm::MAX_DIAGNOSTICS;
+        let shown = limit - usize::from(list.len() > limit);
+        if list.len() > limit {
+            self.build.messages.push(Message {
+                text: format!("Further messages omitted (showing the first {shown})"),
+                loc: None,
+                span: None,
+                error,
+            });
+        }
+        for e in list.iter().take(shown) {
             // A line of an included file: shown, but not a place in the editor.
             let file = match e.file {
                 0 => main.clone(),
@@ -160,13 +174,14 @@ impl App {
         let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
         let base = Path::new(path).file_name().map_or(path.to_string(), |n| n.to_string_lossy().into_owned());
         if !self.front.browser {
-            if let Ok(b) = std::fs::read(path) {
-                return Some(text(&b));
+            if let Ok(source) = rustemu_mips::asm::read_source_file(path) {
+                return Some(source);
             }
             if let Some(dir) = self.vdrive(self.doc.path.as_deref())
-                && let Ok(b) = std::fs::read(dir.join(path)).or_else(|_| std::fs::read(dir.join(&base)))
+                && let Ok(source) = rustemu_mips::asm::read_source_file(dir.join(path))
+                    .or_else(|_| rustemu_mips::asm::read_source_file(dir.join(&base)))
             {
-                return Some(text(&b));
+                return Some(source);
             }
         }
         if let Some(d) = self.x86_session().and_then(|s| s.dos_memory_drive())
@@ -192,10 +207,17 @@ impl App {
         if self.front.browser {
             return Ok((None, Vec::new()));
         }
-        let read = |p: &Path| {
-            std::fs::read(p)
-                .map(|b| SourceFile { name: p.display().to_string(), text: String::from_utf8_lossy(&b).into_owned() })
-                .map_err(|e| format!("{}: {e}", p.display()))
+        let mut used = self.doc.text.len();
+        if used > rustemu_mips::asm::MAX_SOURCE_BYTES {
+            return Err("MIPS source byte budget exceeded".into());
+        }
+        let mut read = |p: &Path| {
+            let text = rustemu_mips::asm::read_source_file(p).map_err(|e| format!("{}: {e}", p.display()))?;
+            used = used.saturating_add(text.len());
+            if used > rustemu_mips::asm::MAX_SOURCE_BYTES {
+                return Err("MIPS source byte budget exceeded".to_string());
+            }
+            Ok(SourceFile { name: p.display().to_string(), text })
         };
         let handler = match s.exception_handler_enabled && !s.exception_handler.trim().is_empty() {
             true => {
@@ -213,7 +235,11 @@ impl App {
                 .filter_map(|e| e.ok().map(|e| e.path()))
                 .filter(|p| p != path && p.is_file())
                 .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm") || e.eq_ignore_ascii_case("s")))
+                .take(rustemu_mips::asm::MAX_SOURCE_FILES)
                 .collect();
+            if paths.len() + 1 + usize::from(handler.is_some()) > rustemu_mips::asm::MAX_SOURCE_FILES {
+                return Err("MIPS source file budget exceeded".into());
+            }
             // MARS's order: the .asm files, then the .s ones.
             paths.sort_by_key(|p| (!p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm")), p.clone()));
             for p in paths {
@@ -228,20 +254,24 @@ impl App {
         self.build.messages.clear();
         self.clear_errors();
         let name = self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
-        let (handler, others) = match self.mips_project_files() {
-            Ok(f) => f,
-            Err(e) => {
-                self.build.failed = true;
-                self.build.messages.push(Message { text: e.clone(), loc: None, span: None, error: true });
-                self.status = e;
-                return None;
-            }
+        let result = if let Some(rustemu_build::Outcome::Mips(result)) = self.build.completed.take() {
+            Ok(result)
+        } else {
+            let (handler, others) = match self.mips_project_files() {
+                Ok(f) => f,
+                Err(e) => {
+                    self.build.failed = true;
+                    self.build.messages.push(Message { text: e.clone(), loc: None, span: None, error: true });
+                    self.status = e;
+                    return None;
+                }
+            };
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let settings = self.settings.mars.mips();
+                let program = rustemu_mips::asm::SourceFile { name: name.clone(), text: self.doc.text.clone() };
+                rustemu_mips::asm::assemble_files(program, handler, others, &mut |p| self.mips_include(p), &settings)
+            }))
         };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let settings = self.settings.mars.mips();
-            let program = rustemu_mips::asm::SourceFile { name: name.clone(), text: self.doc.text.clone() };
-            rustemu_mips::asm::assemble_files(program, handler, others, &mut |p| self.mips_include(p), &settings)
-        }));
         let result = match result {
             Ok(r) => r,
             Err(payload) => return self.assembler_panicked(&*payload),
@@ -288,6 +318,11 @@ impl App {
         let same_image = self.session.mips_program.as_ref().is_some_and(|old| old.image == p.image);
         // The browser: the files of drive C: (DOS's memory drive), copied back as the program
         // writes them (`sync_mips_files`).
+        let memory_dirs: Vec<String> = self
+            .x86_session()
+            .and_then(|s| s.dos_memory_drive())
+            .map(|d| d.dirs().map(str::to_string).collect())
+            .unwrap_or_default();
         let storage = match self.vdrive(self.doc.path.as_deref()) {
             Some(root) => rustemu_mips::files::Storage::Host(root),
             None => rustemu_mips::files::Storage::Memory(
@@ -299,6 +334,7 @@ impl App {
         };
         if let Some(m) = self.session.mips_mut() {
             m.files.storage = storage;
+            m.files.set_memory_directories(memory_dirs);
             self.web.mips_files_synced = m.files.generation;
         }
         let name = self.file_name();
@@ -335,6 +371,9 @@ impl App {
 
     /// Compile and write the output file next to the source.
     pub fn compile(&mut self) {
+        if self.submit_build(super::background::BuildAction::Compile) {
+            return;
+        }
         if self.arch() == Arch::Mips32 {
             // MARS has no executable format either: the program is assembled and checked.
             if self.assemble_mips().is_some() {
@@ -400,6 +439,9 @@ impl App {
 
     /// Assemble and load into the emulator.
     pub fn emulate(&mut self) {
+        if self.submit_build(super::background::BuildAction::Emulate) {
+            return;
+        }
         if self.arch() == Arch::Mips32 {
             return self.emulate_mips();
         }
@@ -411,6 +453,8 @@ impl App {
             .map(|(i, f)| {
                 let text = if i == 0 {
                     self.doc.text.clone()
+                } else if let Some(text) = self.build.sources.get(f) {
+                    text.clone()
                 } else if f == "emu8086.inc" {
                     rustemu_asm::EMU8086_INC.to_string()
                 } else {
@@ -557,7 +601,7 @@ impl App {
     /// The directory DOS file functions see as drive C: when `program` runs: a folder of its own,
     /// as Emu8086's `vdrive\C` ([`App::drive_dir`]), or the program's folder with
     /// [`Settings::drive_c_source_folder`]. None for the memory drive (the browser).
-    fn vdrive(&self, program: Option<&Path>) -> Option<PathBuf> {
+    pub(super) fn vdrive(&self, program: Option<&Path>) -> Option<PathBuf> {
         if self.session.x86().is_some_and(|m| m.dos_memory_drive().is_some()) || self.front.browser {
             return None;
         }
@@ -591,5 +635,30 @@ impl App {
     /// The loaded program was assembled from a different version of the editor text.
     pub fn is_stale(&self) -> bool {
         self.loaded() && self.program.text.as_ref().is_some_and(|t| *t != self.doc.text)
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn mips_diagnostic_display_is_bounded_independently() {
+        let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+        let list = vec![
+            rustemu_mips::asm::AsmError {
+                file: 0,
+                line: 1,
+                col: 0,
+                message: "bad instruction".into(),
+                expansion: vec![],
+            };
+            1000
+        ];
+        let before = app.build.messages.len();
+        app.mips_messages(&list, &["main.s".into()], true);
+        assert_eq!(app.build.messages.len() - before, rustemu_mips::asm::MAX_DIAGNOSTICS);
+        assert_eq!(app.build.error_lines.len(), rustemu_mips::asm::MAX_DIAGNOSTICS - 1);
+        assert!(app.build.messages.iter().any(|m| m.text.contains("Further messages omitted")));
     }
 }

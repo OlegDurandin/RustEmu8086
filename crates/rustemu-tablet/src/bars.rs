@@ -347,6 +347,7 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
 
 pub(crate) fn status_bar(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     ui.horizontal(|ui| {
+        app.build_status_ui(ui);
         ui.set_min_height(30.0);
         let m = &*app.session.target;
         let (state, color) = if !app.loaded() {

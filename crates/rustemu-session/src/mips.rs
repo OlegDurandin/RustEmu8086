@@ -60,7 +60,7 @@ impl Session {
         text: &str,
         settings: &rustemu_mips::Settings,
     ) -> Result<(), String> {
-        let mut read = |p: &str| std::fs::read(p).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
+        let mut read = |p: &str| rustemu_mips::asm::read_source_file(p).ok();
         let prog = rustemu_mips::asm::assemble_settings(name, text, &mut read, settings).map_err(|e| e.to_string())?;
         self.load_mips(prog, name)
     }
@@ -113,6 +113,9 @@ fn debug_info(prog: &rustemu_mips::asm::Program, name: &str) -> rustemu_asm::Pro
         })
         .collect();
     rustemu_asm::Program {
+        source_bytes: prog.source_bytes,
+        expanded_bytes: prog.expanded_bytes,
+        processed_lines: prog.processed_lines,
         format: Format::Bin,
         image: Vec::new(),
         origin: 0,

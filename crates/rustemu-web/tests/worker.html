@@ -1,0 +1,42 @@
+<!doctype html><meta charset="utf-8"><title>Assembly worker smoke test</title>
+<h1>Assembly worker smoke test</h1><pre id="result">Running…</pre>
+<script type="module">
+// Copy this file beside the built worker's loader and serve over HTTP.
+const output = document.querySelector('#result');
+const mars = { delayed_branching:false, self_modifying:false, start_at_main:false,
+  pseudo_instructions:true, warnings_are_errors:false, memory:'Default', popup_input:false };
+const request = (mips, version, text) => ({ version, mips, name:'main.asm', text,
+  dialect:null, mars, files:{}, roots:[], host:false, exception_handler:null, project:false });
+const check = (condition, message) => { if (!condition) throw Error(message); };
+async function build(r) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker('./rustemu-assembler-worker_loader.js', {type:'module'});
+    const timeout = setTimeout(() => { worker.terminate(); reject(Error('Worker timeout')); }, 15000);
+    worker.onerror = e => { clearTimeout(timeout); worker.terminate(); reject(Error(e.message)); };
+    worker.onmessage = e => {
+      if (e.data === 'ready') { worker.postMessage(JSON.stringify(r)); return; }
+      clearTimeout(timeout); worker.terminate();
+      try { resolve(JSON.parse(e.data)); } catch (e) { reject(e); }
+    };
+  });
+}
+try {
+  const x86 = await build(request(false, 7, 'org 100h\nmov ax, 4c00h\nint 21h\n'));
+  check(x86.version === 7 && x86.outcome.X86.Ok.image.length > 0, '8086 response');
+  const mips = await build(request(true, 8, '.text\nmain: li $v0, 10\nsyscall\n'));
+  check(mips.version === 8 && mips.outcome.Mips.Ok.image.chunks.length > 0, 'MIPS response');
+  const bad = await build(request(true, 9, 'invalid instruction\n'.repeat(10000)));
+  check(bad.outcome.Mips.Err.errors.length <= 100, 'Diagnostic budget');
+  const worker = new Worker('./rustemu-assembler-worker_loader.js', {type:'module'});
+  await new Promise((resolve, reject) => {
+    worker.onerror = e => reject(Error(e.message));
+    worker.onmessage = e => {
+      if (e.data !== 'ready') { reject(Error('Cancelled worker produced a result')); return; }
+      worker.postMessage(JSON.stringify(request(false, 10, 'org 100h\nrept 65000\nnop\nendm\n')));
+      worker.terminate();
+      setTimeout(resolve, 100);
+    };
+  });
+  output.textContent = 'PASS: 8086, MIPS, revisions, diagnostic quota, worker termination. UI event loop remained available.';
+} catch (e) { output.textContent = 'FAIL: ' + e.stack; }
+</script>

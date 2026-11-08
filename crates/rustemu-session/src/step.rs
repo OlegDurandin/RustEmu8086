@@ -99,6 +99,8 @@ pub struct StepView {
     pub flags: Vec<FlagChange>,
     /// Bytes it wrote: (physical address, before, after), each address once.
     pub writes: Vec<(u32, u8, u8)>,
+    /// Total changed bytes, including those omitted from the preview.
+    pub write_count: usize,
     /// What the ALU did, when this instruction used it.
     pub alu: Option<AluTrace>,
 }
@@ -135,14 +137,8 @@ impl StepView {
             .filter(|(bit, ..)| (before.flags ^ after.flags) & bit != 0)
             .map(|&(bit, name, _)| FlagChange { name, before: before.flags & bit != 0, after: after.flags & bit != 0 })
             .collect();
-        let mut writes: Vec<(u32, u8, u8)> = Vec::new();
-        for &(addr, old) in undo {
-            if !writes.iter().any(|w| w.0 == addr) {
-                writes.push((addr, old, mem.read8(addr)));
-            }
-        }
-        writes.retain(|w| w.1 != w.2);
-        writes.sort_unstable_by_key(|w| w.0);
+        let changes = rustemu_target::resources::memory_changes(undo.iter().copied(), |a| mem.read8(a));
+        let writes = changes.shown;
         let alu = (after.alu_trace.op != AluOp::None && after.alu_trace.instr == before.instr_count)
             .then_some(after.alu_trace);
         StepView {
@@ -154,6 +150,7 @@ impl StepView {
             regs,
             flags,
             writes,
+            write_count: changes.total,
             alu,
         }
     }
@@ -299,6 +296,14 @@ pub fn explain(t: &AluTrace) -> Vec<String> {
     out
 }
 
+pub(crate) struct CachedStep {
+    cpu: Cpu,
+    previous: Cpu,
+    epoch: u64,
+    into_macros: bool,
+    view: StepView,
+}
+
 impl Session {
     /// The last executed instruction and its changes; `None` when nothing has been executed since
     /// the load (or the history was cleared).
@@ -308,6 +313,14 @@ impl Session {
     pub fn last_step(&self, into_macros: bool) -> Option<StepView> {
         let m = self.x86()?;
         let (before, undo) = m.last_step()?;
+        if let Some(c) = self.step_cache.borrow().as_ref()
+            && c.cpu == m.cpu
+            && c.previous == *before
+            && c.epoch == m.sys.mem.revision()
+            && c.into_macros == into_macros
+        {
+            return Some(c.view.clone());
+        }
         let mut v = StepView::new(before, &m.cpu, undo, &m.sys.mem);
         if v.cs == ROM_SEG {
             let (ss, sp) = (before.sregs[cpu::SS], before.regs[cpu::SP]);
@@ -319,6 +332,13 @@ impl Session {
             (v.cs, v.ip, v.text) = (cs, ip, ins.text);
         }
         v.source = self.view_at(linear(v.cs, v.ip), into_macros);
+        *self.step_cache.borrow_mut() = Some(CachedStep {
+            cpu: m.cpu.clone(),
+            previous: before.clone(),
+            epoch: m.sys.mem.revision(),
+            into_macros,
+            view: v.clone(),
+        });
         Some(v)
     }
 }

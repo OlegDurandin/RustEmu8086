@@ -39,12 +39,14 @@ pub struct DateTime {
 /// INT 21h/40h would otherwise fill the computer's disk at about 1 GB a second; the memory drive of
 /// the browser has its own limit ([`crate::memdrive::CAPACITY`]). Past it a write writes fewer
 /// bytes, as DOS does on a full disk.
-pub const HOST_WRITE_QUOTA: u64 = 16 * 1024 * 1024;
+pub const HOST_WRITE_QUOTA: u64 =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::FileWriteBytes) as u64;
 /// Largest size a host file may reach: a seek far past the end and then a write would make a file
 /// of gigabytes with a few bytes written.
 pub const HOST_MAX_FILE: u64 = HOST_WRITE_QUOTA;
 /// Files and folders a program may create in a host folder in one run.
-pub const HOST_MAX_CREATED: u32 = 1024;
+pub const HOST_MAX_CREATED: u32 =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::CreatedFiles) as u32;
 
 /// Drive C: of DOS programs.
 pub(crate) enum DosDrive {
@@ -107,6 +109,16 @@ pub(crate) struct DosSnapshot {
     last_exit: u8,
     next_free: u16,
     find: FindState,
+}
+
+impl DosSnapshot {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.cwd.capacity()
+            + self.line.as_ref().map_or(0, Vec::capacity)
+            + self.find.as_ref().map_or(0, |(f, _)| {
+                f.capacity() * std::mem::size_of::<(String, u64)>() + f.iter().map(|(n, _)| n.capacity()).sum::<usize>()
+            })
+    }
 }
 
 impl PartialEq for DosSnapshot {

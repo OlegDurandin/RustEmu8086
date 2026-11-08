@@ -2589,6 +2589,22 @@ name = "rustemu-asm"
 version = "0.2.0"
 dependencies = [
  "rustc_apfloat",
+ "rustemu-target",
+ "serde",
+]
+
+[[package]]
+name = "rustemu-build"
+version = "0.2.0"
+dependencies = [
+ "js-sys",
+ "rustemu-asm",
+ "rustemu-mips",
+ "rustemu-target",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -2633,6 +2649,7 @@ name = "rustemu-mips"
 version = "0.2.0"
 dependencies = [
  "rustemu-target",
+ "serde",
  "web-time",
 ]
 
@@ -2679,11 +2696,13 @@ dependencies = [
  "rfd",
  "ron",
  "rustemu-asm",
+ "rustemu-build",
  "rustemu-core",
  "rustemu-mips",
  "rustemu-session",
  "rustemu-target",
  "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

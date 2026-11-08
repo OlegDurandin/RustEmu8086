@@ -215,6 +215,28 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                     ui.end_row();
                 }
             });
+            ui.separator();
+            app.build_status_ui(ui);
+            ui.collapsing("Resource usage", |ui| {
+                let report = app.resource_usage();
+                egui::Grid::new("resource_usage").striped(true).show(ui, |ui| {
+                    for title in ["Owner / resource", "Used / limit", "Unit", "On exhaustion"] {
+                        ui.strong(title);
+                    }
+                    ui.end_row();
+                    for r in report.usage {
+                        ui.label(format!("{} / {:?}", r.owner, r.resource));
+                        ui.label(format!("{} / {}", r.used, r.limit));
+                        ui.label(r.unit);
+                        ui.label(format!("{:?}", r.exhaustion));
+                        ui.end_row();
+                    }
+                });
+                ui.label(format!(
+                    "Execution slice: {:.2} ms; maximum {:.2} ms",
+                    app.exec.tick_ms, app.exec.max_tick_ms
+                ));
+            });
         });
     app.dialogs.options = open;
 }

@@ -85,6 +85,17 @@ impl Machine {
 }
 
 impl Target for Machine {
+    fn resources(&self) -> rustemu_target::resources::ResourceBudget {
+        use rustemu_target::resources::Resource;
+        let mut b = self.files.resources();
+        b.record(Resource::HistoryBytes, self.history_bytes());
+        b.record(Resource::HistorySteps, self.history_len());
+        b.record(Resource::OutputBytes, self.console.bytes().len());
+        b.record(Resource::DeviceBytes, self.mmio.display.len());
+        b.record(Resource::RandomStreams, self.random.len());
+        b
+    }
+
     fn arch(&self) -> Arch {
         Arch::Mips32
     }

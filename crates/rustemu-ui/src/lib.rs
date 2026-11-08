@@ -9,6 +9,7 @@
 #![warn(missing_docs)]
 
 pub mod app;
+mod build_task;
 pub mod calc;
 pub mod colors;
 pub mod console;

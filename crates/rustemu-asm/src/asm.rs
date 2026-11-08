@@ -1,5 +1,6 @@
 //! Multi-pass assembler driver.
 
+use crate::Diagnostics;
 use std::collections::{HashMap, HashSet};
 
 use crate::encode::{Ctx, encode};
@@ -10,6 +11,8 @@ use crate::{
     AsmError, Dialect, EmuDirectives, Format, LineInfo, ListingLine, Program, SegmentInfo, Symbol, SymbolKind,
 };
 
+const MAX_DIAGNOSTICS: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::Diagnostics);
 const MAX_PASSES: usize = 40;
 /// From this pass on instructions may only grow (shrinking is padded with NOPs) to force convergence.
 const GROW_ONLY_PASS: usize = 12;
@@ -40,6 +43,7 @@ struct StmtInfo {
 }
 
 struct Assembler {
+    cancel: Option<crate::CancelFlag>,
     /// Source text of each file (to locate errors in their lines).
     sources: Vec<String>,
     lines: Vec<Line>,
@@ -122,9 +126,20 @@ pub fn assemble(
     loader: &mut dyn FileLoader,
     dialect: Dialect,
 ) -> Result<Program, (Vec<AsmError>, Vec<String>)> {
+    assemble_controlled(name, source, loader, dialect, None)
+}
+
+pub(crate) fn assemble_controlled(
+    name: &str,
+    source: &str,
+    loader: &mut dyn FileLoader,
+    dialect: Dialect,
+    cancel: Option<crate::CancelFlag>,
+) -> Result<Program, (Vec<AsmError>, Vec<String>)> {
     let nasm = dialect == Dialect::Nasm;
     let mut pp = Preprocessor::new(loader);
     pp.nasm = nasm;
+    pp.cancel = cancel.clone();
     pp.add_file(name, source);
     let files = pp.files.clone();
     let mut errors = std::mem::take(&mut pp.errors);
@@ -132,6 +147,13 @@ pub fn assemble(
 
     let mut stmts = Vec::new();
     for (i, l) in lines.iter().enumerate() {
+        if cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            errors.push_diagnostic(AsmError { file: 0, line: 0, col: None, len: 0, msg: "Assembly cancelled".into() });
+            return Err((errors, files));
+        }
+        if errors.len() >= MAX_DIAGNOSTICS {
+            break;
+        }
         let parsed = if nasm { parse_line_nasm(&l.text) } else { parse_line(&l.text) };
         match parsed {
             Ok(stmt) => stmts.push(StmtInfo { stmt, line: i }),
@@ -144,7 +166,7 @@ pub fn assemble(
                 } else {
                     source.and_then(|s| crate::errpos::locate(&msg, s, !l.chain.is_empty()))
                 };
-                errors.push(AsmError {
+                errors.push_diagnostic(AsmError {
                     file: l.file,
                     line: l.line,
                     col: span.map(|s| s.0),
@@ -157,6 +179,7 @@ pub fn assemble(
 
     let sources = std::mem::take(&mut pp.sources);
     let mut a = Assembler {
+        cancel: cancel.clone(),
         sources,
         lines,
         stmts,
@@ -198,6 +221,10 @@ pub fn assemble(
     a.prescan();
     a.sizes = vec![0; a.stmts.len()];
     for pass in 1..=MAX_PASSES {
+        if cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            errors.push_diagnostic(AsmError { file: 0, line: 0, col: None, len: 0, msg: "Assembly cancelled".into() });
+            return Err((errors, files));
+        }
         a.pass = pass;
         a.run_pass();
         let changed = a.syms != a.prev
@@ -214,14 +241,20 @@ pub fn assemble(
         }
         if pass == MAX_PASSES {
             a.syms = a.prev.clone();
-            a.errors.push(AsmError { file: 0, line: 0, col: None, len: 0, msg: "assembly did not converge".into() });
+            a.errors.push_diagnostic(AsmError {
+                file: 0,
+                line: 0,
+                col: None,
+                len: 0,
+                msg: "assembly did not converge".into(),
+            });
         }
     }
     for (idx, name) in std::mem::take(&mut a.unknown_equs) {
         a.err(idx, format!("'{name}' is defined through itself (circular EQU)"));
     }
     if a.fasm {
-        errors.push(AsmError {
+        errors.push_diagnostic(AsmError {
             file: 0,
             line: 0,
             col: None,
@@ -231,15 +264,23 @@ pub fn assemble(
     }
     crate::encode::set_strict_size(false);
     errors.append(&mut a.errors);
+    errors.truncate(MAX_DIAGNOSTICS);
     if !errors.is_empty() {
         locate_errors(&mut errors, &a.sources);
         return Err((errors, files));
     }
     let sources = std::mem::take(&mut a.sources);
-    a.build(files).map_err(|mut e| {
-        locate_errors(&mut e, &sources);
-        (e, Vec::new())
-    })
+    a.build(files)
+        .map(|mut p| {
+            p.source_bytes = pp.source_bytes;
+            p.expanded_bytes = pp.expanded_bytes;
+            p.processed_lines = pp.expanded;
+            p
+        })
+        .map_err(|mut e| {
+            locate_errors(&mut e, &sources);
+            (e, Vec::new())
+        })
 }
 
 /// Line `line` (1-based) of file `file`.
@@ -264,13 +305,16 @@ impl Assembler {
     }
 
     fn err(&mut self, idx: usize, msg: impl Into<String>) {
+        if self.errors.len() >= MAX_DIAGNOSTICS {
+            return;
+        }
         let l = self.line_of(idx);
         let msg = msg.into();
         // In a macro expansion the error is shown at the macro call.
         let span = source_line(&self.sources, l.file, l.line)
             .and_then(|s| crate::errpos::locate(&msg, s, !l.chain.is_empty()));
         let e = AsmError { file: l.file, line: l.line, col: span.map(|s| s.0), len: span.map_or(0, |s| s.1), msg };
-        self.errors.push(e);
+        self.errors.push_diagnostic(e);
     }
 
     fn seg_id(&mut self, name: &str, stack: bool) -> SegId {
@@ -519,6 +563,13 @@ impl Assembler {
             }
         }
         for idx in 0..self.stmts.len() {
+            if self.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                self.err(idx, "Assembly cancelled");
+                break;
+            }
+            if self.errors.len() >= MAX_DIAGNOSTICS {
+                break;
+            }
             self.statement(idx);
         }
         if !self.seg_stack.is_empty() && !self.flat {
@@ -946,7 +997,7 @@ impl Assembler {
             _ => 0,
         };
         if self.format == Format::Com && flat_min.is_some_and(|m| m < 0x100) {
-            errors.push(AsmError {
+            errors.push_diagnostic(AsmError {
                 file: 0,
                 line: 0,
                 col: None,
@@ -979,8 +1030,15 @@ impl Assembler {
         // Flat formats keep their segment fixups too: the emulator adds the load segment
         // (segment references in a .com/.bin file on disk assume a load segment of 0).
         if self.format == Format::Boot && image.len() > 512 {
-            errors.push(AsmError { file: 0, line: 0, col: None, len: 0, msg: "boot sector exceeds 512 bytes".into() });
+            errors.push_diagnostic(AsmError {
+                file: 0,
+                line: 0,
+                col: None,
+                len: 0,
+                msg: "boot sector exceeds 512 bytes".into(),
+            });
         }
+        errors.truncate(MAX_DIAGNOSTICS);
         if !errors.is_empty() {
             return Err(errors);
         }
@@ -1084,6 +1142,9 @@ impl Assembler {
         };
         self.emu.start.dedup();
         Ok(Program {
+            source_bytes: 0,
+            expanded_bytes: 0,
+            processed_lines: 0,
             format: self.format,
             image,
             origin: origin as u16,

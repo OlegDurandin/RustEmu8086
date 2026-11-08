@@ -16,6 +16,7 @@ use crate::examples::EXAMPLES;
 use crate::tools::Windows;
 
 mod arch;
+mod background;
 mod build;
 mod emulator_cmds;
 mod exec;
@@ -382,6 +383,14 @@ impl Default for EditorState {
 /// Result of the last build or load.
 #[derive(Default)]
 pub struct Build {
+    pub(crate) pending: Option<background::PendingBuild>,
+    pub(crate) completed: Option<rustemu_build::Outcome>,
+    pub(crate) sources: std::collections::BTreeMap<String, String>,
+    /// Current source revision, advanced on edits and build submission.
+    pub document_version: u64,
+    pub(crate) loaded_version: Option<u64>,
+    /// Resource usage of the most recently completed assembly.
+    pub resource_usage: rustemu_target::resources::ResourceBudget,
     /// Messages of the last build, load and run.
     pub messages: Vec<Message>,
     /// Error lines of the current file (1-based).
@@ -411,6 +420,10 @@ pub struct Program {
 
 /// The run loop and the machine before the last step.
 pub struct Exec {
+    /// Duration of the most recent execution slice on the UI thread.
+    pub tick_ms: f64,
+    /// Largest measured execution slice since application start.
+    pub max_tick_ms: f64,
     /// Time of the last instruction while running with a step delay.
     pub last_step: f64,
     /// Instructions per frame while running freely (adapted to keep the frame rate).
@@ -437,6 +450,8 @@ impl Exec {
 impl Default for Exec {
     fn default() -> Self {
         Exec {
+            tick_ms: 0.0,
+            max_tick_ms: 0.0,
             last_step: 0.0,
             instr_per_frame: 50_000,
             prev: rustemu_target::State::new(rustemu_core::Checkpoint { cpu: Cpu::new(), fpu: Default::default() }),
@@ -572,6 +587,8 @@ pub struct Web {
 
 /// What the front end sets: its kind and its look.
 pub struct FrontEnd {
+    /// Builds run on tasks/workers (enabled by App::new; headless constructors stay synchronous).
+    pub background_builds: bool,
     /// Files live in browser storage (the web version): Save keeps the program in "my programs",
     /// Open shows them, DOS programs get a drive C: in memory.
     pub browser: bool,
@@ -591,6 +608,7 @@ pub struct FrontEnd {
 impl Default for FrontEnd {
     fn default() -> Self {
         FrontEnd {
+            background_builds: false,
             browser: crate::platform::is_web(),
             tablet_layout: false,
             fixed_theme: None,
@@ -703,6 +721,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, eframe::APP_KEY)).unwrap_or_default();
         let mut app = Self::with_settings(settings);
+        app.front.background_builds = true;
         if let Some(storage) = cc.storage {
             app.restore_drive(storage);
             app.restore_browser(storage);

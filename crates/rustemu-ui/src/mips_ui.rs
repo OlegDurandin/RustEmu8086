@@ -12,9 +12,12 @@ use rustemu_mips::target::{Checkpoint, FCC, FPR};
 
 use crate::app::{App, RunMode};
 
+type StepCache = std::cell::RefCell<Option<(Cpu, Cpu, u64, u64, MipsStep)>>;
+
 /// What the MIPS tools keep between frames.
 #[derive(Default)]
 pub struct MipsState {
+    step_cache: StepCache,
     /// The input line of the console.
     pub input: String,
     /// The input line takes the keyboard at the next frame (the program waits for input).
@@ -878,6 +881,7 @@ pub fn code_ui(app: &mut App, ui: &mut Ui) {
 }
 
 /// What the last instruction did, from the step-back history.
+#[derive(Clone)]
 pub struct MipsStep {
     /// Its address.
     pub addr: u32,
@@ -887,11 +891,22 @@ pub struct MipsStep {
     pub regs: Vec<(String, u32, u32)>,
     /// Changed bytes of memory: address, before, after.
     pub memory: Vec<(u32, u8, u8)>,
+    /// Total changed bytes, including omitted preview bytes.
+    pub memory_count: usize,
 }
 
 /// The last executed instruction and what it changed (None: nothing in the history).
 pub fn last_step(app: &App) -> Option<MipsStep> {
     let m = app.session.mips()?;
+    // Inspect the cheap CPU/epoch key before obtaining the journal copy.
+    if let Some((cpu, before, epoch, generation, view)) = app.mips.step_cache.borrow().as_ref()
+        && *cpu == m.cpu
+        && *epoch == m.mem.revision()
+        && *generation == app.program.generation
+        && m.history_cpus().next_back().is_some_and(|c| c == before)
+    {
+        return Some(view.clone());
+    }
     let (before, undo) = m.last_step()?;
     let addr = before.pc;
     let text = disassemble(m.mem.peek32(addr), addr, Style::Named);
@@ -904,15 +919,11 @@ pub fn last_step(app: &App) -> Option<MipsStep> {
             regs.push((name.to_string(), a, b));
         }
     }
-    let mut memory: Vec<(u32, u8, u8)> = Vec::new();
-    for &(a, old) in &undo {
-        if !memory.iter().any(|&(x, _, _)| x == a) {
-            memory.push((a, old, m.mem.peek8(a)));
-        }
-    }
-    memory.retain(|&(_, old, new)| old != new);
-    memory.sort_by_key(|&(a, _, _)| a);
-    Some(MipsStep { addr, text, regs, memory })
+    let changes = rustemu_target::resources::memory_changes(undo.iter().copied(), |a| m.mem.peek8(a));
+    let result = MipsStep { addr, text, regs, memory: changes.shown, memory_count: changes.total };
+    *app.mips.step_cache.borrow_mut() =
+        Some((m.cpu.clone(), before.clone(), m.mem.revision(), app.program.generation, result.clone()));
+    Some(result)
 }
 
 /// Text of the listing: per instruction its address, machine word, MARS's basic form and the
@@ -1013,5 +1024,38 @@ mod tests {
         assert_eq!(parse_value("4294967295"), Some(u32::MAX));
         assert_eq!(parse_value("4294967296"), None);
         assert_eq!(parse_value("x"), None);
+    }
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::*;
+    use crate::app::Settings;
+
+    #[test]
+    fn mips_preview_cache_and_history_off_are_independent_of_x86_view() {
+        for history in [false, true] {
+            let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+            app.switch_arch(rustemu_target::Arch::Mips32);
+            app.doc.text = ".text\nlui $t0, 0x1001\naddiu $t1, $zero, -1\nsw $t1, 0($t0)\n".into();
+            app.emulate();
+            assert!(!app.build.failed);
+            app.session.target.set_history(history);
+            for _ in 0..3 {
+                app.session.target.step();
+            }
+            if history {
+                let first = last_step(&app).unwrap();
+                assert_eq!(first.memory_count, 4);
+                assert_eq!(last_step(&app).unwrap().memory, first.memory);
+                app.session.target.step_back();
+                assert_eq!(last_step(&app).unwrap().memory_count, 0);
+            } else {
+                assert!(last_step(&app).is_none());
+            }
+            for usage in app.resource_usage().usage {
+                assert!(usage.used <= usage.limit, "{usage:?}");
+            }
+        }
     }
 }

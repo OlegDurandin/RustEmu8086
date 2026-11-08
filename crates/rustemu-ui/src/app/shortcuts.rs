@@ -22,6 +22,9 @@ impl App {
         let cmd = Modifiers::COMMAND;
         let sc = |m: Modifiers, k: Key| KeyboardShortcut::new(m, k);
         let fire = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
+        if self.is_building() && fire(sc(Modifiers::NONE, Key::Escape)) {
+            self.cancel_build();
+        }
         if fire(sc(cmd, Key::N)) {
             self.guarded(PendingAction::New);
         }
@@ -34,7 +37,7 @@ impl App {
             self.save();
         }
         if fire(sc(Modifiers::NONE, Key::F5)) || fire(sc(cmd, Key::R)) {
-            if self.run == RunMode::Paused { self.start_run() } else { self.stop() }
+            if self.is_building() || self.run != RunMode::Paused { self.stop() } else { self.start_run() }
         }
         if fire(sc(Modifiers::NONE, Key::F9)) || fire(sc(cmd, Key::E)) {
             self.emulate();

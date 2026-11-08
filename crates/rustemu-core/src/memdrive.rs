@@ -15,10 +15,12 @@ pub struct MemDrive {
 
 /// Room on the drive for all its files: it is kept in browser storage (a few MB per site, as
 /// base64, next to the saved programs).
-pub const CAPACITY: usize = 2 * 1024 * 1024;
+pub const CAPACITY: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::DriveBytes);
 
 /// Most files and folders a DOS program can make (a full drive gives "access denied", as DOS).
-const MAX_ENTRIES: usize = 1024;
+pub const MAX_ENTRIES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::DriveEntries);
 
 /// Header of [`MemDrive::to_bytes`].
 const MAGIC: &[u8; 8] = b"RE86DRV1";
@@ -104,6 +106,8 @@ impl MemDrive {
             ));
         }
         let mut dir = String::new();
+        let mut parents = BTreeSet::new();
+        let new_file = usize::from(!self.files.contains_key(&key));
         for part in key.split('/').take(key.split('/').count() - 1) {
             if !dir.is_empty() {
                 dir.push('/');
@@ -112,8 +116,17 @@ impl MemDrive {
             if self.files.contains_key(&dir) {
                 return Err(format!("{dir} is a file"));
             }
-            self.dirs.insert(dir.clone());
+            if !self.dirs.contains(&dir) {
+                parents.insert(dir.clone());
+            }
+            if self.files.len() + self.dirs.len() + parents.len() + new_file > MAX_ENTRIES {
+                return Err(format!("Drive C: holds at most {MAX_ENTRIES} files and folders"));
+            }
         }
+        if self.files.len() + self.dirs.len() + parents.len() + new_file > MAX_ENTRIES {
+            return Err(format!("Drive C: holds at most {MAX_ENTRIES} files and folders"));
+        }
+        self.dirs.extend(parents);
         self.files.insert(key.clone(), data);
         Ok(key)
     }
@@ -325,6 +338,23 @@ impl MemDrive {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_write_checks_entry_budget_before_creating_parents() {
+        let mut d = MemDrive::new();
+        for i in 0..MAX_ENTRIES - 1 {
+            d.write(&format!("f{i}"), vec![]).unwrap();
+        }
+        let before = d.clone();
+        assert!(d.write("newdir/file", vec![]).is_err());
+        assert_eq!(d, before, "failed creation must not leave a directory behind");
+        d.write("last", vec![]).unwrap();
+        let before = d.clone();
+        assert!(d.write("overflow", vec![]).is_err());
+        assert_eq!(d, before);
+        d.write("f0", b"replacement".to_vec()).unwrap();
+        assert_eq!(d.read("f0"), Some(&b"replacement"[..]));
+    }
 
     #[test]
     fn user_paths_and_folders() {

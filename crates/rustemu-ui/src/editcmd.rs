@@ -27,6 +27,7 @@ pub fn map_lines(app: &mut App, f: impl Fn(&str) -> String) {
     for l in &mut lines[first..=last] {
         *l = f(l);
     }
+    app.source_changed();
     app.doc.text = lines.join("\n");
     let start = line_start_char(&app.doc.text, first as u32 + 1);
     let end = line_start_char(&app.doc.text, last as u32 + 2).saturating_sub(1);

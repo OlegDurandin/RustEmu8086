@@ -41,6 +41,7 @@ impl App {
         self.doc.example_key = None;
         self.clear_session();
         self.editor.bookmarks.clear();
+        self.source_changed();
         self.doc.text = template.to_string();
         self.doc.saved_text = self.doc.text.clone();
         self.build.messages.clear();
@@ -77,6 +78,7 @@ impl App {
                     return;
                 }
                 self.store_session();
+                self.source_changed();
                 self.doc.text = text;
                 self.doc.saved_text = self.doc.text.clone();
                 self.doc.path = Some(p.to_path_buf());
@@ -246,6 +248,7 @@ impl App {
         let prefix = if self.arch() == Arch::Mips32 { MIPS_EXAMPLE_KEY } else { EXAMPLE_KEY };
         self.doc.example_key = Some(format!("{prefix}{name}"));
         // Emu8086's files have DOS line ends.
+        self.source_changed();
         self.doc.text = src.replace("\r\n", "\n");
         self.doc.saved_text = self.doc.text.clone();
         self.build.messages.clear();

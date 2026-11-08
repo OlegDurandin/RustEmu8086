@@ -69,7 +69,8 @@ pub const DEFAULT_DELAY: u32 = 5;
 /// Terminal size (columns, rows) until the interface sets one.
 pub const DEFAULT_TERMINAL: (u32, u32) = (80, 25);
 /// Bytes the display keeps (older text is dropped).
-pub const DISPLAY_LIMIT: usize = 1 << 20;
+pub const DISPLAY_LIMIT: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::DeviceBytes);
 
 /// ASCII form feed: clears the display.
 const CLEAR_SCREEN: u8 = 12;

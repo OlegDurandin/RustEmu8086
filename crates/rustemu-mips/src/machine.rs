@@ -23,11 +23,14 @@ use crate::random::JavaRandom;
 use crate::settings::Settings;
 
 /// Instructions step back can undo.
-pub const HISTORY_DEPTH: usize = 2000;
+pub const HISTORY_DEPTH: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::HistorySteps);
 /// Bytes of snapshots and their allocated payloads kept at most (older steps are forgotten).
-pub const HISTORY_BYTES: usize = 64 << 20;
+pub const HISTORY_BYTES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::HistoryBytes);
 /// Maximum independent random streams in a machine (syscalls 40..44).
-pub const MAX_RANDOM_STREAMS: usize = 4096;
+pub const MAX_RANDOM_STREAMS: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::RandomStreams);
 
 /// How the program ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +52,7 @@ impl Finish {
 }
 
 /// A part of a program to load: bytes at an address, code or data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Chunk {
     /// Where the bytes go.
     pub addr: u32,
@@ -60,7 +63,7 @@ pub struct Chunk {
 }
 
 /// A program ready to load: its parts and where execution starts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Image {
     /// Code and data.
     pub chunks: Vec<Chunk>,

@@ -108,6 +108,12 @@ pub(crate) struct DevicesSnapshot {
 }
 
 impl DevicesSnapshot {
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        self.latch_undo.capacity() * std::mem::size_of::<(u16, Option<u16>)>()
+            + self.palette_undo.capacity() * std::mem::size_of::<(usize, [u8; 3])>()
+            + self.robot.allocated_bytes()
+    }
+
     pub(crate) fn is_unchanged(&self, devices: &Devices) -> bool {
         self.latch_undo.is_empty()
             && self.traffic_lights == devices.traffic_lights

@@ -162,6 +162,7 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
             if let Some(old) = old_text
                 && old != app.doc.text
             {
+                app.source_changed();
                 move_line_marks(app, &old);
             }
 
@@ -173,6 +174,7 @@ pub fn editor(app: &mut App, ui: &mut Ui) {
                 let current = (range, app.doc.text.clone());
                 let restored = if undo { undoer.undo(&current) } else { undoer.redo(&current) }.cloned();
                 if let Some((r, text)) = restored {
+                    app.source_changed();
                     app.doc.text = text;
                     state.cursor.set_char_range(Some(r));
                 }

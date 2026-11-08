@@ -27,6 +27,8 @@ RustEmu8086 is an assembler, emulator and debugger for the Intel 8086, in the sp
 browser on any computer or tablet, and as a native app on macOS. Nothing to install to get started: open the page,
 pick an example, press **Step**.
 
+Assembly runs in a background task (desktop) or a dedicated WASM Worker (browser), with cancellation and stale-result rejection. **Options → Resource usage** shows shared quotas and live counters; see [Resource budgets](wiki/Resource-budgets.md).
+
 ## Try it in one minute
 
 ```asm

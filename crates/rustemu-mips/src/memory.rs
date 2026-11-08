@@ -164,6 +164,7 @@ impl Clone for MmioTouch {
 /// The memory of the machine.
 #[derive(Clone, Default)]
 pub struct Memory {
+    revision: u64,
     /// Pages that were written, in a two-level directory: block = address bits 22..31, page in
     /// the block = bits 12..21 (two index operations per access, no hashing); the rest reads as 0.
     blocks: Vec<Option<Box<Block>>>,
@@ -191,6 +192,11 @@ impl std::fmt::Debug for Memory {
 }
 
 impl Memory {
+    /// Mutation epoch for cached debugger views.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Empty memory: every byte reads as 0, nothing is code.
     pub fn new() -> Memory {
         Memory::default()
@@ -231,6 +237,7 @@ impl Memory {
     /// Writes `bytes` from `addr` whatever the segment, bypassing the journal (loading a program,
     /// editing memory in the debugger).
     pub fn load(&mut self, addr: u32, bytes: &[u8]) {
+        self.revision = self.revision.wrapping_add(1);
         for (i, &b) in bytes.iter().enumerate() {
             let a = addr.wrapping_add(i as u32);
             self.page_mut(a)[a as usize % PAGE_SIZE] = b;
@@ -262,6 +269,7 @@ impl Memory {
 
     /// Forgets all contents and code (a fresh machine).
     pub fn clear(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
         self.blocks.clear();
         self.pages = 0;
         self.code.clear();
@@ -326,6 +334,7 @@ impl Memory {
     /// Puts back one byte recorded in a journal.
     #[inline]
     pub fn restore(&mut self, addr: u32, value: u8) {
+        self.revision = self.revision.wrapping_add(1);
         self.page_mut(addr)[addr as usize % PAGE_SIZE] = value;
     }
 
@@ -373,6 +382,7 @@ impl Memory {
     /// the old bytes in the journal.
     #[inline]
     fn write(&mut self, addr: u32, len: u32, value: u32) {
+        self.revision = self.revision.wrapping_add(1);
         let at = addr as usize % PAGE_SIZE;
         // (The journal is a separate field: borrowed beside the page.)
         let mut journal = self.journal.take();

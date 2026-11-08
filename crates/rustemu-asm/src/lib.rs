@@ -24,7 +24,7 @@ pub use source::FileLoader;
 pub const EMU8086_INC: &str = include_str!("../inc/emu8086.inc");
 
 /// Source syntax.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Dialect {
     /// Emu8086 / MASM: `mov ax, var` reads memory, `byte ptr`, `seg segment ... ends`, `MACRO`.
     #[default]
@@ -119,7 +119,7 @@ fn nasm_word_directive(code: &str) -> bool {
 }
 
 /// Kind of the output file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Format {
     /// COM: one segment loaded at offset 100h (`ORG 100h`, `#make_com#`).
     Com,
@@ -154,7 +154,7 @@ impl Format {
 }
 
 /// An assembly error and where it is.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AsmError {
     /// Index into [`Program::files`] / the file list returned with errors.
     pub file: usize,
@@ -179,7 +179,7 @@ impl std::fmt::Display for AsmError {
 }
 
 /// Maps a range of the load image back to a source line.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LineInfo {
     /// File index (into [`Program::files`]).
     pub file: usize,
@@ -202,7 +202,7 @@ pub struct LineInfo {
 }
 
 /// A line of the listing: the source line with its address and bytes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ListingLine {
     /// File index (into [`Program::files`]).
     pub file: usize,
@@ -223,7 +223,7 @@ pub struct ListingLine {
 }
 
 /// What a symbol names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SymbolKind {
     /// A code label (`name:`), an address.
     Label,
@@ -238,7 +238,7 @@ pub enum SymbolKind {
 }
 
 /// A name defined by the program.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Symbol {
     /// The name in upper case (macro locals: `name??NNNN`).
     pub name: String,
@@ -265,7 +265,7 @@ impl Symbol {
 }
 
 /// A segment of an EXE.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SegmentInfo {
     /// The name.
     pub name: String,
@@ -276,7 +276,7 @@ pub struct SegmentInfo {
 }
 
 /// Emu8086 `#...#` directives.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EmuDirectives {
     /// Load segment of a BIN (`#load_segment=...#`).
     pub load_segment: Option<u16>,
@@ -291,8 +291,14 @@ pub struct EmuDirectives {
 }
 
 /// An assembled program: its image and everything the debugger needs to map it to the source.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Program {
+    /// Source bytes charged by the preprocessor, including repeated includes.
+    pub source_bytes: usize,
+    /// Preprocessor text charged during source and macro expansion.
+    pub expanded_bytes: usize,
+    /// Lines processed, including expansions.
+    pub processed_lines: usize,
     /// Output format.
     pub format: Format,
     /// Load module: what is placed in memory (for EXE: without the MZ header).
@@ -435,8 +441,8 @@ impl FileLoader for FsLoader {
             candidates.push(d.join(name));
         }
         for c in candidates {
-            if let Ok(t) = std::fs::read(&c) {
-                return Some((c.to_string_lossy().into_owned(), String::from_utf8_lossy(&t).into_owned()));
+            if let Ok(t) = read_source_file(&c) {
+                return Some((c.to_string_lossy().into_owned(), t));
             }
         }
         builtin_include(name)
@@ -456,7 +462,7 @@ impl FileLoader for BuiltinLoader {
 }
 
 /// Error list paired with the file table it refers to.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AsmErrors {
     /// The errors.
     pub errors: Vec<AsmError>,
@@ -507,11 +513,66 @@ pub fn assemble_str(source: &str) -> Result<Program, AsmErrors> {
     assemble("source.asm", source, &mut BuiltinLoader)
 }
 
+/// Reads at most the shared source limit plus one sentinel byte, so assembly can diagnose
+/// oversized files without first loading their complete contents.
+pub fn read_source_file(path: impl AsRef<Path>) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    let limit = rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::SourceBytes);
+    std::fs::File::open(path)?.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// Assembles a file from disk.
 pub fn assemble_file(path: &Path) -> std::io::Result<Result<Program, AsmErrors>> {
-    let text = String::from_utf8_lossy(&std::fs::read(path)?).into_owned();
+    let text = read_source_file(path)?;
     let mut loader = FsLoader { include_dirs: Vec::new() };
     Ok(assemble(&path.to_string_lossy(), &text, &mut loader))
+}
+
+/// Cooperative cancellation flag used by background assembler jobs.
+pub type CancelFlag = std::sync::Arc<std::sync::atomic::AtomicBool>;
+
+/// Assembles with cooperative cancellation; cancellation returns a normal diagnostic.
+pub fn assemble_cancellable(
+    name: &str,
+    text: &str,
+    loader: &mut dyn FileLoader,
+    dialect: Option<Dialect>,
+    cancel: CancelFlag,
+) -> Result<Program, AsmErrors> {
+    let run = |loader: &mut dyn FileLoader, d| {
+        asm::assemble_controlled(name, text, loader, d, Some(cancel.clone()))
+            .map_err(|(errors, files)| AsmErrors { errors, files })
+    };
+    match dialect {
+        Some(d) => run(loader, d),
+        None => {
+            let d = detect_dialect(name, text);
+            run(loader, d).or_else(|e| {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    Err(e)
+                } else {
+                    run(loader, if d == Dialect::Masm { Dialect::Nasm } else { Dialect::Masm }).map_err(|_| e)
+                }
+            })
+        }
+    }
+}
+
+pub(crate) trait Diagnostics {
+    fn push_diagnostic(&mut self, e: AsmError);
+}
+impl Diagnostics for Vec<AsmError> {
+    fn push_diagnostic(&mut self, mut e: AsmError) {
+        let limit = rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::Diagnostics);
+        if self.len() < limit - 1 {
+            self.push(e);
+        } else if self.len() == limit - 1 {
+            e.msg = format!("diagnostic limit ({limit}) reached; further messages omitted");
+            self.push(e);
+        }
+    }
 }
 
 /// Evaluates a constant expression in assembler syntax (`0FFh + 'A' * 2`, `1010b shl 3`, ...).

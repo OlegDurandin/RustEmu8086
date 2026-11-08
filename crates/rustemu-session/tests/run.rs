@@ -1275,3 +1275,38 @@ again:
     }
     assert_eq!(s.target.output_dropped(), s.x86().unwrap().output.dropped());
 }
+
+#[test]
+fn large_rep_preview_is_bounded_cached_and_invalidated() {
+    let program = rustemu_asm::assemble_str(
+        "org 100h\nmov ax, 2000h\nmov es, ax\nmov ax, 0101h\nxor di, di\nmov cx, 0ffffh\nrep stosw\nhlt\n",
+    )
+    .unwrap();
+    for history in [false, true] {
+        let mut s = Session::new();
+        s.load_program(program.clone()).unwrap();
+        s.target.set_history(history);
+        let execution = std::time::Instant::now();
+        for _ in 0..6 {
+            s.target.step();
+        }
+        eprintln!("REP execution, history={history}: {:?}", execution.elapsed());
+        if !history {
+            assert!(s.last_step(false).is_none());
+            continue;
+        }
+        let started = std::time::Instant::now();
+        let v = s.last_step(false).unwrap();
+        let first = started.elapsed();
+        // DI wraps within the 64 KiB segment; repeated writes count once.
+        assert_eq!(v.write_count, 65_536);
+        assert_eq!(v.writes.len(), 256);
+        let started = std::time::Instant::now();
+        for _ in 0..1000 {
+            assert_eq!(s.last_step(false).unwrap().write_count, v.write_count);
+        }
+        eprintln!("REP preview: first {first:?}, 1000 cached {:?}", started.elapsed());
+        s.target.step_back();
+        assert_ne!(s.last_step(false).unwrap().write_count, v.write_count);
+    }
+}

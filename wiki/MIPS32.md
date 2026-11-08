@@ -303,6 +303,8 @@ on purpose or because MARS's way is tied to its own windows:
 | Dialogs (50–59) on the command line | Swing windows | the message is printed, the answer is a line of input |
 | Program arguments | stored when the run starts | stored when the program is loaded (seen in the registers before the run) |
 | File I/O (14, 15) | no corresponding resource limits | reads return at most 64 KiB per call (short reads are possible); writes are limited to 16 MiB per call, and files also have a 16 MiB total write quota per run; exceeding a limit returns −1 in `$v0` |
+| Assembly resource limits | no corresponding shared budgets | source and expanded lines share a 250,000-line limit; source 4 MiB, generated text 16 MiB, 1024 files, paths 4 KiB, lines 64 KiB / 4096 tokens, 1 million processed tokens, up to 100 diagnostics. Includes and project files share the budgets; exceeding a limit stops assembly |
+| File creation (13) | no corresponding creation budget | up to 1024 new files per run; existing files can still be opened. The memory drive holds 2 MiB and 1024 files/folders, including existing empty folders; a rejected open/write returns −1 before modifying data |
 | Random streams (40–44) | no corresponding stream limit | up to 4096 streams; creating another raises a syscall exception, existing streams remain usable |
 | MIDI (31, 33) | plays | silent (33 waits for the duration) |
 | Assemble all files in directory | the folder's order (as the system lists it) | `.asm` files, then `.s` files, by name |

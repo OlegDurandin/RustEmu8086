@@ -12,6 +12,8 @@
 
 #![warn(missing_docs)]
 
+pub mod resources;
+
 use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -144,7 +146,7 @@ pub enum FrameKind {
 }
 
 /// Bytes an [`OutputBuffer`] keeps (older ones are dropped).
-pub const OUTPUT_LIMIT: usize = 1 << 20;
+pub const OUTPUT_LIMIT: usize = resources::ResourceBudget::limit(resources::Resource::OutputBytes);
 
 /// What a program writes (its console output, the printer's paper), bounded: only the last
 /// [`OUTPUT_LIMIT`] bytes are kept, so that a program printing forever does not fill the memory.
@@ -172,8 +174,8 @@ impl OutputBuffer {
 
     /// Drops old bytes in large pieces, so that the output does not shift on every write.
     fn trim(&mut self) {
-        if self.bytes.len() > OUTPUT_LIMIT + OUTPUT_LIMIT / 4 {
-            let cut = self.bytes.len() - OUTPUT_LIMIT;
+        if self.bytes.len() > OUTPUT_LIMIT {
+            let cut = self.bytes.len() - OUTPUT_LIMIT * 3 / 4;
             self.bytes.drain(..cut);
             self.dropped += cut;
         }
@@ -244,6 +246,11 @@ impl std::fmt::Debug for State {
 /// Implemented by each architecture (`rustemu_core::Machine` for the 8086). Code that needs more
 /// than this reaches the concrete machine with [`Target::as_any`].
 pub trait Target: Any + Send {
+    /// Live subsystem resource counters and their shared exhaustion policies.
+    fn resources(&self) -> resources::ResourceBudget {
+        resources::ResourceBudget::default()
+    }
+
     /// Which processor this is.
     fn arch(&self) -> Arch;
 

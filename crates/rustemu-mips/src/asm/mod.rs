@@ -38,6 +38,10 @@ mod lexer;
 mod table;
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 pub use basic::{BASIC, Basic, Format};
 pub use lexer::{DIRECTIVES, IntClass, Kind, Token, parse_int, tokenize};
@@ -48,7 +52,7 @@ use crate::memory::Segment;
 use crate::settings::{Layout, Settings};
 
 /// An error (or a warning) of the source: its file, 1-based line and column, and MARS's message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AsmError {
     /// The file (index into the files of [`AsmErrors`] / [`Program::files`]; 0: the program).
     pub file: usize,
@@ -78,7 +82,7 @@ impl std::fmt::Display for AsmError {
 }
 
 /// The errors of an assembly with the files their `file` indices refer to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AsmErrors {
     /// The errors, by file, line and column.
     pub errors: Vec<AsmError>,
@@ -102,7 +106,7 @@ impl std::fmt::Display for AsmErrors {
 }
 
 /// A source file of a program: the program itself or a file it includes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SourceFile {
     /// The name (the program's as given; an included file's path as `.include` resolved it).
     pub name: String,
@@ -169,7 +173,7 @@ impl Program {
 }
 
 /// The machine instructions of a source statement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Statement {
     /// Its file (index into [`Program::files`]).
     pub file: usize,
@@ -191,7 +195,7 @@ pub struct Statement {
 }
 
 /// Data a source line put into memory.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DataLine {
     /// Its file (index into [`Program::files`]).
     pub file: usize,
@@ -210,7 +214,7 @@ pub struct DataLine {
 }
 
 /// A label of the program.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Symbol {
     /// The name (case-sensitive, as in MARS).
     pub name: String,
@@ -221,8 +225,16 @@ pub struct Symbol {
 }
 
 /// An assembled program.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Program {
+    /// Physical source bytes charged to this assembly.
+    pub source_bytes: usize,
+    /// Physical source and expanded macro lines charged to this assembly.
+    pub processed_lines: usize,
+    /// Bytes charged for generated text and substitutions.
+    pub expanded_bytes: usize,
+    /// Tokens processed across all source and expansion lines.
+    pub processed_tokens: usize,
     /// What the machine loads.
     pub image: Image,
     /// The instructions by source statement, in address order.
@@ -334,11 +346,96 @@ struct Macro {
     labels: Vec<String>,
 }
 
-/// The most lines all macro expansions of a program may produce (a macro calling another
-/// several times, which calls another... grows exponentially).
-pub const MAX_EXPANDED_LINES: usize = 250_000;
+/// Maximum physical source lines plus generated macro lines across the entire assembly.
+pub const MAX_EXPANDED_LINES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::SourceLines);
 /// The deepest nesting of macro calls and of `.include`s.
 pub const MAX_NESTING: usize = 64;
+/// Total UTF-8 source bytes, including all project files and includes.
+pub const MAX_SOURCE_BYTES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::SourceBytes);
+/// Maximum source files, including the program and exception handler.
+pub const MAX_SOURCE_FILES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::SourceFiles);
+/// Maximum UTF-8 bytes in one source path (also bounds retained file-name metadata).
+pub const MAX_SOURCE_PATH_BYTES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::SourcePathBytes);
+/// Maximum UTF-8 bytes of one source or substituted line.
+pub const MAX_LINE_BYTES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::LineBytes);
+/// Total source bytes plus generated macro and .eqv replacement text.
+pub const MAX_EXPANDED_BYTES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::ExpandedBytes);
+/// Maximum tokens on one line after .eqv substitution.
+pub const MAX_LINE_TOKENS: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::LineTokens);
+/// Total tokens processed across source and macro expansion lines.
+pub const MAX_PROCESSED_TOKENS: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::ProcessedTokens);
+/// Maximum errors and warnings together, including the final truncation diagnostic.
+pub const MAX_DIAGNOSTICS: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::Diagnostics);
+
+/// Checks input budgets before retaining source text or flattening includes.
+struct SourceBudget {
+    bytes: usize,
+    lines: usize,
+    files: usize,
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+impl SourceBudget {
+    fn new(cancel: Option<Arc<AtomicBool>>) -> Self {
+        Self { bytes: 0, lines: 0, files: 0, cancel }
+    }
+    fn error(file: usize, line: usize, message: impl Into<String>) -> AsmError {
+        AsmError { file, line, col: 0, message: message.into(), expansion: Vec::new() }
+    }
+    fn check_cancel(&self, file: usize, line: usize) -> Result<(), AsmError> {
+        if self.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            Err(Self::error(file, line, "Assembly cancelled"))
+        } else {
+            Ok(())
+        }
+    }
+    fn admit(&mut self, file: usize, text: &str) -> Result<(), AsmError> {
+        self.check_cancel(file, 1)?;
+        if self.files >= MAX_SOURCE_FILES {
+            return Err(Self::error(file, 1, format!("more than {MAX_SOURCE_FILES} source files")));
+        }
+        if text.len() > MAX_SOURCE_BYTES.saturating_sub(self.bytes) {
+            return Err(Self::error(file, 1, format!("source exceeds {MAX_SOURCE_BYTES} bytes in total")));
+        }
+        let mut count = 0;
+        for (i, line) in text.lines().enumerate() {
+            self.check_cancel(file, i + 1)?;
+            if line.len() > MAX_LINE_BYTES {
+                return Err(Self::error(file, i + 1, format!("line exceeds {MAX_LINE_BYTES} bytes")));
+            }
+            count += 1;
+            if count > MAX_EXPANDED_LINES.saturating_sub(self.lines) {
+                return Err(Self::error(
+                    file,
+                    i + 1,
+                    format!("source would make more than {MAX_EXPANDED_LINES} lines"),
+                ));
+            }
+        }
+        self.files += 1;
+        self.bytes += text.len();
+        self.lines += count;
+        Ok(())
+    }
+}
+
+/// Reads at most the per-assembly source budget plus one sentinel byte from a host file.
+/// Oversized files return a short over-limit string so assembly can report its source location.
+pub fn read_source_file(path: impl AsRef<std::path::Path>) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.take(MAX_SOURCE_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
 
 /// Index of the user / kernel address space.
 const USER: usize = 0;
@@ -391,6 +488,10 @@ struct Asm {
     call_stack: Vec<usize>,
     /// Lines produced by macro expansions so far.
     expanded_lines: usize,
+    expanded_bytes: usize,
+    processed_tokens: usize,
+    stopped: bool,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Asm {
@@ -428,6 +529,10 @@ impl Asm {
             counter: 0,
             call_stack: Vec::new(),
             expanded_lines: 0,
+            expanded_bytes: 0,
+            processed_tokens: 0,
+            stopped: false,
+            cancel: None,
         }
     }
 
@@ -442,11 +547,37 @@ impl Asm {
     }
 
     fn error(&mut self, col: usize, message: impl Into<String>) {
+        if self.stopped {
+            return;
+        }
+        if self.errors.len() + self.warnings.len() >= MAX_DIAGNOSTICS - 1 {
+            return self.limit(col, format!("diagnostic limit ({MAX_DIAGNOSTICS}) reached; further messages omitted"));
+        }
         let e = self.report(col, message);
         self.errors.push(e);
     }
 
+    fn limit(&mut self, col: usize, message: impl Into<String>) {
+        if !self.stopped {
+            self.errors.push(self.report(col, message));
+            self.stopped = true;
+        }
+    }
+
+    fn is_stopped(&mut self) -> bool {
+        if self.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            self.limit(0, "Assembly cancelled");
+        }
+        self.stopped
+    }
+
     fn warning(&mut self, col: usize, message: impl Into<String>) {
+        if self.is_stopped() {
+            return;
+        }
+        if self.errors.len() + self.warnings.len() >= MAX_DIAGNOSTICS - 1 {
+            return self.limit(col, format!("diagnostic limit ({MAX_DIAGNOSTICS}) reached; further messages omitted"));
+        }
         let w = self.report(col, message);
         self.warnings.push(w);
     }
@@ -468,11 +599,24 @@ impl Asm {
     // ---- the first pass ----
 
     fn line(&mut self, text: &str) {
+        if self.is_stopped() {
+            return;
+        }
+        if text.len() > MAX_LINE_BYTES {
+            return self.limit(0, format!("line exceeds {MAX_LINE_BYTES} bytes"));
+        }
         let mut tokens = match tokenize(text) {
             Ok(t) => t,
             Err((col, m)) => return self.error(col, m),
         };
+        if tokens.len() > MAX_LINE_TOKENS {
+            return self.limit(0, format!("line exceeds {MAX_LINE_TOKENS} tokens"));
+        }
         if self.defining.is_some() {
+            self.processed_tokens += tokens.len();
+            if self.processed_tokens > MAX_PROCESSED_TOKENS {
+                return self.limit(0, "processed token budget exceeded");
+            }
             return self.macro_body(&tokens);
         }
         // .eqv substitution (not of the name being defined).
@@ -483,6 +627,13 @@ impl Asm {
                 && let Some(rep) = self.eqv.get(&tokens[i].text)
             {
                 let col = tokens[i].col;
+                let bytes: usize = rep.iter().map(|t| t.text.len()).sum();
+                if tokens.len() - 1 + rep.len() > MAX_LINE_TOKENS
+                    || bytes > MAX_EXPANDED_BYTES.saturating_sub(self.expanded_bytes)
+                {
+                    return self.limit(col, ".eqv expansion exceeds the token/text budget");
+                }
+                self.expanded_bytes += bytes;
                 let rep: Vec<Token> = rep.iter().map(|t| Token { col, ..t.clone() }).collect();
                 let n = rep.len();
                 tokens.splice(i..=i, rep);
@@ -490,6 +641,10 @@ impl Asm {
             } else {
                 i += 1;
             }
+        }
+        self.processed_tokens += tokens.len();
+        if self.processed_tokens > MAX_PROCESSED_TOKENS {
+            return self.limit(0, "processed token budget exceeded");
         }
         while tokens.len() >= 2 && tokens[0].kind == Kind::Ident && tokens[1].kind == Kind::Colon {
             let label = tokens.remove(0);
@@ -524,6 +679,9 @@ impl Asm {
     /// Moves the labels the file declared `.globl` to the global table (MARS's `transferGlobals`).
     fn transfer_globals(&mut self) {
         for (label, place) in std::mem::take(&mut self.globals) {
+            if self.is_stopped() {
+                break;
+            }
             self.place = place;
             match self.symbols.get(&label.text).copied() {
                 None => self.error(label.col, format!("\"{}\" declared global label but not defined.", label.text)),
@@ -643,20 +801,28 @@ impl Asm {
             return self.error(call[0].col, format!("macro calls nested deeper than {MAX_NESTING}"));
         }
         let (from, to) = (self.macros[m].from, self.macros[m].to);
-        if self.expanded_lines + (to - from) > MAX_EXPANDED_LINES {
+        if self.expanded_lines + (to - from - 1) > MAX_EXPANDED_LINES {
             return self
-                .error(call[0].col, format!("macro expansions would make more than {MAX_EXPANDED_LINES} lines"));
+                .limit(call[0].col, format!("macro expansions would make more than {MAX_EXPANDED_LINES} lines"));
         }
-        self.expanded_lines += to - from;
+        self.expanded_lines += to - from - 1;
         let (index, place) = (self.index, self.place.clone());
         self.call_stack.push(index);
         for i in from + 1..to {
+            if self.is_stopped() {
+                break;
+            }
             let (file, line) = (self.lines[i].file, self.lines[i].line);
             self.index = i;
             let mut calls = place.calls.clone();
             calls.push((place.file, place.line));
             self.place = Place { file, line, calls, text: None };
-            let text = self.substitute(m, &self.lines[i].text.clone(), call, counter);
+            let Some(text) = self.substitute(m, &self.lines[i].text.clone(), call, counter) else { break };
+            if text.len() > MAX_EXPANDED_BYTES.saturating_sub(self.expanded_bytes) {
+                self.limit(0, "expanded text budget exceeded");
+                break;
+            }
+            self.expanded_bytes += text.len();
             self.place.text = Some(text.trim().to_string());
             self.line(&text);
         }
@@ -668,28 +834,38 @@ impl Asm {
     /// A body line of macro `m` with the arguments of `call` and the renamed labels, exactly as
     /// MARS's `getSubstitutedLine`: the tokens from the last one, each replacing the first
     /// occurrence of its text in the line.
-    fn substitute(&mut self, m: usize, text: &str, call: &[Token], counter: usize) -> String {
-        let Ok(tokens) = tokenize(text) else { return text.to_string() };
+    fn substitute(&mut self, m: usize, text: &str, call: &[Token], counter: usize) -> Option<String> {
+        let Ok(tokens) = tokenize(text) else { return Some(text.to_string()) };
         let mut s = text.to_string();
         let replace_first = |s: &mut String, from: &str, to: &str| {
             if let Some(p) = s.find(from) {
+                if s.len() - from.len() + to.len() > MAX_LINE_BYTES {
+                    return false;
+                }
                 s.replace_range(p..p + from.len(), to);
             }
+            true
         };
         for t in tokens.iter().rev() {
             if is_param(t) {
                 match self.macros[m].params.iter().position(|p| *p == t.text) {
                     Some(k) => {
                         let arg = call[k + 1].text.clone();
-                        replace_first(&mut s, &t.text, &arg);
+                        if !replace_first(&mut s, &t.text, &arg) {
+                            self.limit(t.col, "macro substitution exceeds line byte budget");
+                            return None;
+                        }
                     }
                     None => self.error(t.col, "Unknown macro parameter"),
                 }
-            } else if self.macros[m].labels.contains(&t.text) {
-                replace_first(&mut s, &t.text, &format!("{}_M{counter}", t.text));
+            } else if self.macros[m].labels.contains(&t.text)
+                && !replace_first(&mut s, &t.text, &format!("{}_M{counter}", t.text))
+            {
+                self.limit(t.col, "macro substitution exceeds line byte budget");
+                return None;
             }
         }
-        s
+        Some(s)
     }
 
     fn instruction(&mut self, tokens: Vec<Token>) {
@@ -934,6 +1110,9 @@ impl Asm {
 
     /// Stores one value of a numeric directive; false after an error.
     fn value(&mut self, kind: DataKind, t: &Token) -> bool {
+        if self.is_stopped() {
+            return false;
+        }
         let len = kind.size();
         match kind {
             DataKind::Float | DataKind::Double => {
@@ -1253,9 +1432,12 @@ fn include_lines(
     seen: &mut Vec<String>,
     out: &mut Vec<SrcLine>,
     depth: usize,
+    budget: &mut SourceBudget,
 ) -> Result<(), AsmError> {
+    budget.check_cancel(file, 1)?;
     let text = files[file].text.clone();
     for (i, line) in text.lines().enumerate() {
+        budget.check_cancel(file, i + 1)?;
         let tokens = tokenize(line).unwrap_or_default();
         let include = tokens.windows(2).find(|w| {
             w[0].kind == Kind::Directive && w[0].text.eq_ignore_ascii_case(".include") && w[1].kind == Kind::Str
@@ -1272,18 +1454,25 @@ fn include_lines(
             }
             _ => name.to_string(),
         };
+        if path.len() > MAX_SOURCE_PATH_BYTES {
+            return Err(error(format!("source path exceeds {MAX_SOURCE_PATH_BYTES} bytes")));
+        }
         if seen.contains(&path) {
             return Err(error(format!("Recursive include of file {path}")));
         }
         if depth >= MAX_NESTING {
             return Err(error(format!("include files nested deeper than {MAX_NESTING}")));
         }
+        if budget.files >= MAX_SOURCE_FILES {
+            return Err(error(format!("more than {MAX_SOURCE_FILES} source files")));
+        }
         seen.push(path.clone());
         let Some(text) = read(&path) else {
             return Err(error(format!("Error reading include file {path}")));
         };
+        budget.admit(files.len(), &text).map_err(|e| error(e.message))?;
         files.push(SourceFile { name: path, text });
-        include_lines(files, files.len() - 1, read, seen, out, depth + 1)?;
+        include_lines(files, files.len() - 1, read, seen, out, depth + 1, budget)?;
     }
     Ok(())
 }
@@ -1312,6 +1501,15 @@ pub fn assemble_settings(
     read: &mut dyn FnMut(&str) -> Option<String>,
     settings: &Settings,
 ) -> Result<Program, AsmErrors> {
+    if name.len() > MAX_SOURCE_PATH_BYTES {
+        return Err(AsmErrors {
+            errors: vec![SourceBudget::error(0, 1, "source path byte budget exceeded")],
+            files: vec!["<oversized source path>".into()],
+        });
+    }
+    if let Err(e) = SourceBudget::new(None).admit(0, source) {
+        return Err(AsmErrors { errors: vec![e], files: vec![name.to_string()] });
+    }
     let program = SourceFile { name: name.to_string(), text: source.to_string() };
     assemble_files(program, None, Vec::new(), read, settings)
 }
@@ -1327,7 +1525,39 @@ pub fn assemble_files(
     read: &mut dyn FnMut(&str) -> Option<String>,
     settings: &Settings,
 ) -> Result<Program, AsmErrors> {
-    let names = |files: &[SourceFile]| files.iter().map(|f| f.name.clone()).collect();
+    assemble_files_inner(program, exception_handler, others, read, settings, None)
+}
+
+/// Like assemble_files, with a cooperative cancellation flag checked between source lines,
+/// macro expansions and data elements. Intended for callers running assembly on a worker.
+pub fn assemble_files_cancellable(
+    program: SourceFile,
+    exception_handler: Option<SourceFile>,
+    others: Vec<SourceFile>,
+    read: &mut dyn FnMut(&str) -> Option<String>,
+    settings: &Settings,
+    cancel: Arc<AtomicBool>,
+) -> Result<Program, AsmErrors> {
+    assemble_files_inner(program, exception_handler, others, read, settings, Some(cancel))
+}
+
+fn assemble_files_inner(
+    program: SourceFile,
+    exception_handler: Option<SourceFile>,
+    others: Vec<SourceFile>,
+    read: &mut dyn FnMut(&str) -> Option<String>,
+    settings: &Settings,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<Program, AsmErrors> {
+    if 1 + usize::from(exception_handler.is_some()) + others.len() > MAX_SOURCE_FILES {
+        return Err(AsmErrors {
+            errors: vec![SourceBudget::error(0, 1, format!("more than {MAX_SOURCE_FILES} source files"))],
+            files: vec![program.name.chars().take(MAX_SOURCE_PATH_BYTES).collect()],
+        });
+    }
+    let names = |files: &[SourceFile]| {
+        files.iter().take(MAX_SOURCE_FILES).map(|f| f.name.chars().take(MAX_SOURCE_PATH_BYTES).collect()).collect()
+    };
     // The files in their order of assembly, as indices into `files`.
     let mut files = vec![program];
     let mut order = Vec::new();
@@ -1340,17 +1570,35 @@ pub fn assemble_files(
         files.push(f);
         order.push(files.len() - 1);
     }
+    let mut budget = SourceBudget::new(cancel.clone());
+    for (i, source) in files.iter().enumerate() {
+        if source.name.len() > MAX_SOURCE_PATH_BYTES {
+            return Err(AsmErrors {
+                errors: vec![SourceBudget::error(i, 1, "source path byte budget exceeded")],
+                files: names(&files),
+            });
+        }
+        if let Err(e) = budget.admit(i, &source.text) {
+            return Err(AsmErrors { errors: vec![e], files: names(&files) });
+        }
+    }
     let mut units = Vec::new();
     for &f in &order {
         let mut lines = Vec::new();
-        if let Err(e) = include_lines(&mut files, f, read, &mut Vec::new(), &mut lines, 0) {
+        if let Err(e) = include_lines(&mut files, f, read, &mut Vec::new(), &mut lines, 0, &mut budget) {
             return Err(AsmErrors { errors: vec![e], files: names(&files) });
         }
         units.push(lines);
     }
     let mut asm = Asm::new(*settings);
+    asm.expanded_lines = budget.lines;
+    asm.expanded_bytes = budget.bytes;
+    asm.cancel = cancel;
     let mut accumulated = Vec::new();
     for (u, lines) in units.into_iter().enumerate() {
+        if asm.is_stopped() {
+            break;
+        }
         // What a file starts with (MARS's first pass for each file).
         asm.unit = u;
         asm.lines = lines;
@@ -1363,6 +1611,9 @@ pub fn assemble_files(
         asm.auto_align = true;
         asm.last_data = None;
         for i in 0..asm.lines.len() {
+            if asm.is_stopped() {
+                break;
+            }
             asm.index = i;
             asm.place = Place { file: asm.lines[i].file, line: asm.lines[i].line, calls: Vec::new(), text: None };
             let text = asm.lines[i].text.clone();
@@ -1385,6 +1636,9 @@ pub fn assemble_files(
         asm.unit_symbols.push(std::mem::take(&mut asm.symbols));
     }
     for (at, len, t, place) in accumulated {
+        if asm.is_stopped() {
+            break;
+        }
         asm.place = Place { calls: Vec::new(), ..place };
         match asm.global.get(&t.text) {
             Some(&(v, _)) => asm.store_label(at, len, v),
@@ -1394,6 +1648,9 @@ pub fn assemble_files(
     let pending = std::mem::take(&mut asm.pending);
     let mut statements = Vec::new();
     for p in &pending {
+        if asm.is_stopped() {
+            break;
+        }
         if asm.symbols.is_empty() || asm.unit != p.unit {
             asm.unit = p.unit;
             asm.symbols = asm.unit_symbols[p.unit].clone();
@@ -1432,7 +1689,14 @@ pub fn assemble_files(
         .flat_map(|table| table.iter().map(|(n, &(addr, data))| Symbol { name: n.clone(), addr, data }))
         .collect();
     symbols.sort_by(|a, b| (a.addr, &a.name).cmp(&(b.addr, &b.name)));
+    if asm.is_stopped() {
+        return Err(AsmErrors { errors: asm.errors, files: names(&files) });
+    }
     Ok(Program {
+        source_bytes: budget.bytes,
+        processed_lines: budget.lines + asm.expanded_lines,
+        expanded_bytes: asm.expanded_bytes,
+        processed_tokens: asm.processed_tokens,
         image: Image { chunks, entry, settings: *settings },
         statements,
         data: asm.data_lines,

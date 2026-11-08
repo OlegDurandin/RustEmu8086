@@ -166,6 +166,9 @@ fn mips_step(app: &mut App, b: &mut Ui) {
                     .background_color(pal::FIELD),
             );
         }
+        if step.memory_count > 8 {
+            ui.label(format!("{} changed bytes (showing 8)", step.memory_count));
+        }
         for (a, before, after) in step.memory.iter().take(8) {
             ui.label(
                 RichText::new(format!("[{a:08x}] {before:02x} → {after:02x}"))
@@ -207,8 +210,8 @@ fn changes(ui: &mut Ui, step: &StepView) {
     for &(a, b, n) in step.writes.iter().take(MAX_WRITES) {
         chips.push((format!("[{a:05X}h] {b:02X} → {n:02X}"), true));
     }
-    if step.writes.len() > MAX_WRITES {
-        chips.push((format!("+{} bytes", step.writes.len() - MAX_WRITES), false));
+    if step.write_count > MAX_WRITES {
+        chips.push((format!("+{} bytes", step.write_count - MAX_WRITES), false));
     }
     if chips.is_empty() {
         ui.label(RichText::new("No register, flag or memory changed (only IP moved on).").color(pal::WEAK));

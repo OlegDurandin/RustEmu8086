@@ -238,6 +238,46 @@ fn files_in_the_sandbox() {
 }
 
 #[test]
+fn creation_limit_is_returned_by_syscall_13_without_creating_a_file() {
+    use rustemu_mips::files::{MAX_CREATED_FILES, O_WRONLY};
+    let source = ".data\nnew: .asciiz \"overflow\"\nold: .asciiz \"f0\"\n.text\nla $a0, new\nli $a1, 1\nli $v0, 13\nsyscall\nmove $s0, $v0\nla $a0, old\nli $a1, 9\nli $v0, 13\nsyscall\nmove $s1, $v0\nli $v0, 10\nsyscall\n";
+    for history in [false, true] {
+        let root = std::env::temp_dir().join(format!(
+            "rustemu_mips_matrix_{}_{history}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        for storage in [Storage::Memory(BTreeMap::new()), Storage::Host(root.clone())] {
+            let mut m = Machine::with_storage(storage);
+            m.load(&rustemu_mips::asm::assemble(source).unwrap().image).unwrap();
+            m.history_enabled = history;
+            for i in 0..MAX_CREATED_FILES {
+                let fd = m.files.open(&format!("f{i}"), O_WRONLY).unwrap();
+                m.files.close(fd);
+            }
+            assert_eq!(m.run(100), Event::Terminated(0));
+            assert_eq!(m.cpu.regs[16], u32::MAX, "failed open returns -1 and continues");
+            assert_eq!(m.cpu.regs[17], 3, "existing files still open");
+            assert!(m.file_error.as_deref().unwrap().contains("creation limit"));
+            match &m.files.storage {
+                Storage::Memory(files) => {
+                    assert_eq!(files.len(), MAX_CREATED_FILES);
+                    assert!(!files.contains_key("overflow"));
+                }
+                Storage::Host(root) => {
+                    assert_eq!(std::fs::read_dir(root).unwrap().count(), MAX_CREATED_FILES);
+                    assert!(!root.join("overflow").exists());
+                }
+                Storage::None => unreachable!(),
+            }
+            assert_eq!(m.history_len() == 0, !history);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn console_through_descriptors_0_and_1() {
     let mut p = vec![li(A0, 0)];
     p.extend(la(A1, DATA_BASE));

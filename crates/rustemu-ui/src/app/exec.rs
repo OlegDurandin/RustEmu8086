@@ -39,17 +39,28 @@ impl App {
     /// Execution commands run the current build: after a failed build they try to build again
     /// instead of running the old image (it stays loaded for inspection).
     pub(super) fn ensure_current_build(&mut self) -> bool {
+        if self.is_building() {
+            return false;
+        }
+        if self.front.background_builds
+            && (self.is_stale()
+                || (self.program.text.is_some() && self.build.loaded_version != Some(self.build.document_version)))
+        {
+            self.emulate();
+            return false;
+        }
         if self.loaded() && !self.build.failed {
             return true;
         }
         self.emulate();
         // `emulate` leaves the assembly error in `status`.
-        self.loaded() && !self.build.failed
+        self.loaded() && !self.build.failed && !self.is_building()
     }
 
     /// Executes one instruction (assembling the editor text first when it changed).
     pub fn single_step(&mut self) {
         if !self.ensure_current_build() {
+            self.step_after_build(super::background::BuildStep::Into);
             return;
         }
         self.run = RunMode::Paused;
@@ -74,6 +85,7 @@ impl App {
     /// Without debug information: runs CALL / INT / LOOP / REP to the next instruction.
     pub fn step_over(&mut self) {
         if !self.ensure_current_build() {
+            self.step_after_build(super::background::BuildStep::Over);
             return;
         }
         if self.session.program.is_some() {
@@ -93,6 +105,7 @@ impl App {
     /// Step Out: runs until the current macro or procedure returns to its caller.
     pub fn step_out(&mut self) {
         if !self.ensure_current_build() {
+            self.step_after_build(super::background::BuildStep::Out);
             return;
         }
         self.begin_exec();
@@ -102,7 +115,14 @@ impl App {
 
     /// Runs freely until a breakpoint, an error, the end of the program or Stop.
     pub fn start_run(&mut self) {
+        if self.is_building() {
+            self.run_after_build();
+            return;
+        }
         if !self.ensure_current_build() {
+            if self.is_building() {
+                self.run_after_build();
+            }
             return;
         }
         if self.session.target.terminated().is_some() {
@@ -245,6 +265,7 @@ impl App {
 
     /// Stops a run.
     pub fn stop(&mut self) {
+        self.cancel_build();
         if self.run != RunMode::Paused {
             self.run = RunMode::Paused;
             self.status = format!("Stopped at {}", self.session.target.pc_text());
@@ -302,8 +323,12 @@ impl App {
 
     /// Advances the emulation for this frame (a panic of the emulator stops the program).
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.poll_build(ctx);
         self.apply_mips_devices();
+        let begin = web_time::Instant::now();
         self.catching(|app| app.tick_inner(ctx));
+        self.exec.tick_ms = begin.elapsed().as_secs_f64() * 1000.0;
+        self.exec.max_tick_ms = self.exec.max_tick_ms.max(self.exec.tick_ms);
         self.sync_mips_files();
     }
 
@@ -318,7 +343,19 @@ impl App {
         self.web.mips_files_synced = m.files.generation;
         let files: Vec<(String, Vec<u8>)> = files.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let Some(drive) = self.x86_session_mut().and_then(|s| s.dos_memory_drive_mut()) else { return };
-        let errors: Vec<String> = files.into_iter().filter_map(|(name, data)| drive.write(&name, data).err()).collect();
+        // Stage the complete update so a shrink can fund another file's growth regardless
+        // of name order, and a failed sync cannot leave only part of the batch on drive C:.
+        let mut updated = drive.clone();
+        for (name, _) in &files {
+            if updated.read(name).is_some() {
+                updated.remove(name);
+            }
+        }
+        let errors: Vec<String> =
+            files.into_iter().filter_map(|(name, data)| updated.write(&name, data).err()).collect();
+        if errors.is_empty() {
+            *drive = updated;
+        }
         if let Some(e) = errors.first() {
             self.notice("Drive C:", &format!("A file of the MIPS program could not be kept on drive C:\n\n{e}"));
         }
@@ -496,6 +533,45 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mips_browser_file_limits_match_drive_c_and_sync_as_a_batch() {
+        use rustemu_mips::files::{MEMORY_CAPACITY, MEMORY_MAX_ENTRIES, O_WRONLY};
+        assert_eq!(rustemu_mips::files::MAX_CREATED_FILES, rustemu_core::dos::HOST_MAX_CREATED as usize);
+        assert_eq!(MEMORY_CAPACITY, rustemu_core::memdrive::CAPACITY);
+        assert_eq!(MEMORY_MAX_ENTRIES, rustemu_core::memdrive::MAX_ENTRIES);
+        let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+        app.front.browser = true;
+        let mut drive = rustemu_core::memdrive::MemDrive::new();
+        drive.write("z", vec![1; MEMORY_CAPACITY]).unwrap();
+        // Existing empty folders must occupy entries in the MIPS view too.
+        for i in 0..MEMORY_MAX_ENTRIES - 2 {
+            let path = format!("d{i}/temp");
+            drive.write(&path, vec![]).unwrap();
+            drive.remove(&path);
+        }
+        app.session.set_dos_memory_drive(drive);
+        app.switch_arch(rustemu_session::Arch::Mips32);
+        app.doc.text = "li $v0, 10\nsyscall".into();
+        app.emulate();
+        assert!(app.loaded());
+        let m = app.session.mips_mut().unwrap();
+        let fd = m.files.open("z", O_WRONLY).unwrap();
+        m.files.close(fd);
+        let fd = m.files.open("a", O_WRONLY).unwrap();
+        m.files.write(fd, &vec![2; MEMORY_CAPACITY]).unwrap();
+        assert!(m.files.write(fd, &[3]).is_err());
+        m.files.close(fd);
+        assert!(m.files.open("overflow", O_WRONLY).is_err());
+        assert!(m.files.open("newdir/child", O_WRONLY).is_err());
+        app.sync_mips_files();
+        let drive = app.x86_session().unwrap().dos_memory_drive().unwrap();
+        assert_eq!(drive.used(), MEMORY_CAPACITY);
+        assert_eq!(drive.read("z"), Some(&[][..]));
+        assert_eq!(drive.read("a").unwrap(), vec![2; MEMORY_CAPACITY]);
+        assert!(drive.read("overflow").is_none());
+        assert!(app.dialogs.notice.is_none(), "{:?}", app.dialogs.notice);
+    }
 
     /// In the browser MIPS programs see drive C: (DOS's memory drive): they read its files, in
     /// any case of their names, and what they write is kept there.

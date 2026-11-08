@@ -4,18 +4,30 @@
 //! The files live in a sandbox: a folder on the computer or a store in memory (the browser).
 //! A file name is relative to it; absolute names and `..` are refused, and so are symbolic links
 //! leading out of the folder. Writing is limited by [`WRITE_QUOTA`], so that a program writing
-//! forever does not fill the disk.
+//! forever does not fill the disk. At most [`MAX_CREATED_FILES`] new files may be created per
+//! run. The memory drive also enforces [`MEMORY_CAPACITY`] bytes and [`MEMORY_MAX_ENTRIES`]
+//! files and directories before changing data, matching the shared browser drive C:.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 /// Descriptors MARS has, the console's 0..2 included.
 pub const MAX_FILES: usize = 32;
 /// Bytes a program may write to files in one run.
-pub const WRITE_QUOTA: u64 = 16 * 1024 * 1024;
+pub const WRITE_QUOTA: u64 =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::FileWriteBytes) as u64;
 /// Maximum bytes returned by a single read; callers may retry a short read.
 pub const READ_CHUNK: usize = 64 * 1024;
+/// Maximum new files created during one run, matching the DOS host drive budget.
+pub const MAX_CREATED_FILES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::CreatedFiles);
+/// Total bytes in the browser drive, matching DOS MemDrive.
+pub const MEMORY_CAPACITY: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::DriveBytes);
+/// Maximum files and directories in the browser drive, matching DOS MemDrive.
+pub const MEMORY_MAX_ENTRIES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::DriveEntries);
 
 /// Opening flag: read only.
 pub const O_RDONLY: u32 = 0;
@@ -55,21 +67,89 @@ pub struct Files {
     open: Vec<Option<(String, u32, Handle)>>,
     /// Bytes written in this run (see [`WRITE_QUOTA`]).
     written: u64,
+    /// Successful creations in this run; opening an existing file does not consume it.
+    created: usize,
+    /// Existing browser folders, including empty folders not represented by file names.
+    memory_dirs: BTreeSet<String>,
     /// Grows when a file in memory is created or written: the interface copies the files to the
     /// browser's drive C: when it changes.
     pub generation: u64,
 }
 
 impl Files {
+    /// File-owned counters for the shared resource report.
+    pub fn resources(&self) -> rustemu_target::resources::ResourceBudget {
+        use rustemu_target::resources::{Resource, ResourceBudget};
+        let mut b = ResourceBudget::default();
+        b.record(Resource::FileWriteBytes, self.written as usize);
+        b.record(Resource::CreatedFiles, self.created);
+        if let Storage::Memory(files) = &self.storage {
+            b.record(Resource::DriveBytes, files.values().map(Vec::len).sum());
+            let mut dirs = self.memory_dirs.clone();
+            for name in files.keys() {
+                for (i, _) in name.match_indices('/') {
+                    dirs.insert(name[..i].to_ascii_uppercase());
+                }
+            }
+            b.record(Resource::DriveEntries, files.len() + dirs.len());
+        }
+        b
+    }
+
     /// No open files.
     pub fn new(storage: Storage) -> Files {
-        Files { storage, open: (0..MAX_FILES).map(|_| None).collect(), written: 0, generation: 0 }
+        Files {
+            storage,
+            open: (0..MAX_FILES).map(|_| None).collect(),
+            written: 0,
+            created: 0,
+            memory_dirs: BTreeSet::new(),
+            generation: 0,
+        }
     }
 
     /// Closes every file (a new run).
     pub fn reset(&mut self) {
         self.open.iter_mut().for_each(|f| *f = None);
         self.written = 0;
+        self.created = 0;
+    }
+
+    /// Supplies existing directories of the shared browser drive (preserved across reset).
+    pub fn set_memory_directories(&mut self, dirs: impl IntoIterator<Item = String>) {
+        self.memory_dirs = dirs.into_iter().map(|d| d.to_ascii_uppercase()).collect();
+    }
+
+    /// Validates a memory-drive target before creating or truncating it. Parent directories
+    /// count as entries, and files cannot be used as directories or vice versa.
+    fn check_memory_target(
+        files: &BTreeMap<String, Vec<u8>>,
+        dirs: &BTreeSet<String>,
+        key: &str,
+    ) -> Result<(), String> {
+        let canonical = key.to_ascii_uppercase();
+        let mut folders = dirs.clone();
+        let names: BTreeSet<String> = files.keys().map(|k| k.to_ascii_uppercase()).collect();
+        for name in names.iter().map(String::as_str).chain(std::iter::once(canonical.as_str())) {
+            for (i, _) in name.match_indices('/') {
+                let parent = &name[..i];
+                if names.contains(parent) {
+                    return Err(format!("{parent} is a file"));
+                }
+                folders.insert(parent.to_string());
+                if folders.len() > MEMORY_MAX_ENTRIES {
+                    return Err("Memory drive entry limit exceeded".into());
+                }
+            }
+        }
+        if folders.contains(&canonical) {
+            return Err(format!("{key} is a folder"));
+        }
+        let new = usize::from(!names.contains(&canonical));
+        if names.len() + folders.len() + new > MEMORY_MAX_ENTRIES {
+            return Err(format!("Memory drive holds at most {MEMORY_MAX_ENTRIES} files and folders"));
+        }
+        Ok(())
     }
 
     /// The file a program names, inside the folder; None when the name leaves it.
@@ -108,6 +188,8 @@ impl Files {
         };
         let not_found = |dir: &str| format!("File {name} not found, open for {dir}.");
         let reading = flags == O_RDONLY;
+        let creation_error = || format!("File creation limit exceeded ({MAX_CREATED_FILES} per run)");
+        let mut created = false;
         let handle = match &mut self.storage {
             Storage::None => return Err(not_found(if reading { "input" } else { "output" })),
             Storage::Host(root) => {
@@ -115,14 +197,35 @@ impl Files {
                 let file = if reading {
                     path.and_then(|p| std::fs::File::open(p).ok()).ok_or_else(|| not_found("input"))?
                 } else {
+                    let path = path.ok_or_else(|| not_found("output"))?;
                     let mut o = std::fs::OpenOptions::new();
-                    o.write(true).create(true);
+                    o.write(true);
                     if flags & O_APPEND != 0 {
-                        o.append(true)
+                        o.append(true);
                     } else {
-                        o.truncate(true)
-                    };
-                    path.and_then(|p| o.open(p).ok()).ok_or_else(|| not_found("output"))?
+                        o.truncate(true);
+                    }
+                    // First open an existing file without create: it remains usable after the
+                    // budget is exhausted. create_new detects actual creations, including races.
+                    match o.open(&path) {
+                        Ok(file) => file,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            if self.created >= MAX_CREATED_FILES {
+                                return Err(creation_error());
+                            }
+                            match o.create_new(true).open(&path) {
+                                Ok(file) => {
+                                    created = true;
+                                    file
+                                }
+                                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                    o.create_new(false).open(&path).map_err(|_| not_found("output"))?
+                                }
+                                Err(_) => return Err(not_found("output")),
+                            }
+                        }
+                        Err(_) => return Err(not_found("output")),
+                    }
                 };
                 Handle::Host(file)
             }
@@ -136,6 +239,11 @@ impl Files {
                     }
                     Handle::MemRead { name: key, pos: 0 }
                 } else {
+                    created = !files.contains_key(&key);
+                    if created && self.created >= MAX_CREATED_FILES {
+                        return Err(creation_error());
+                    }
+                    Self::check_memory_target(files, &self.memory_dirs, &key)?;
                     let f = files.entry(key.clone()).or_default();
                     if flags & O_APPEND == 0 {
                         f.clear();
@@ -145,6 +253,9 @@ impl Files {
                 }
             }
         };
+        if created {
+            self.created += 1;
+        }
         self.open[fd] = Some((name.to_string(), flags, handle));
         Ok(fd as u32)
     }
@@ -152,7 +263,11 @@ impl Files {
     /// The key of a file in memory: `dir/file`, without `.` parts; None for names leaving the store.
     fn memory_name(name: &str) -> Option<String> {
         let mut parts = Vec::new();
-        for c in Path::new(name).components() {
+        let normalized = name.trim().replace('\\', "/");
+        if normalized.len() > 4096 || normalized.contains(':') {
+            return None;
+        }
+        for c in Path::new(&normalized).components() {
             match c {
                 Component::Normal(p) => parts.push(p.to_str()?.to_string()),
                 Component::CurDir => {}
@@ -199,6 +314,12 @@ impl Files {
                 WRITE_QUOTA >> 20
             ));
         }
+        if let Storage::Memory(files) = &self.storage {
+            let used: usize = files.values().map(Vec::len).sum();
+            if len > MEMORY_CAPACITY.saturating_sub(used) {
+                return Err(format!("Memory drive holds at most {} MB", MEMORY_CAPACITY >> 20));
+            }
+        }
         Ok(())
     }
 
@@ -236,6 +357,105 @@ impl Files {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_creation_limit_counts_new_files_only() {
+        let mut f = Files::new(Storage::Memory(BTreeMap::new()));
+        for i in 0..MAX_CREATED_FILES {
+            let fd = f.open(&format!("f{i}"), if i % 2 == 0 { O_WRONLY } else { O_WRONLY | O_APPEND }).unwrap();
+            f.close(fd);
+        }
+        let generation = f.generation;
+        assert!(f.open("overflow", O_WRONLY).unwrap_err().contains("creation limit"));
+        assert_eq!(f.generation, generation);
+        let fd = f.open("./F0", O_WRONLY).unwrap();
+        f.write(fd, b"kept").unwrap();
+        f.close(fd);
+        let fd = f.open("f0", O_WRONLY | O_APPEND).unwrap();
+        f.write(fd, b"!").unwrap();
+        f.close(fd);
+        assert_eq!(f.created, MAX_CREATED_FILES);
+        let Storage::Memory(files) = &mut f.storage else { panic!() };
+        assert_eq!(files.len(), MAX_CREATED_FILES);
+        assert_eq!(files["f0"], b"kept!");
+        files.remove("f1");
+        // Removing a file outside the emulated API does not refund creation budget.
+        assert!(f.open("overflow", O_WRONLY).is_err());
+        f.reset();
+        assert!(f.open("after-reset", O_WRONLY).is_ok());
+    }
+
+    #[test]
+    fn host_creation_limit_preserves_existing_files_and_resets() {
+        let root = std::env::temp_dir().join(format!("remu_create_limit_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut f = Files::new(Storage::Host(root.clone()));
+        assert!(f.open("missing/child", O_WRONLY).is_err());
+        assert_eq!(f.created, 0);
+        for i in 0..MAX_CREATED_FILES {
+            let fd = f.open(&format!("f{i}"), O_WRONLY | if i % 2 == 0 { 0 } else { O_APPEND }).unwrap();
+            f.close(fd);
+        }
+        assert!(f.open("overflow", O_WRONLY).unwrap_err().contains("creation limit"));
+        assert!(!root.join("overflow").exists());
+        let fd = f.open("f0", O_WRONLY | O_APPEND).unwrap();
+        f.write(fd, b"kept").unwrap();
+        f.close(fd);
+        assert_eq!(std::fs::read(root.join("f0")).unwrap(), b"kept");
+        let fd = f.open("f0", O_RDONLY).unwrap();
+        assert_eq!(f.read(fd, 4).unwrap(), b"kept");
+        f.close(fd);
+        let fd = f.open("f0", O_WRONLY).unwrap();
+        f.close(fd);
+        assert_eq!(std::fs::metadata(root.join("f0")).unwrap().len(), 0);
+        assert_eq!(f.created, MAX_CREATED_FILES);
+        f.reset();
+        let fd = f.open("after-reset", O_WRONLY).unwrap();
+        assert_eq!(f.created, 1);
+        f.close(fd);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn memory_budget_checks_folders_and_bytes_before_mutation() {
+        let mut f = Files::new(Storage::Memory(BTreeMap::new()));
+        f.set_memory_directories((0..MEMORY_MAX_ENTRIES - 1).map(|i| format!("dir{i}")));
+        assert!(f.open("dir0", O_WRONLY).unwrap_err().contains("folder"));
+        assert!(f.open("newdir/child", O_WRONLY).is_err());
+        assert_eq!((f.created, f.generation), (0, 0));
+        let fd = f.open("dir0/child", O_WRONLY).unwrap();
+        f.write(fd, &vec![1; MEMORY_CAPACITY]).unwrap();
+        let generation = f.generation;
+        assert!(f.write(fd, &[2]).is_err());
+        assert_eq!(f.generation, generation);
+        f.close(fd);
+        assert!(f.open("newfile", O_WRONLY).is_err());
+        let fd = f.open("DIR0\\child", O_WRONLY | O_APPEND).unwrap();
+        assert!(f.check_write(fd, 1).is_err());
+        f.close(fd);
+        f.reset();
+        assert!(f.open("newfile", O_WRONLY).is_err(), "reset preserves disk occupancy");
+        let fd = f.open("dir0/child", O_WRONLY).unwrap();
+        f.write(fd, b"small").unwrap();
+        f.close(fd);
+        let Storage::Memory(files) = &f.storage else { panic!() };
+        assert_eq!(files.len(), 1);
+        assert_eq!(files["dir0/child"], b"small");
+    }
+
+    #[test]
+    fn memory_paths_cannot_conflict_with_directories() {
+        let mut f = Files::new(Storage::Memory(BTreeMap::new()));
+        let fd = f.open("dir/sub/file", O_WRONLY).unwrap();
+        f.close(fd);
+        assert!(f.open("DIR", O_WRONLY).is_err());
+        assert!(f.open("DIR/SUB", O_WRONLY).is_err());
+        assert!(f.open("dir/sub/FILE/child", O_WRONLY).is_err());
+        let fd = f.open("./DIR\\SUB\\FILE ", O_RDONLY).unwrap();
+        f.close(fd);
+        assert_eq!(f.created, 1);
+        assert!(f.open("C:alias", O_WRONLY).is_err());
+    }
 
     #[test]
     fn write_preflight_checks_quota_without_a_buffer() {
@@ -294,10 +514,12 @@ mod tests {
     #[test]
     fn quota_and_descriptors() {
         let mut f = Files::new(Storage::Memory(BTreeMap::new()));
-        let w = f.open("big", O_WRONLY).unwrap();
+        let mut w = f.open("big", O_WRONLY).unwrap();
         let chunk = vec![0; 1 << 20];
         for _ in 0..16 {
             f.write(w, &chunk).unwrap();
+            f.close(w);
+            w = f.open("big", O_WRONLY).unwrap();
         }
         assert!(f.write(w, b"x").unwrap_err().contains("more than 16 MB"));
         f.close(w);

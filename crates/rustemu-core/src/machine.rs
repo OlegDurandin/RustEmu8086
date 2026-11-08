@@ -23,11 +23,13 @@ pub const STUB_OFF: u16 = 0x1000;
 const INT08_OFF: u16 = 0xE000;
 /// Segment where programs are loaded (PSP for COM/EXE).
 pub const PROGRAM_SEG: u16 = 0x0700;
-const HISTORY_DEPTH: usize = 2000;
-/// Bytes of journals (memory and floppy) the step-back history keeps at most: one `REP STOSW`
+const HISTORY_DEPTH: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::HistorySteps);
+/// Accounted snapshot and journal bytes the step-back history keeps at most: one `REP STOSW`
 /// with CX = FFFFh is a single step that journals 128 K writes (about 1 MB), so a limit in steps
 /// alone could hold more than a gigabyte. Older steps are forgotten first.
-pub const HISTORY_BYTES: usize = 64 << 20;
+pub const HISTORY_BYTES: usize =
+    rustemu_target::resources::ResourceBudget::limit(rustemu_target::resources::Resource::HistoryBytes);
 
 /// Everything on the bus except the CPU.
 pub struct System {
@@ -201,10 +203,19 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    /// Bytes its journals take (what [`HISTORY_BYTES`] limits).
+    /// Snapshot storage and dynamic payload capacities charged to [`HISTORY_BYTES`].
     fn journal_bytes(&self) -> usize {
-        self.undo.len() * std::mem::size_of::<(u32, u8)>()
-            + self.system.as_ref().map_or(0, |s| s.floppy_undo.len() * std::mem::size_of::<(u8, usize, u8)>())
+        std::mem::size_of::<Self>()
+            + self.undo.capacity() * std::mem::size_of::<(u32, u8)>()
+            + self.system.as_ref().map_or(0, |s| {
+                std::mem::size_of::<SystemSnapshot>()
+                    + s.keys.capacity() * 2
+                    + s.irq.capacity()
+                    + s.dev.allocated_bytes()
+                    + s.dos.allocated_bytes()
+                    + s.floppy_lens.capacity() * std::mem::size_of::<usize>()
+                    + s.floppy_undo.capacity() * std::mem::size_of::<(u8, usize, u8)>()
+            })
     }
 }
 
@@ -220,7 +231,7 @@ impl History {
     fn push(&mut self, s: Snapshot) {
         self.bytes += s.journal_bytes();
         self.steps.push_back(s);
-        while self.steps.len() > HISTORY_DEPTH || (self.bytes > HISTORY_BYTES && self.steps.len() > 1) {
+        while self.steps.len() > HISTORY_DEPTH || self.bytes > HISTORY_BYTES {
             let Some(old) = self.steps.pop_front() else { break };
             self.bytes -= old.journal_bytes();
         }
@@ -950,7 +961,7 @@ impl Machine {
         self.history.len()
     }
 
-    /// Bytes of journals the step-back history holds (at most [`HISTORY_BYTES`]).
+    /// Accounted snapshot and journal bytes retained (at most [`HISTORY_BYTES`]).
     pub fn history_bytes(&self) -> usize {
         self.history.bytes
     }

@@ -91,7 +91,13 @@ impl Session {
     /// Assembles (for `.asm`) or reads an executable file and loads it; DOS file functions then
     /// see the file's folder as drive C:.
     pub fn load_path(&mut self, path: &Path) -> Result<(), String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let binary = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| ["com", "exe", "bin", "boot", "img"].iter().any(|e| s.eq_ignore_ascii_case(e)));
+        let bytes =
+            if binary { std::fs::read(path) } else { rustemu_asm::read_source_file(path).map(String::into_bytes) }
+                .map_err(|e| format!("{}: {e}", path.display()))?;
         self.load_named(&path.to_string_lossy(), bytes)?;
         let root =
             path.parent().map(|dir| if dir.as_os_str().is_empty() { PathBuf::from(".") } else { dir.to_path_buf() });
