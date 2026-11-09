@@ -9,6 +9,9 @@ use rustemu_core::Event;
 use rustemu_core::disasm::disassemble;
 use rustemu_session::{Arch, Session};
 
+mod args;
+use args::{Args, Command};
+
 const USAGE: &str = "\
 usage:
   rustemu asm <file> [-o <out>] [-l] [-s]       assemble (-l listing, -s symbols)
@@ -22,13 +25,16 @@ usage:
       --max <n>          instruction limit (default 100000000)
       --regs             print the registers at the end
       --screen           print the final text screen instead of the output stream (8086)
-      --trace            print every executed instruction
+      --trace            print every executed instruction to stderr
       --timer-irq        deliver IRQ0 (INT 08h/1Ch) 18.2 times a second (8086)
   rustemu disasm <file> [--org <hex>]           disassemble a binary
       --mars             MIPS: MARS's basic notation (register numbers, branch offsets)
 
   --arch <a>             8086 or mips; by default .s files and sources written for MIPS
                          (registers like $t0, syscall) are MIPS32 programs (MARS)
+
+Options accept --name=value; use -- before a file starting with a dash.
+Unknown, duplicate, missing or unsupported options are errors. --help shows this help.
 
 MARS's settings (MIPS, asm and run; MARS's own option in brackets):
   --delayed-branching    branches take effect after their delay slot (db)
@@ -45,15 +51,30 @@ MARS's settings (MIPS, asm and run; MARS's own option in brackets):
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let r = match args.first().map(String::as_str) {
-        Some("asm") => cmd_asm(&args[1..]),
-        Some("run") => cmd_run(&args[1..]),
-        Some("disasm") => cmd_disasm(&args[1..]),
+    let command = match args.first().map(String::as_str) {
+        Some("asm") => Command::Asm,
+        Some("run") => Command::Run,
+        Some("disasm") => Command::Disasm,
+        Some("--help" | "-h") => {
+            print!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
         _ => {
             eprint!("{USAGE}");
             return ExitCode::from(2);
         }
     };
+    let r = Args::parse(command, &args[1..]).and_then(|args| match args {
+        None => {
+            print!("{USAGE}");
+            Ok(0)
+        }
+        Some(args) => match command {
+            Command::Asm => cmd_asm(&args),
+            Command::Run => cmd_run(&args),
+            Command::Disasm => cmd_disasm(&args),
+        },
+    });
     match r {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
@@ -63,27 +84,11 @@ fn main() -> ExitCode {
     }
 }
 
-fn opt<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
-}
-
-fn flag(args: &[String], name: &str) -> bool {
-    args.iter().any(|a| a == name)
-}
-
-fn file_arg(args: &[String]) -> Result<PathBuf, String> {
-    args.first().filter(|a| !a.starts_with("--")).map(PathBuf::from).ok_or_else(|| USAGE.to_string())
-}
-
 /// The processor of a file: `--arch`, else MIPS for `.s` and for sources written for MIPS, else
 /// the 8086 (binaries too, unless `--arch mips`).
-fn arch_of(path: &Path, text: Option<&str>, args: &[String]) -> Result<Arch, String> {
-    if let Some(a) = opt(args, "--arch") {
-        return match a.to_ascii_lowercase().as_str() {
-            "8086" | "x86" | "i8086" => Ok(Arch::I8086),
-            "mips" | "mips32" => Ok(Arch::Mips32),
-            _ => Err(format!("unknown processor '{a}' (8086 or mips)")),
-        };
+fn arch_of(path: &Path, text: Option<&str>, args: &Args) -> Result<Arch, String> {
+    if let Some(arch) = args.arch {
+        return Ok(arch);
     }
     if is_ext(path, "s") {
         return Ok(Arch::Mips32);
@@ -92,42 +97,22 @@ fn arch_of(path: &Path, text: Option<&str>, args: &[String]) -> Result<Arch, Str
 }
 
 /// The text of a source file (None for a binary).
-fn source_text(path: &Path, args: &[String]) -> Result<Option<String>, String> {
+fn source_text(path: &Path, args: &Args) -> Result<Option<String>, String> {
     let binary = ["com", "exe", "bin", "boot"].iter().any(|e| is_ext(path, e));
     if binary {
         return Ok(None);
     }
-    if opt(args, "--arch").map_or(is_ext(path, "s"), |a| matches!(a.to_ascii_lowercase().as_str(), "mips" | "mips32")) {
+    if args.arch.map_or(is_ext(path, "s"), |a| a == Arch::Mips32) {
         return rustemu_mips::asm::read_source_file(path).map(Some).map_err(|e| e.to_string());
     }
     rustemu_asm::read_source_file(path).map(Some).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// MARS's settings from the options (see [`USAGE`]).
-fn mips_settings(args: &[String]) -> Result<rustemu_mips::Settings, String> {
-    let memory = match opt(args, "--memory") {
-        None => rustemu_mips::MemoryConfig::Default,
-        Some(m) => rustemu_mips::MemoryConfig::from_id(m).ok_or_else(|| {
-            format!("unknown memory configuration '{m}' (Default, CompactDataAtZero, CompactTextAtZero)")
-        })?,
-    };
-    Ok(rustemu_mips::Settings {
-        delayed_branching: flag(args, "--delayed-branching"),
-        self_modifying: flag(args, "--self-modifying"),
-        start_at_main: flag(args, "--start-at-main"),
-        pseudo_instructions: !flag(args, "--no-pseudo"),
-        warnings_are_errors: flag(args, "--warnings-are-errors"),
-        memory,
-        // No windows here: input comes from the console.
-        popup_input: false,
-    })
-}
-
 /// Assembles MIPS source `text` of file `path` with the settings of the options, its `.include`
 /// files read from disk; the errors as `file: line L column C: message`, warnings printed.
-fn assemble_mips(path: &Path, text: &str, args: &[String]) -> Result<rustemu_mips::asm::Program, String> {
+fn assemble_mips(path: &Path, text: &str, args: &Args) -> Result<rustemu_mips::asm::Program, String> {
     let name = path.display().to_string();
-    let settings = mips_settings(args)?;
+    let settings = args.mips;
     let mut used = text.len();
     if used > rustemu_mips::asm::MAX_SOURCE_BYTES {
         return Err("MIPS source byte budget exceeded".into());
@@ -141,10 +126,10 @@ fn assemble_mips(path: &Path, text: &str, args: &[String]) -> Result<rustemu_mip
         }
         Ok(rustemu_mips::asm::SourceFile { name: p.display().to_string(), text })
     };
-    let handler = opt(args, "--exception-handler").map(|h| file(Path::new(h))).transpose()?;
+    let handler = args.exception_handler.as_deref().map(&mut file).transpose()?;
     // MARS's project mode: the other .asm and .s files of the folder (the .asm ones first).
     let mut others = Vec::new();
-    if flag(args, "--project") {
+    if args.project {
         let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
         let me = path.canonicalize().ok();
         let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -171,23 +156,23 @@ fn assemble_mips(path: &Path, text: &str, args: &[String]) -> Result<rustemu_mip
     Ok(prog)
 }
 
-fn cmd_asm_mips(path: &Path, text: &str, args: &[String]) -> Result<u8, String> {
+fn cmd_asm_mips(path: &Path, text: &str, args: &Args) -> Result<u8, String> {
     let prog = assemble_mips(path, text, args)?;
     let words: usize = prog.statements.iter().map(|s| s.words.len()).sum();
     let data: u32 = prog.data.iter().map(|d| d.len).sum();
     println!("{} (MIPS32): {words} instructions, {data} bytes of data", path.display());
-    if let Some(out) = opt(args, "-o") {
+    if let Some(out) = &args.out {
         let bytes = prog.text_bytes();
-        std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+        std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
         let base = prog.image.settings.layout().text_base;
-        println!("text segment -> {out} ({} bytes from 0x{base:08x})", bytes.len());
+        println!("text segment -> {} ({} bytes from 0x{base:08x})", out.display(), bytes.len());
     }
-    if flag(args, "-l") {
+    if args.listing {
         let lst = path.with_extension("lst");
         std::fs::write(&lst, prog.listing()).map_err(|e| e.to_string())?;
         println!("listing: {}", lst.display());
     }
-    if flag(args, "-s") {
+    if args.symbols {
         let sym = path.with_extension("symbol");
         std::fs::write(&sym, prog.symbols_text()).map_err(|e| e.to_string())?;
         println!("symbols: {}", sym.display());
@@ -195,24 +180,19 @@ fn cmd_asm_mips(path: &Path, text: &str, args: &[String]) -> Result<u8, String> 
     Ok(0)
 }
 
-fn cmd_asm(args: &[String]) -> Result<u8, String> {
-    let path = file_arg(args)?;
-    if let Some(text) = source_text(&path, args)?
-        && arch_of(&path, Some(&text), args)? == Arch::Mips32
-    {
-        return cmd_asm_mips(&path, &text, args);
+fn cmd_asm(args: &Args) -> Result<u8, String> {
+    let path = &args.file;
+    let text = rustemu_asm::read_source_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let arch = arch_of(path, Some(&text), args)?;
+    args.validate_arch(arch)?;
+    if arch == Arch::Mips32 {
+        return cmd_asm_mips(path, &text, args);
     }
-    let dialect = match opt(args, "--syntax").map(str::to_ascii_lowercase).as_deref() {
-        None => None,
-        Some("nasm") => Some(rustemu_asm::Dialect::Nasm),
-        Some("masm" | "emu8086") => Some(rustemu_asm::Dialect::Masm),
-        Some(s) => return Err(format!("unknown syntax '{s}' (nasm or masm)")),
-    };
-    let text = rustemu_asm::read_source_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let dialect = args.syntax;
     let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
     let prog = rustemu_asm::assemble_dialect(&path.to_string_lossy(), &text, &mut loader, dialect)
         .map_err(|e| e.to_string())?;
-    let out = opt(args, "-o").map(PathBuf::from).unwrap_or_else(|| path.with_extension(prog.format.extension()));
+    let out = args.out.clone().unwrap_or_else(|| path.with_extension(prog.format.extension()));
     std::fs::write(&out, prog.file_bytes()).map_err(|e| format!("{}: {e}", out.display()))?;
     println!(
         "{} -> {} ({} syntax, {} format, {} bytes)",
@@ -222,12 +202,12 @@ fn cmd_asm(args: &[String]) -> Result<u8, String> {
         prog.format.name(),
         prog.file_bytes().len()
     );
-    if flag(args, "-l") {
+    if args.listing {
         let lst = path.with_extension("lst");
         std::fs::write(&lst, prog.listing_text()).map_err(|e| e.to_string())?;
         println!("listing: {}", lst.display());
     }
-    if flag(args, "-s") {
+    if args.symbols {
         let sym = path.with_extension("symbol");
         std::fs::write(&sym, prog.symbols_text()).map_err(|e| e.to_string())?;
         println!("symbols: {}", sym.display());
@@ -235,10 +215,12 @@ fn cmd_asm(args: &[String]) -> Result<u8, String> {
     Ok(0)
 }
 
-fn cmd_run(args: &[String]) -> Result<u8, String> {
-    let path = file_arg(args)?;
-    let text = source_text(&path, args)?;
-    let mips = arch_of(&path, text.as_deref(), args)? == Arch::Mips32;
+fn cmd_run(args: &Args) -> Result<u8, String> {
+    let path = &args.file;
+    let text = source_text(path, args)?;
+    let arch = arch_of(path, text.as_deref(), args)?;
+    args.validate_arch(arch)?;
+    let mips = arch == Arch::Mips32;
     let mut s = if mips { Session::new_mips() } else { Session::new() };
     if mips {
         // MIPS file services work in the folder of the program, as DOS's drive C: does here.
@@ -247,76 +229,49 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             m.files.storage = rustemu_mips::files::Storage::Host(dir);
             // No windows: dialogs (syscall 50..59) print their text and take a line of input.
             m.dialogs_in_console = true;
-            m.program_arguments =
-                opt(args, "--program-args").unwrap_or("").split_whitespace().map(str::to_string).collect();
+            m.program_arguments = args.program_args.split_whitespace().map(str::to_string).collect();
         }
         let text = text.ok_or("a MIPS program is run from its source (.s / .asm)")?;
         let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-        let prog = assemble_mips(&path, &text, args)?;
+        let prog = assemble_mips(path, &text, args)?;
         s.load_mips(prog, &name)?;
     } else {
-        s.command_line = opt(args, "--args").unwrap_or("").to_string();
-        s.load_path(&path)?;
+        s.command_line = args.dos_args.clone();
+        s.load_path(path)?;
     }
     // The run loop goes through the generic target; screen, log, printer, timer and the trace
     // format are the 8086's.
-    let timer_irq = flag(args, "--timer-irq");
+    let timer_irq = args.timer_irq;
     if let Some(m) = s.x86_mut() {
         m.timer_irq = timer_irq;
     }
-    let max: u64 = opt(args, "--max").and_then(|v| v.parse().ok()).unwrap_or(100_000_000);
-    let screen = flag(args, "--screen");
-    let trace = flag(args, "--trace");
+    let max: u64 = args.max;
+    let screen = args.screen;
+    let trace = args.trace;
     // Enter is CR for DOS, a new line for MIPS's console.
     let enter = if mips { "\n" } else { "\r" };
-    let mut input: Option<Vec<u8>> = opt(args, "--input").map(|t| t.replace("\\n", enter).into_bytes());
-    let mut keys: std::collections::VecDeque<u8> =
-        opt(args, "--keys").unwrap_or("").replace("\\n", "\n").bytes().collect();
+    let mut input: Option<Vec<u8>> = args.input.as_deref().map(|t| t.replace("\\n", enter).into_bytes());
+    let mut keys: std::collections::VecDeque<u8> = args.keys.replace("\\n", "\n").bytes().collect();
     let mut stdout = std::io::stdout();
     let mut printed = 0;
     let mut executed = 0u64;
+    s.target.set_history(false);
     let code = loop {
-        let ev = if trace && let Some(m) = s.mips() {
-            let pc = m.cpu.pc;
-            let word = u32::from_le_bytes(s.target.read_bytes(pc, 4).try_into().unwrap_or([0; 4]));
-            let ins = rustemu_mips::disasm::disassemble(word, pc, rustemu_mips::disasm::Style::Named);
-            let r = &m.cpu.regs;
-            eprintln!(
-                "{pc:08x}  {word:08x}  {ins:<28} v0={:08x} a0={:08x} t0={:08x} t1={:08x} sp={:08x}",
-                r[2], r[4], r[8], r[9], r[29]
-            );
-            executed += 1;
-            if executed > max { Event::Budget } else { s.target.step() }
-        } else if trace {
-            let m = s.x86().ok_or("--trace needs an 8086 or MIPS program")?;
-            let pc = m.cpu.pc();
-            let bytes = m.sys.mem.slice(pc, 8).to_vec();
-            let ins = disassemble(&bytes, m.cpu.ip);
-            let c = &m.cpu;
-            eprintln!(
-                "{:04X}:{:04X}  {:<28} AX={:04X} BX={:04X} CX={:04X} DX={:04X} SP={:04X} F={:04X}",
-                c.cs(),
-                c.ip,
-                ins.text,
-                c.regs[0],
-                c.regs[3],
-                c.regs[1],
-                c.regs[2],
-                c.regs[4],
-                c.flags
-            );
-            executed += 1;
-            if executed > max { Event::Budget } else { s.target.step() }
+        let ev = if executed >= max {
+            Event::Budget
         } else {
-            s.target.set_history(false);
-            // MARS's keyboard holds one key: the next goes when the program has read it.
+            // Deliver MMIO input before every step while keys remain, in both trace modes.
             if let Some(m) = s.mips_mut()
                 && m.mem.peek32(rustemu_mips::mmio::RECEIVER_CONTROL) & 1 == 0
                 && let Some(k) = keys.pop_front()
             {
                 m.mmio_key(k);
             }
-            run_chunk(&mut s, &mut executed, max, if keys.is_empty() { 1_000_000 } else { 10_000 })
+            if trace {
+                trace_instruction(&s);
+            }
+            let chunk = if trace || !keys.is_empty() { 1 } else { 1_000_000 };
+            run_chunk(&mut s, &mut executed, max, chunk)
         };
         // `printed` counts every byte written: the output keeps only its last megabyte or so.
         let (out, dropped) = (s.target.output(), s.target.output_dropped());
@@ -367,7 +322,7 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
             }
         }
     };
-    if flag(args, "--regs") {
+    if args.regs {
         eprint!("{}", registers_text(&s));
     }
     if let Some(m) = s.x86() {
@@ -390,6 +345,38 @@ fn cmd_run(args: &[String]) -> Result<u8, String> {
         eprintln!("\n[MMIO display]\n{}", text.trim_end());
     }
     Ok(code)
+}
+
+/// Prints the state before an instruction; execution and input delivery use the common loop.
+fn trace_instruction(s: &Session) {
+    if let Some(m) = s.mips() {
+        let pc = m.cpu.pc;
+        let word = u32::from_le_bytes(s.target.read_bytes(pc, 4).try_into().unwrap_or([0; 4]));
+        let ins = rustemu_mips::disasm::disassemble(word, pc, rustemu_mips::disasm::Style::Named);
+        let r = &m.cpu.regs;
+        eprintln!(
+            "{pc:08x}  {word:08x}  {ins:<28} v0={:08x} a0={:08x} t0={:08x} t1={:08x} sp={:08x}",
+            r[2], r[4], r[8], r[9], r[29]
+        );
+    } else {
+        let m = s.x86().expect("8086 target");
+        let pc = m.cpu.pc();
+        let bytes = m.sys.mem.slice(pc, 8).to_vec();
+        let ins = disassemble(&bytes, m.cpu.ip);
+        let c = &m.cpu;
+        eprintln!(
+            "{:04X}:{:04X}  {:<28} AX={:04X} BX={:04X} CX={:04X} DX={:04X} SP={:04X} F={:04X}",
+            c.cs(),
+            c.ip,
+            ins.text,
+            c.regs[0],
+            c.regs[3],
+            c.regs[1],
+            c.regs[2],
+            c.regs[4],
+            c.flags
+        );
+    }
 }
 
 /// The registers at the end of a run (`--regs`).
@@ -451,13 +438,15 @@ fn to_host_text(bytes: &[u8]) -> Vec<u8> {
     s.into_bytes()
 }
 
-fn cmd_disasm(args: &[String]) -> Result<u8, String> {
-    let path = file_arg(args)?;
-    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if arch_of(&path, None, args)? == Arch::Mips32 {
+fn cmd_disasm(args: &Args) -> Result<u8, String> {
+    let path = &args.file;
+    let arch = arch_of(path, None, args)?;
+    args.validate_arch(arch)?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if arch == Arch::Mips32 {
         return Ok(disasm_mips(&bytes, args));
     }
-    let (code, org) = disasm_input(bytes, &path, args)?;
+    let (code, org) = disasm_input(bytes, path, args.org.map(|v| v as u16))?;
     let mut pos = 0;
     while pos < code.len() {
         let end = (pos + 8).min(code.len());
@@ -471,12 +460,9 @@ fn cmd_disasm(args: &[String]) -> Result<u8, String> {
 }
 
 /// MIPS words (little-endian) from `--org` (by default 0x00400000, the text segment).
-fn disasm_mips(bytes: &[u8], args: &[String]) -> u8 {
-    let org = opt(args, "--org")
-        .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x").trim_end_matches(['h', 'H']), 16).ok())
-        .unwrap_or(rustemu_mips::memory::TEXT_BASE);
-    let style =
-        if flag(args, "--mars") { rustemu_mips::disasm::Style::Mars } else { rustemu_mips::disasm::Style::Named };
+fn disasm_mips(bytes: &[u8], args: &Args) -> u8 {
+    let org = args.org.unwrap_or(rustemu_mips::memory::TEXT_BASE);
+    let style = if args.mars { rustemu_mips::disasm::Style::Mars } else { rustemu_mips::disasm::Style::Named };
     for (k, chunk) in bytes.chunks(4).enumerate() {
         let mut w = [0u8; 4];
         w[..chunk.len()].copy_from_slice(chunk);
@@ -487,15 +473,13 @@ fn disasm_mips(bytes: &[u8], args: &[String]) -> u8 {
     0
 }
 
-fn disasm_input(bytes: Vec<u8>, path: &Path, args: &[String]) -> Result<(Vec<u8>, u16), String> {
+fn disasm_input(bytes: Vec<u8>, path: &Path, origin: Option<u16>) -> Result<(Vec<u8>, u16), String> {
     if bytes.starts_with(b"MZ") || bytes.starts_with(b"ZM") {
         let code = rustemu_core::machine::mz_image(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok((code.to_vec(), 0))
+        Ok((code.to_vec(), origin.unwrap_or(0)))
     } else {
         let default = if is_ext(path, "com") { 0x100 } else { 0 };
-        let org = opt(args, "--org")
-            .and_then(|v| u16::from_str_radix(v.trim_end_matches(['h', 'H']), 16).ok())
-            .unwrap_or(default);
+        let org = origin.unwrap_or(default);
         Ok((bytes, org))
     }
 }
@@ -514,7 +498,7 @@ mod tests {
         let f = std::fs::File::create(&path).unwrap();
         f.set_len((rustemu_mips::asm::MAX_SOURCE_BYTES * 2) as u64).unwrap();
         drop(f);
-        let args = vec!["--arch".into(), "mips".into()];
+        let args = Args::parse(Command::Asm, &[path.display().to_string(), "--arch=mips".into()]).unwrap().unwrap();
         let text = source_text(&path, &args).unwrap().unwrap();
         assert_eq!(text.len(), rustemu_mips::asm::MAX_SOURCE_BYTES + 1);
         let e = assemble_mips(&path, &text, &args).unwrap_err();
@@ -540,15 +524,17 @@ mod tests {
 
     #[test]
     fn the_processor_of_a_file() {
-        let none: [String; 0] = [];
-        let arch = |p: &str, text: Option<&str>, args: &[String]| arch_of(Path::new(p), text, args).unwrap();
-        assert_eq!(arch("a.s", None, &none), Arch::Mips32);
-        assert_eq!(arch("a.asm", Some("main: li $v0, 10\nsyscall\n"), &none), Arch::Mips32);
-        assert_eq!(arch("a.asm", Some("org 100h\nmov ax, 1\nmov bx, ax\n"), &none), Arch::I8086);
-        assert_eq!(arch("a.bin", None, &none), Arch::I8086);
-        assert_eq!(arch("a.s", None, &["--arch".into(), "8086".into()]), Arch::I8086);
-        assert_eq!(arch("a.bin", None, &["--arch".into(), "MIPS32".into()]), Arch::Mips32);
-        assert!(arch_of(Path::new("a.s"), None, &["--arch".into(), "z80".into()]).is_err());
+        let arch = |p: &str, text: Option<&str>, options: &[&str]| {
+            let tokens = std::iter::once(p).chain(options.iter().copied()).map(str::to_string).collect::<Vec<_>>();
+            let args = Args::parse(Command::Run, &tokens).unwrap().unwrap();
+            arch_of(Path::new(p), text, &args).unwrap()
+        };
+        assert_eq!(arch("a.s", None, &[]), Arch::Mips32);
+        assert_eq!(arch("a.asm", Some("main: li $v0, 10\nsyscall\n"), &[]), Arch::Mips32);
+        assert_eq!(arch("a.asm", Some("org 100h\nmov ax, 1\n"), &[]), Arch::I8086);
+        assert_eq!(arch("a.bin", None, &[]), Arch::I8086);
+        assert_eq!(arch("a.s", None, &["--arch=8086"]), Arch::I8086);
+        assert_eq!(arch("a.bin", None, &["--arch=MIPS32"]), Arch::Mips32);
     }
 
     #[test]
@@ -563,7 +549,7 @@ mod tests {
 
     #[test]
     fn short_mz_is_reported_instead_of_panicking() {
-        let err = disasm_input(b"MZ".to_vec(), Path::new("broken.exe"), &[]).unwrap_err();
+        let err = disasm_input(b"MZ".to_vec(), Path::new("broken.exe"), None).unwrap_err();
         assert!(err.contains("broken.exe: not an MZ executable"), "{err}");
     }
 }

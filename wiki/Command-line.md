@@ -10,6 +10,15 @@ Where to get it:
 - in the Mac app: `/Applications/RustEmu8086.app/Contents/MacOS/rustemu`;
 - from source: `cargo build --release -p rustemu-cli` → `target/release/rustemu`.
 
+Options may precede or follow the file. Unknown, duplicate or unsupported options and missing or invalid
+values are errors (exit 1), before execution or output-file creation. Architecture-specific options
+are rejected for the other processor. Use `--help` (exit 0), `--name=value` for values starting with
+`-` (for example `--input=--trace`), and `--` before a file name starting with `-`.
+
+`--max` is an unsigned decimal u64; 0 stops before the first instruction (exit 4). `--org` is
+hexadecimal, with optional `0x`/`0X` prefix and `h`/`H` suffix: at most FFFFh for 8086,
+FFFFFFFFh for MIPS. Invalid numbers never fall back to defaults.
+
 ## Assembling — `rustemu asm`
 
 ```sh
@@ -40,7 +49,7 @@ rustemu run sum.asm --trace                  # every instruction with registers
 | `--max <n>` | instruction limit (default 100 000 000) |
 | `--regs` | print the registers at the end (to stderr) |
 | `--screen` | print the final text screen instead of the output stream |
-| `--trace` | print every executed instruction |
+| `--trace` | print every executed instruction to stderr; MMIO keys are delivered in both modes |
 | `--timer-irq` | enable IRQ0 (INT 08h / 1Ch) 18.2 times a second |
 | `--keys <text>` | MIPS: keys of MARS's MMIO keyboard (`\n` is Enter) |
 | `--delayed-branching`, `--self-modifying`, `--start-at-main`, `--no-pseudo`, `--warnings-are-errors` | MIPS (also `asm`): MARS's settings, its options `db`, `smc`, `sm`, `np`, `we` |
