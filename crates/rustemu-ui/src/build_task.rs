@@ -91,10 +91,10 @@ impl WebTask {
                 return;
             };
             if text == "ready" {
-                if let Some(text) = pending.borrow_mut().take() {
-                    if let Err(e) = target.post_message(&text.into()) {
-                        *reply.borrow_mut() = Some(Err(format!("Cannot submit build: {e:?}")));
-                    }
+                if let Some(text) = pending.borrow_mut().take()
+                    && let Err(e) = target.post_message(&text.into())
+                {
+                    *reply.borrow_mut() = Some(Err(format!("Cannot submit build: {e:?}")));
                 }
             } else {
                 *reply.borrow_mut() = Some(
