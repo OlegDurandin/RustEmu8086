@@ -323,18 +323,22 @@ impl App {
             .and_then(|s| s.dos_memory_drive())
             .map(|d| d.dirs().map(str::to_string).collect())
             .unwrap_or_default();
-        let storage = match self.vdrive(self.doc.path.as_deref()) {
-            Some(root) => rustemu_mips::files::Storage::Host(root),
-            None => rustemu_mips::files::Storage::Memory(
-                self.x86_session()
-                    .and_then(|s| s.dos_memory_drive())
-                    .map(|d| d.files().map(|(k, v)| (k.to_string(), v.to_vec())).collect())
-                    .unwrap_or_default(),
-            ),
+        let storage = if self.doc.project.is_some() {
+            rustemu_mips::files::Storage::Memory(Default::default())
+        } else {
+            match self.vdrive(self.doc.path.as_deref()) {
+                Some(root) => rustemu_mips::files::Storage::Host(root),
+                None => rustemu_mips::files::Storage::Memory(
+                    self.x86_session()
+                        .and_then(|s| s.dos_memory_drive())
+                        .map(|d| d.files().map(|(k, v)| (k.to_string(), v.to_vec())).collect())
+                        .unwrap_or_default(),
+                ),
+            }
         };
         if let Some(m) = self.session.mips_mut() {
             m.files.storage = storage;
-            m.files.set_memory_directories(memory_dirs);
+            m.files.set_memory_directories(if self.doc.project.is_some() { Vec::new() } else { memory_dirs });
             self.web.mips_files_synced = m.files.generation;
         }
         let name = self.file_name();
@@ -363,6 +367,7 @@ impl App {
         self.program.index = vec![Vec::new(); files.len()];
         self.program.files = files;
         self.program.text = Some(self.doc.text.clone());
+        self.program.portable = self.doc.project.is_some();
         if !same_image {
             self.clear_address_breakpoints();
         }
@@ -468,8 +473,22 @@ impl App {
             source_files.iter().map(|(_, lines)| rustemu_asm::library::index(&lines.join("\n"))).collect();
         let devices = p.emu.start.clone();
         let from_link = self.from_link();
-        self.use_temporary_drive(from_link);
-        let root = self.vdrive(self.doc.path.as_deref());
+        let had_own_drive = self.web.own_drive.is_some();
+        self.use_temporary_drive(from_link || self.doc.project.is_some());
+        let root = if self.doc.project.is_some() {
+            if let Some(m) = self.session.x86_mut() {
+                m.set_dos_memory_drive(Default::default());
+            }
+            None
+        } else {
+            if self.program.portable && !self.front.browser && !had_own_drive {
+                let root = self.drive_dir.clone();
+                if let Some(m) = self.session.x86_mut() {
+                    m.set_dos_root(root);
+                }
+            }
+            self.vdrive(self.doc.path.as_deref())
+        };
         let same_image = self.session.program.as_ref().is_some_and(|old| old.file_bytes() == p.file_bytes());
         if let Err(e) = self.session.load_program(p) {
             self.build.failed = true;
@@ -479,6 +498,7 @@ impl App {
         self.program.files = source_files;
         self.program.index = source_index;
         self.program.text = Some(self.doc.text.clone());
+        self.program.portable = self.doc.project.is_some();
         if let Some(root) = root
             && let Some(m) = self.session.x86_mut()
         {
@@ -495,13 +515,24 @@ impl App {
         if from_link && self.web.own_drive.is_some() {
             self.status.push_str(" - on a temporary drive C:");
             if std::mem::take(&mut self.web.link_notice_pending) {
-                self.notice("Program from a link", &crate::share::temporary_drive_text(&self.file_name()));
+                let text = if self.doc.project.is_some() {
+                    crate::share::project_drive_text().to_string()
+                } else {
+                    crate::share::temporary_drive_text(&self.file_name())
+                };
+                self.notice("Program from a link", &text);
             }
         }
     }
 
     /// Loads a binary executable without source.
     pub fn load_binary(&mut self, p: &Path) {
+        if self.program.portable && !self.front.browser && self.web.own_drive.is_none() {
+            let root = self.drive_dir.clone();
+            if let Some(m) = self.session.x86_mut() {
+                m.set_dos_root(root);
+            }
+        }
         match self.session.load_path(p) {
             Ok(()) => {
                 if let Some(root) = self.vdrive(Some(p))
@@ -533,6 +564,7 @@ impl App {
 
     /// After loading code without debug information (binary file, boot from floppy).
     pub fn after_binary_load(&mut self) {
+        self.program.portable = false;
         self.use_temporary_drive(false);
         self.clear_address_breakpoints();
         self.program.text = None;
@@ -549,6 +581,25 @@ impl App {
     }
 
     fn after_load(&mut self) {
+        self.program.prepared_input.clear();
+        if self.program.portable
+            && let Some(project) = &self.doc.project
+        {
+            self.program.prepared_input = if self.arch() == Arch::Mips32 {
+                project.input.replace("\r\n", "\n").replace('\r', "\n").bytes().collect()
+            } else {
+                project
+                    .input
+                    .replace("\r\n", "\n")
+                    .chars()
+                    .map(|c| match c {
+                        '\n' | '\r' => 13,
+                        c => rustemu_core::font::char_to_cp437(c),
+                    })
+                    .collect()
+            };
+        }
+        self.feed_prepared_input();
         self.build.failed = false;
         if let Some(m) = self.session.x86_mut() {
             m.timer_irq = self.settings.timer_irq;

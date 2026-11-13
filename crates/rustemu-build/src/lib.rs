@@ -10,6 +10,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+pub mod mars;
+pub mod project;
+
 /// Snapshot of one document revision and its build configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -31,6 +34,9 @@ pub struct Request {
     pub roots: Vec<PathBuf>,
     /// Native filesystem access; browser workers always use false.
     pub host: bool,
+    /// Restrict lookups to exact normalized package paths.
+    #[serde(default)]
+    pub portable: bool,
     /// Optional native exception-handler path.
     pub exception_handler: Option<String>,
     /// Assemble the other .asm/.s files in the main source directory.
@@ -91,12 +97,19 @@ impl Loader<'_> {
             self.failure = Some("Source path budget exceeded".into());
             return None;
         }
+        let normalized;
+        let name = if self.request.portable {
+            normalized = project::source_path(name)?;
+            normalized.as_str()
+        } else {
+            name
+        };
         let base = Path::new(name).file_name()?.to_string_lossy();
         let from_memory = self
             .request
             .files
             .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name) || k.eq_ignore_ascii_case(&base))
+            .find(|(k, _)| k.eq_ignore_ascii_case(name) || (!self.request.portable && k.eq_ignore_ascii_case(&base)))
             .map(|(_, v)| v.clone());
         let source = if self.request.host {
             std::iter::once(PathBuf::from(name))
@@ -117,7 +130,7 @@ impl Loader<'_> {
 }
 impl rustemu_asm::FileLoader for Loader<'_> {
     fn load(&mut self, name: &str, from_file: &str) -> Option<(String, String)> {
-        if name.eq_ignore_ascii_case("emu8086.inc") {
+        if name.eq_ignore_ascii_case("emu8086.inc") && !self.request.portable {
             let key = "emu8086.inc";
             if !self.sources.contains_key(key) {
                 let s = rustemu_asm::EMU8086_INC.to_string();
@@ -167,7 +180,7 @@ pub fn execute(request: Request, cancel: Arc<AtomicBool>) -> Response {
                 loader.read(p).map(|text| rustemu_mips::asm::SourceFile { name: p.into(), text })
             };
             let handler = match request.exception_handler.as_deref() {
-                Some(p) if request.host => match read_unit(&mut loader, p) {
+                Some(p) if request.host || request.portable => match read_unit(&mut loader, p) {
                     Some(h) => Some(h),
                     None => return Outcome::Failed(format!("Cannot read exception handler: {p}")),
                 },
@@ -199,6 +212,29 @@ pub fn execute(request: Request, cancel: Arc<AtomicBool>) -> Response {
                 paths.sort_by_key(|p| (!p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm")), p.clone()));
                 for path in paths {
                     let name = path.to_string_lossy();
+                    let Some(f) = read_unit(&mut loader, &name) else {
+                        return Outcome::Failed(format!("Cannot read source: {name}"));
+                    };
+                    others.push(f);
+                }
+            }
+            if request.project && !request.host && request.portable {
+                let parent = Path::new(&request.name).parent();
+                let mut names: Vec<_> = request
+                    .files
+                    .keys()
+                    .filter(|name| {
+                        *name != &request.name
+                            && Some(name.as_str()) != request.exception_handler.as_deref()
+                            && Path::new(name).parent() == parent
+                            && Path::new(name)
+                                .extension()
+                                .is_some_and(|e| e.eq_ignore_ascii_case("asm") || e.eq_ignore_ascii_case("s"))
+                    })
+                    .cloned()
+                    .collect();
+                names.sort_by_key(|p| (!p.to_ascii_lowercase().ends_with(".asm"), p.clone()));
+                for name in names {
                     let Some(f) = read_unit(&mut loader, &name) else {
                         return Outcome::Failed(format!("Cannot read source: {name}"));
                     };

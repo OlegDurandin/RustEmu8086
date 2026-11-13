@@ -2612,6 +2612,7 @@ name = "rustemu-cli"
 version = "0.2.0"
 dependencies = [
  "rustemu-asm",
+ "rustemu-build",
  "rustemu-core",
  "rustemu-mips",
  "rustemu-session",

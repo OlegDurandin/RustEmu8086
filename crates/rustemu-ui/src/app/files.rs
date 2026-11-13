@@ -34,6 +34,7 @@ impl App {
 
     fn new_from(&mut self, template: &str) {
         self.store_session();
+        self.doc.project = None;
         self.doc.path = None;
         self.doc.name = None;
         self.doc.from_link = false;
@@ -57,7 +58,7 @@ impl App {
         }
         let dir = self.doc.path.as_ref().and_then(|p| p.parent());
         let filters: [crate::platform::Filter; 2] =
-            [("Assembly", &["asm", "s", "nasm", "inc", "txt"]), ("All files", &["*"])];
+            [("Assembly or project", &["asm", "s", "nasm", "inc", "txt", "remu"]), ("All files", &["*"])];
         if let Some(p) = crate::platform::pick_file(&filters, dir) {
             let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
             if matches!(ext.as_str(), "com" | "exe" | "bin" | "boot") {
@@ -70,6 +71,19 @@ impl App {
 
     /// Opens a source file in the editor.
     pub fn open_path(&mut self, p: &Path) {
+        if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("remu")) {
+            match rustemu_build::project::read_package(p) {
+                Ok(project) => self.open_shared(crate::share::Shared {
+                    name: project.entry.clone(),
+                    text: project.files[&project.entry].clone(),
+                    arch: Arch::from_name(&project.architecture).unwrap(),
+                    run: false,
+                    project: Some(project),
+                }),
+                Err(e) => self.notice("Open project", &e),
+            }
+            return;
+        }
         match std::fs::read(p) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
@@ -81,6 +95,7 @@ impl App {
                 self.source_changed();
                 self.doc.text = text;
                 self.doc.saved_text = self.doc.text.clone();
+                self.doc.project = None;
                 self.doc.path = Some(p.to_path_buf());
                 self.doc.name = None;
                 self.doc.from_link = false;
@@ -101,6 +116,10 @@ impl App {
     /// anything else goes into the editor.
     fn open_upload(&mut self, u: crate::platform::Upload) {
         let ext = Path::new(&u.name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if ext == "remu" {
+            self.import_project(&u.bytes);
+            return;
+        }
         if matches!(ext.as_str(), "com" | "exe" | "bin" | "boot" | "img") {
             match self.session.load_named(&u.name, u.bytes) {
                 Ok(()) => self.after_binary_load(),
@@ -118,7 +137,7 @@ impl App {
         if let Some(purpose) = self.web.pending_upload.take() {
             let filters: &[crate::platform::Filter] = match purpose {
                 UploadFor::Open => &[
-                    ("Assembly or executable", &["asm", "nasm", "inc", "txt", "com", "exe", "bin"]),
+                    ("Assembly or executable", &["asm", "nasm", "inc", "txt", "s", "remu", "com", "exe", "bin"]),
                     ("All files", &["*"]),
                 ],
                 UploadFor::DriveFiles => &[],
@@ -151,6 +170,9 @@ impl App {
     /// Saves the file (in the browser: as a program of "my programs"; a new one asks for its name
     /// first and returns `false`).
     pub fn save(&mut self) -> bool {
+        if self.doc.project.is_some() && !self.front.browser {
+            return self.save_as();
+        }
         if self.front.browser {
             match self.doc.program.clone() {
                 Some(name) => {
@@ -168,6 +190,19 @@ impl App {
 
     /// Saves under a new name (the browser: asks for a name in "my programs").
     pub fn save_as(&mut self) -> bool {
+        if self.doc.project.is_some() && !self.front.browser {
+            return match self.portable_project() {
+                Ok(p) if self.export_project(&p) => {
+                    self.doc.saved_text = self.doc.text.clone();
+                    true
+                }
+                Ok(_) => false,
+                Err(e) => {
+                    self.notice("Save project", &e);
+                    false
+                }
+            };
+        }
         if self.front.browser {
             self.dialogs.save_name = Some(crate::programs::SaveName { text: self.file_name(), then: None });
             return false;
@@ -189,7 +224,7 @@ impl App {
             self.download_source();
             self.status = format!("This browser cannot share files: {name} was downloaded instead");
         } else {
-            self.dialogs.share = Some(crate::share::ShareDialog { run: false });
+            self.dialogs.share = Some(crate::share::ShareDialog::new(false));
         }
     }
 
@@ -205,6 +240,7 @@ impl App {
             Ok(()) => {
                 self.doc.example_key = None;
                 self.doc.saved_text = self.doc.text.clone();
+                self.doc.project = None;
                 self.doc.path = Some(p.to_path_buf());
                 self.add_recent(p);
                 *self.settings.last_file_mut(self.arch()) = Some(p.to_path_buf());
@@ -241,6 +277,7 @@ impl App {
     /// Opens `src` as the built-in example `name` (it has no file; Save asks for one).
     pub fn load_example_text(&mut self, name: &str, src: &str) {
         self.store_session();
+        self.doc.project = None;
         self.doc.path = None;
         self.doc.name = None;
         self.doc.from_link = false;

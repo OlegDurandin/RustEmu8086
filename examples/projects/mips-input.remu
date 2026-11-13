@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "architecture": "MIPS32",
+  "entry": "main.s",
+  "dialect": null,
+  "mars": {
+    "delayed_branching": true,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "CompactDataAtZero",
+    "program_arguments_enabled": true,
+    "program_arguments": "lesson 1",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.s": ".include \"values.inc\"\n.text\n.globl main\nmain:\n    li $v0, 5\n    syscall\n    addiu $a0, $v0, OFFSET\n    li $v0, 1\n    syscall\n    li $v0, 10\n    syscall\n",
+    "values.inc": ".eqv OFFSET 2\n"
+  },
+  "input": "40\n"
+}

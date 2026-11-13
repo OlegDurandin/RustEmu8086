@@ -66,21 +66,14 @@ impl App {
         b
     }
 
-    pub(super) fn submit_build(&mut self, action: BuildAction) -> bool {
-        if !self.front.background_builds {
-            return false;
+    /// Current sources and settings, restricted to the package when one is open.
+    pub(crate) fn build_request(&self, version: u64) -> rustemu_build::Request {
+        if let Some(mut project) = self.doc.project.clone() {
+            project.files.insert(project.entry.clone(), self.doc.text.clone());
+            project.mars = self.settings.mars.clone();
+            project.dialect = self.settings.syntax.dialect();
+            return project.request(version);
         }
-        self.cancel_build();
-        self.run = RunMode::Paused;
-        self.build.failed = true;
-        self.build.messages.clear();
-        self.clear_errors();
-        if self.doc.text.len() > rustemu_mips::asm::MAX_SOURCE_BYTES {
-            self.status = "Source byte budget exceeded".into();
-            self.build.messages.push(Message { text: self.status.clone(), loc: None, span: None, error: true });
-            return true;
-        }
-        self.build.document_version = self.build.document_version.wrapping_add(1);
         let mut files = std::collections::BTreeMap::new();
         if let Some(drive) = self.x86_session().and_then(|s| s.dos_memory_drive()) {
             for (name, bytes) in drive.files() {
@@ -94,8 +87,8 @@ impl App {
         for example in crate::examples::MIPS_EXAMPLES {
             files.entry(example.1.into()).or_insert_with(|| example.2.into());
         }
-        let request = rustemu_build::Request {
-            version: self.build.document_version,
+        rustemu_build::Request {
+            version,
             mips: self.arch() == Arch::Mips32,
             name: self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name()),
             text: self.doc.text.clone(),
@@ -103,12 +96,44 @@ impl App {
             mars: self.settings.mars.mips(),
             files,
             roots: self.vdrive(self.doc.path.as_deref()).into_iter().collect(),
+            portable: false,
             host: !self.front.browser,
             exception_handler: (self.settings.mars.exception_handler_enabled
                 && !self.settings.mars.exception_handler.trim().is_empty())
             .then(|| self.settings.mars.exception_handler.clone()),
             project: self.settings.mars.assemble_all,
-        };
+        }
+    }
+
+    pub(super) fn submit_build(&mut self, action: BuildAction) -> bool {
+        if !self.front.background_builds {
+            if self.doc.project.is_some() && self.build.completed.is_none() {
+                let r = rustemu_build::execute(
+                    self.build_request(self.build.document_version),
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                );
+                self.build.sources = r.sources;
+                if let rustemu_build::Outcome::Failed(e) = r.outcome {
+                    self.build.failed = true;
+                    self.notice("Project assembly", &e);
+                    return true;
+                }
+                self.build.completed = Some(r.outcome);
+            }
+            return false;
+        }
+        self.cancel_build();
+        self.run = RunMode::Paused;
+        self.build.failed = true;
+        self.build.messages.clear();
+        self.clear_errors();
+        if self.doc.text.len() > rustemu_mips::asm::MAX_SOURCE_BYTES {
+            self.status = "Source byte budget exceeded".into();
+            self.build.messages.push(Message { text: self.status.clone(), loc: None, span: None, error: true });
+            return true;
+        }
+        self.build.document_version = self.build.document_version.wrapping_add(1);
+        let request = self.build_request(self.build.document_version);
         match crate::build_task::Task::start(request.clone()) {
             Ok(task) => {
                 self.build.pending = Some(PendingBuild {
@@ -151,8 +176,9 @@ impl App {
     pub fn poll_build(&mut self, ctx: &egui::Context) {
         let Some(p) = self.build.pending.as_ref() else { return };
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        let current_name =
-            self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
+        let current_name = self.doc.project.as_ref().map(|p| p.entry.clone()).unwrap_or_else(|| {
+            self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name())
+        });
         if p.request.version != self.build.document_version
             || p.request.mips != (self.arch() == Arch::Mips32)
             || p.request.name != current_name
@@ -340,6 +366,26 @@ mod tests {
         a.single_step();
         assert!(!a.is_building());
         assert_eq!(a.session.target.instr_count(), 1);
+    }
+
+    #[test]
+    fn portable_link_builds_in_a_worker_and_runs_with_its_internal_entry_path() {
+        let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/projects/mips-input.remu"));
+        let mut p = rustemu_build::project::Project::decode(bytes).unwrap();
+        p.files = p.files.into_iter().map(|(name, text)| (format!("src/{name}"), text)).collect();
+        p.entry = format!("src/{}", p.entry);
+        let mut a = app(Arch::Mips32);
+        a.doc.saved_text = a.doc.text.clone();
+        let shared = crate::share::parse(&crate::share::project_fragment(&p, true).unwrap()).unwrap();
+        a.open_link(shared);
+        assert!(a.is_building());
+        complete(&mut a);
+        assert!(!a.build.failed, "{}", a.status);
+        assert!(a.loaded());
+        assert!(!matches!(a.run, RunMode::Paused));
+        assert_eq!(a.build.sources.len(), 2);
+        assert!(a.session.target.has_pending_input());
+        a.stop();
     }
 
     #[test]

@@ -939,6 +939,7 @@ seen   db 'seen.txt', 0
 out    db 'out.txt', 0
 ";
     app.open_link(rustemu_ui::share::Shared {
+        project: None,
         name: "link.asm".into(),
         text: text.into(),
         run: true,
@@ -1102,9 +1103,9 @@ fn programs_are_kept_in_the_browser() {
 fn share_links_open_the_program() {
     let mut app = app_with_example(0);
     app.front.share_base = Some("https://example.org/RustEmu8086/".into());
-    app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: true });
-    let link = app.share_link(true);
-    assert!(link.starts_with("https://example.org/RustEmu8086/#name=hello.asm&code="), "{link}");
+    app.dialogs.share = Some(rustemu_ui::share::ShareDialog::new(true));
+    let link = app.share_link(true).unwrap();
+    assert!(link.starts_with("https://example.org/RustEmu8086/#project="), "{link}");
     let shared = rustemu_ui::share::parse(link.split_once('#').unwrap().1).unwrap();
     assert_eq!((shared.text.as_str(), shared.run), (app.doc.text.as_str(), true));
     let mut h = harness(app);

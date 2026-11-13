@@ -33,6 +33,7 @@ usage:
   --arch <a>             8086 or mips; by default .s files and sources written for MIPS
                          (registers like $t0, syscall) are MIPS32 programs (MARS)
 
+The .remu project format carries sources, includes, MARS settings and prepared input.
 Options accept --name=value; use -- before a file starting with a dash.
 Unknown, duplicate, missing or unsupported options are errors. --help shows this help.
 
@@ -81,6 +82,21 @@ fn main() -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+/// Packages use the same validated format and host-free build path as the GUI.
+fn portable_project(path: &Path) -> Result<Option<rustemu_build::project::Project>, String> {
+    if is_ext(path, "remu") { rustemu_build::project::read_package(path).map(Some) } else { Ok(None) }
+}
+
+fn package_build(p: &rustemu_build::project::Project) -> Result<rustemu_build::Outcome, String> {
+    let response = rustemu_build::execute(p.request(0), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    match response.outcome {
+        rustemu_build::Outcome::Failed(e) => Err(e),
+        rustemu_build::Outcome::X86(Err(e)) => Err(e.to_string()),
+        rustemu_build::Outcome::Mips(Err(e)) => Err(e.to_string()),
+        outcome => Ok(outcome),
     }
 }
 
@@ -157,7 +173,14 @@ fn assemble_mips(path: &Path, text: &str, args: &Args) -> Result<rustemu_mips::a
 }
 
 fn cmd_asm_mips(path: &Path, text: &str, args: &Args) -> Result<u8, String> {
-    let prog = assemble_mips(path, text, args)?;
+    let prog = if let Some(p) = portable_project(path)? {
+        let rustemu_build::Outcome::Mips(Ok(prog)) = package_build(&p)? else {
+            return Err("Expected MIPS project".into());
+        };
+        prog
+    } else {
+        assemble_mips(path, text, args)?
+    };
     let words: usize = prog.statements.iter().map(|s| s.words.len()).sum();
     let data: u32 = prog.data.iter().map(|d| d.len).sum();
     println!("{} (MIPS32): {words} instructions, {data} bytes of data", path.display());
@@ -182,16 +205,34 @@ fn cmd_asm_mips(path: &Path, text: &str, args: &Args) -> Result<u8, String> {
 
 fn cmd_asm(args: &Args) -> Result<u8, String> {
     let path = &args.file;
-    let text = rustemu_asm::read_source_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let arch = arch_of(path, Some(&text), args)?;
-    args.validate_arch(arch)?;
+    let package = portable_project(path)?;
+    let text = match &package {
+        Some(p) => p.files[&p.entry].clone(),
+        None => rustemu_asm::read_source_file(path).map_err(|e| format!("{}: {e}", path.display()))?,
+    };
+    let arch = match &package {
+        Some(p) => Arch::from_name(&p.architecture).unwrap(),
+        None => arch_of(path, Some(&text), args)?,
+    };
+    if package.is_some() {
+        args.validate_portable(arch)?;
+    } else {
+        args.validate_arch(arch)?;
+    }
     if arch == Arch::Mips32 {
         return cmd_asm_mips(path, &text, args);
     }
     let dialect = args.syntax;
     let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
-    let prog = rustemu_asm::assemble_dialect(&path.to_string_lossy(), &text, &mut loader, dialect)
-        .map_err(|e| e.to_string())?;
+    let prog = if let Some(p) = package {
+        let rustemu_build::Outcome::X86(Ok(prog)) = package_build(&p)? else {
+            return Err("Expected 8086 project".into());
+        };
+        prog
+    } else {
+        rustemu_asm::assemble_dialect(&path.to_string_lossy(), &text, &mut loader, dialect)
+            .map_err(|e| e.to_string())?
+    };
     let out = args.out.clone().unwrap_or_else(|| path.with_extension(prog.format.extension()));
     std::fs::write(&out, prog.file_bytes()).map_err(|e| format!("{}: {e}", out.display()))?;
     println!(
@@ -217,12 +258,36 @@ fn cmd_asm(args: &Args) -> Result<u8, String> {
 
 fn cmd_run(args: &Args) -> Result<u8, String> {
     let path = &args.file;
-    let text = source_text(path, args)?;
-    let arch = arch_of(path, text.as_deref(), args)?;
-    args.validate_arch(arch)?;
+    let package = portable_project(path)?;
+    let text = if package.is_some() { None } else { source_text(path, args)? };
+    let arch = match &package {
+        Some(p) => Arch::from_name(&p.architecture).unwrap(),
+        None => arch_of(path, text.as_deref(), args)?,
+    };
+    if package.is_some() {
+        args.validate_portable(arch)?;
+    } else {
+        args.validate_arch(arch)?;
+    }
     let mips = arch == Arch::Mips32;
     let mut s = if mips { Session::new_mips() } else { Session::new() };
-    if mips {
+    if let Some(p) = &package {
+        match package_build(p)? {
+            rustemu_build::Outcome::Mips(Ok(prog)) => {
+                if let Some(m) = s.mips_mut() {
+                    m.files.storage = rustemu_mips::files::Storage::Memory(Default::default());
+                    m.dialogs_in_console = true;
+                    m.program_arguments = p.mars.arguments();
+                }
+                s.load_mips(prog, &p.entry)?;
+            }
+            rustemu_build::Outcome::X86(Ok(prog)) => {
+                s.set_dos_memory_drive(Default::default());
+                s.load_program(prog)?;
+            }
+            _ => unreachable!(),
+        }
+    } else if mips {
         // MIPS file services work in the folder of the program, as DOS's drive C: does here.
         let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf();
         if let Some(m) = s.mips_mut() {
@@ -250,13 +315,32 @@ fn cmd_run(args: &Args) -> Result<u8, String> {
     let trace = args.trace;
     // Enter is CR for DOS, a new line for MIPS's console.
     let enter = if mips { "\n" } else { "\r" };
-    let mut input: Option<Vec<u8>> = args.input.as_deref().map(|t| t.replace("\\n", enter).into_bytes());
+    let mut input: Option<Vec<u8>> =
+        args.input.as_deref().map(|t| t.replace("\\n", enter).into_bytes()).or_else(|| {
+            package.as_ref().map(|p| {
+                let text = p.input.replace("\r\n", "\n").replace('\r', "\n");
+                if mips {
+                    text.into_bytes()
+                } else {
+                    text.chars().map(|c| if c == '\n' { 13 } else { rustemu_core::font::char_to_cp437(c) }).collect()
+                }
+            })
+        });
     let mut keys: std::collections::VecDeque<u8> = args.keys.replace("\\n", "\n").bytes().collect();
     let mut stdout = std::io::stdout();
     let mut printed = 0;
     let mut executed = 0u64;
     s.target.set_history(false);
     let code = loop {
+        if package.is_some()
+            && !s.target.has_pending_input()
+            && let Some(bytes) = &mut input
+        {
+            let count = bytes.len().min(if mips { 4096 } else { 64 });
+            for c in bytes.drain(..count) {
+                s.target.push_char(c);
+            }
+        }
         let ev = if executed >= max {
             Event::Budget
         } else {

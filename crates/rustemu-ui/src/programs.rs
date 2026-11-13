@@ -27,6 +27,9 @@ fn draft_key(arch: Arch) -> &'static str {
 /// A program saved in the browser.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StoredProgram {
+    /// Portable dependencies, settings and prepared input, when saved as a project.
+    #[serde(default)]
+    pub project: Option<rustemu_build::project::Project>,
     /// The source.
     pub text: String,
     /// Time of the last save, seconds since 1970.
@@ -71,6 +74,7 @@ struct Draft {
     saved: Option<String>,
     /// Opened from a link (and not saved since): runs on a temporary drive C:.
     from_link: bool,
+    project: Option<rustemu_build::project::Project>,
 }
 
 fn now() -> f64 {
@@ -91,9 +95,10 @@ impl App {
     /// Saves the editor text as program `name` of "my programs" (replacing one of that name).
     pub fn save_program(&mut self, name: &str) {
         let arch = arch_field(self.arch());
-        self.web
-            .programs
-            .insert(name.to_string(), StoredProgram { text: self.doc.text.clone(), modified: now(), arch });
+        self.web.programs.insert(
+            name.to_string(),
+            StoredProgram { project: self.stored_project(), text: self.doc.text.clone(), modified: now(), arch },
+        );
         self.doc.program = Some(name.to_string());
         self.doc.name = Some(name.to_string());
         self.doc.example_key = None;
@@ -107,7 +112,16 @@ impl App {
         if !self.enter_workspace_for(&PendingAction::Program(name.to_string()), Some(arch), &text) {
             return;
         }
+        if let Some(p) = &self.web.programs[name].project
+            && let Err(e) = p.validate()
+        {
+            self.notice("Open project", &e);
+            return;
+        }
         self.store_session();
+        self.doc.project = self.web.programs[name].project.clone();
+        self.apply_project_settings();
+        self.source_changed();
         self.doc.path = None;
         self.doc.example_key = None;
         self.doc.program = Some(name.to_string());
@@ -148,7 +162,9 @@ impl App {
             };
         }
         self.dialogs.open_in = Some(arch);
-        self.web.programs.insert(name.clone(), StoredProgram { text, modified: now(), arch: arch_field(arch) });
+        self.web
+            .programs
+            .insert(name.clone(), StoredProgram { project: None, text, modified: now(), arch: arch_field(arch) });
         self.open_program(&name);
     }
 
@@ -195,6 +211,7 @@ impl App {
             text: self.doc.text.clone(),
             saved: (self.doc.saved_text != self.doc.text).then(|| self.doc.saved_text.clone()),
             from_link: self.from_link(),
+            project: self.stored_project(),
         };
         Some((draft_key(self.arch()), ron::ser::to_string(&draft).ok()?))
     }
@@ -219,6 +236,8 @@ impl App {
     /// Restores the draft of the shown workspace.
     fn restore_draft(&mut self, storage: &dyn eframe::Storage) {
         let Some(d) = eframe::get_value::<Draft>(storage, draft_key(self.arch())) else { return };
+        self.doc.project = d.project.filter(|p| p.validate().is_ok());
+        self.apply_project_settings();
         self.doc.path = None;
         self.doc.program = d.program.filter(|p| self.web.programs.contains_key(p));
         self.doc.name = d.name;

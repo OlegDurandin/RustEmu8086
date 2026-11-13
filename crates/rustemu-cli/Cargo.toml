@@ -9,6 +9,7 @@ name = "rustemu"
 path = "src/main.rs"
 
 [dependencies]
+rustemu-build.workspace = true
 rustemu-core.workspace = true
 rustemu-asm.workspace = true
 rustemu-session.workspace = true

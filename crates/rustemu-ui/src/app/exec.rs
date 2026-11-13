@@ -13,6 +13,20 @@ pub(crate) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 impl App {
+    /// Delivers prepared input in chunks that fit the machine's keyboard queue.
+    pub(crate) fn feed_prepared_input(&mut self) {
+        if self.session.target.has_pending_input() {
+            return;
+        }
+        let limit = if self.arch() == Arch::Mips32 { 4096 } else { 64 };
+        for _ in 0..limit {
+            let Some(c) = self.program.prepared_input.pop_front() else {
+                break;
+            };
+            self.session.target.push_char(c);
+        }
+    }
+
     /// Runs `f`; a panic inside it (a bug of the emulator) stops the program with a notice instead
     /// of closing the application. None after a panic. (In the browser a panic cannot be caught:
     /// the web page shows it and keeps the text — `rustemu-web`.)
@@ -65,6 +79,7 @@ impl App {
         }
         self.run = RunMode::Paused;
         self.begin_exec();
+        self.feed_prepared_input();
         let Some(ev) = self.catching(|app| app.session.target.step()) else { return };
         self.handle_event(ev);
         self.sync_mips_files();
@@ -335,6 +350,9 @@ impl App {
     /// The browser: copies the files a MIPS program wrote to drive C: (DOS's memory drive, kept
     /// in the browser and shown in the "drive C:" window), when they changed.
     pub(crate) fn sync_mips_files(&mut self) {
+        if self.program.portable {
+            return;
+        }
         let Some(m) = self.session.mips() else { return };
         let rustemu_mips::files::Storage::Memory(files) = &m.files.storage else { return };
         if m.files.generation == self.web.mips_files_synced {
@@ -366,6 +384,7 @@ impl App {
         if self.run == RunMode::Paused || !self.loaded() {
             return;
         }
+        self.feed_prepared_input();
         let now = ctx.input(|i| i.time);
         let waiting = self.session.target.is_waiting_input() && !self.session.target.has_pending_input();
         if waiting {

@@ -321,6 +321,8 @@ pub struct SavedState {
 /// The program being edited: where it comes from and its text.
 #[derive(Default)]
 pub struct Document {
+    /// Self-contained project sources and prepared input.
+    pub project: Option<rustemu_build::project::Project>,
     /// The file on disk (`None`: new, an example or a program of the browser).
     pub path: Option<PathBuf>,
     /// Name of a file without a path (opened in the browser), shown and used for downloads.
@@ -406,6 +408,10 @@ pub struct Build {
 /// The program loaded in the emulator: its sources.
 #[derive(Default)]
 pub struct Program {
+    /// The loaded image belongs to a portable project.
+    pub(crate) portable: bool,
+    /// Prepared keystrokes not yet delivered to the bounded machine keyboard.
+    pub(crate) prepared_input: std::collections::VecDeque<u8>,
     /// Source files (lines); the first is the main one.
     pub files: Vec<(String, Vec<String>)>,
     /// Macro/procedure index of each source file.

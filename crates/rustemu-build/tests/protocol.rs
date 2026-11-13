@@ -15,6 +15,7 @@ fn request(mips: bool) -> Request {
         mars: Default::default(),
         files: BTreeMap::new(),
         roots: vec![],
+        portable: false,
         host: false,
         exception_handler: None,
         project: false,

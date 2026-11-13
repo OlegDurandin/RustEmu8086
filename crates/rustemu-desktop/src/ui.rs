@@ -75,7 +75,7 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
                 app.download_source();
             }
             if ui.button("Share link…").on_hover_text("A link that opens this program in the web version").clicked() {
-                app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
+                app.dialogs.share = Some(rustemu_ui::share::ShareDialog::new(false));
             }
             if ui.button("Save compiled file   ⌘B").clicked() {
                 app.compile();
@@ -367,7 +367,7 @@ fn toolbar(app: &mut App, ui: &mut Ui) {
             app.save();
         }
         if ui.button("🔗 share").on_hover_text("A link that opens this program in the web version").clicked() {
-            app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
+            app.dialogs.share = Some(rustemu_ui::share::ShareDialog::new(false));
         }
         ui.separator();
         if ui.button("⚙ compile").on_hover_text("Assemble and write the executable (⌘B)").clicked() {

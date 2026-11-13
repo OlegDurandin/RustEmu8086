@@ -180,3 +180,26 @@ fn valid_assembly_origins_help_and_literal_option_values_work() {
     assert_eq!(out.stdout, b"--");
     assert!(out.stderr.is_empty());
 }
+
+#[test]
+fn portable_packages_run_without_host_sources_and_use_packaged_input() {
+    let f = Fixture::new();
+    f.write("mips.remu", include_bytes!("../../../examples/projects/mips-input.remu"));
+    f.write("x86.remu", include_bytes!("../../../examples/projects/8086-include.remu"));
+    // A same-named host file must not override the packaged include.
+    f.write("values.inc", ".eqv OFFSET 999\n");
+    for (name, expected) in [("mips.remu", "40\n42"), ("x86.remu", "X!")] {
+        let out = f.run(&["run", name, "--max=1000"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), expected);
+    }
+    let out = f.run(&["run", "mips.remu", "--input=5\\n"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "5\n7");
+    let out = f.run(&["asm", "mips.remu", "-o", "text.bin"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!std::fs::read(f.0.join("text.bin")).unwrap().is_empty());
+    for args in [vec!["run", "mips.remu", "--arch=8086"], vec!["run", "mips.remu", "--memory=Default"]] {
+        assert!(!f.run(&args).status.success());
+    }
+}

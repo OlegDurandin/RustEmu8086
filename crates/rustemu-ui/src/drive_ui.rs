@@ -16,7 +16,9 @@ fn dos_name(key: &str) -> String {
 }
 
 pub(crate) fn drive_ui(app: &mut App, ui: &mut Ui) {
-    if app.web.own_drive.is_some() {
+    if app.doc.project.is_some() {
+        ui.colored_label(crate::colors::warn(ui), crate::share::project_drive_text());
+    } else if app.web.own_drive.is_some() {
         ui.colored_label(crate::colors::warn(ui), crate::share::temporary_drive_text(&app.file_name()));
     } else {
         ui.label("Files DOS programs see as drive C: (INT 21h). They are kept in this browser.");

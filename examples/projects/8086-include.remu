@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "architecture": "8086",
+  "entry": "main.asm",
+  "dialect": "Masm",
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": false,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.asm": "org 100h\ninclude 'values.inc'\nmov ah, 1\nint 21h\nmov dl, MARK\nmov ah, 2\nint 21h\nmov ax, 4c00h\nint 21h\n",
+    "values.inc": "MARK equ '!'\n"
+  },
+  "input": "X"
+}

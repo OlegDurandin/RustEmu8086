@@ -181,6 +181,33 @@ impl Args {
     }
 
     /// Rejects options that would otherwise be silently ignored by the selected machine.
+    /// Package assembly configuration is authoritative; execution controls and input may vary.
+    pub fn validate_portable(&self, arch: Arch) -> Result<(), String> {
+        self.validate_arch(arch)?;
+        if self.arch.is_some_and(|a| a != arch) {
+            return Err("--arch conflicts with project architecture".into());
+        }
+        for name in &self.seen {
+            if matches!(
+                name.as_str(),
+                "--syntax"
+                    | "--args"
+                    | "--program-args"
+                    | "--memory"
+                    | "--delayed-branching"
+                    | "--self-modifying"
+                    | "--start-at-main"
+                    | "--no-pseudo"
+                    | "--warnings-are-errors"
+                    | "--project"
+                    | "--exception-handler"
+            ) {
+                return Err(format!("option '{name}' overrides packaged settings; edit the project instead"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate_arch(&self, arch: Arch) -> Result<(), String> {
         for name in &self.seen {
             let supported = match name.as_str() {

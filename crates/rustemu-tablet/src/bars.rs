@@ -249,7 +249,7 @@ pub(crate) fn tabs_row(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
                 t.keypad.open = !t.keypad.open;
             }
             if small_icon(ui, Icon::Share, "share link").clicked() {
-                app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
+                app.dialogs.share = Some(rustemu_ui::share::ShareDialog::new(false));
             }
             if app.is_stale() {
                 ui.colored_label(pal::AMBER, "edited since the last build — Run / Step / Reset assemble again");
@@ -263,7 +263,7 @@ fn main_menu(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
     // Files are in the project menu (the file name in the top bar).
     ui.menu_button("Examples", |ui| rustemu_ui::examples_ui::examples_menu(app, ui, false));
     if ui.button("Share link…").clicked() {
-        app.dialogs.share = Some(rustemu_ui::share::ShareDialog { run: false });
+        app.dialogs.share = Some(rustemu_ui::share::ShareDialog::new(false));
         ui.close();
     }
     ui.separator();
