@@ -27,6 +27,10 @@ rustemu-ui.workspace = true
 eframe = { workspace = true }
 egui = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSNotification", "NSString", "NSURL"] }
+
 [dev-dependencies]
 egui_kittest = { workspace = true }
 rustemu-ui = { workspace = true, features = ["testing"] }
