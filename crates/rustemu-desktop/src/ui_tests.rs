@@ -8,6 +8,61 @@ use rustemu_ui::app::{App, PendingAction, Settings};
 use rustemu_ui::testing::{app_with_example, save};
 use rustemu_ui::tools::Tool;
 
+#[test]
+fn nasm_bios_boot_sector_single_steps_to_halt() {
+    let mut app = App::with_settings(Settings { last_file: None, timer_irq: true, ..Settings::default() });
+    app.doc.text = include_str!("../../../tests/programs/brokenthorn_boot.asm").into();
+    app.emulate();
+    assert!(app.loaded(), "{}", app.status);
+    // A timer tick between every debugger click, without a wall-clock sleep.
+    app.session.x86_mut().unwrap().instructions_per_tick = Some(1);
+    for _ in 0..1000 {
+        app.single_step();
+        if app.session.x86().unwrap().cpu.halted {
+            let text = rustemu_ui::screen::screen_text(&app.session.x86().unwrap().sys.mem);
+            assert!(text.contains("BrokenThorn Modern: boot sector OK"), "{text}");
+            return;
+        }
+    }
+    panic!("step stuck: {}", app.status);
+}
+
+#[test]
+fn nasm_bios_boot_sector_steps_over_to_halt() {
+    let mut app = App::with_settings(Settings { last_file: None, timer_irq: true, ..Settings::default() });
+    app.doc.text = include_str!("../../../tests/programs/brokenthorn_boot.asm").into();
+    app.emulate();
+    assert!(app.loaded(), "{}", app.status);
+    app.session.x86_mut().unwrap().instructions_per_tick = Some(1);
+    for _ in 0..1000 {
+        app.step_over();
+        run_until_paused(&mut app);
+        if app.session.x86().unwrap().cpu.halted {
+            let text = rustemu_ui::screen::screen_text(&app.session.x86().unwrap().sys.mem);
+            assert!(text.contains("BrokenThorn Modern: boot sector OK"), "{text}");
+            return;
+        }
+    }
+    panic!("step stuck: {}", app.status);
+}
+
+#[test]
+fn nasm_bios_boot_sector_step_button_advances_past_mov_si() {
+    let mut app = App::with_settings(Settings { last_file: None, timer_irq: true, ..Settings::default() });
+    app.doc.text = include_str!("../../../tests/programs/brokenthorn_boot.asm").into();
+    let mut h = harness(app);
+    h.state_mut().emulate();
+    h.state_mut().session.x86_mut().unwrap().instructions_per_tick = Some(1);
+    h.run();
+    for _ in 0..30 {
+        let before = h.state().session.target.pc();
+        h.get_by_label("⏭ Single step").click();
+        h.run();
+        let app = h.state();
+        assert_ne!(app.session.target.pc(), before, "button stuck at {}", app.status);
+    }
+}
+
 fn harness(app: App) -> Harness<'static, App> {
     let h = Harness::builder()
         .with_size([1440.0, 900.0])

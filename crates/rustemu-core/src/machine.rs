@@ -744,13 +744,7 @@ impl Machine {
             if self.sys.mem.is_journaling() {
                 self.sys.mem.set_journaling(false);
             }
-            let mut ev = self.step_inner();
-            let mut guard = 0;
-            while ev == Event::Continue && Self::in_stubs(self.cpu.pc()) && guard < 256 {
-                ev = self.step_inner();
-                guard += 1;
-            }
-            return ev;
+            return self.step_with_stubs();
         }
         self.history_barrier = false;
         self.sys.touched = false;
@@ -772,13 +766,7 @@ impl Machine {
         let ticks_addr = video::BDA + 0x6C;
         let snap_bios_ticks =
             self.sys.mem.read16(ticks_addr) as u32 | ((self.sys.mem.read16(ticks_addr + 2) as u32) << 16);
-        let mut ev = self.step_inner();
-        // Finish BIOS stub code so that INT n steps over the service routine.
-        let mut guard = 0;
-        while ev == Event::Continue && Self::in_stubs(self.cpu.pc()) && guard < 256 {
-            ev = self.step_inner();
-            guard += 1;
-        }
+        let ev = self.step_with_stubs();
         {
             let undo = self.sys.mem.take_journal();
             let snap_system = snap_system.map(|s| self.finish_system_snapshot(s));
@@ -812,6 +800,31 @@ impl Machine {
                     bios_ticks: snap_bios_ticks,
                     system: snap_system.map(Box::new),
                 });
+            }
+        }
+        ev
+    }
+
+    /// Complete internal BIOS services within a debugger step. An IRQ handled entirely by
+    /// BIOS must also execute the interrupted instruction: otherwise a timer tick between
+    /// every click consumes every step and the debugger never advances. User IRQ handlers
+    /// remain visible and are stepped normally.
+    fn step_with_stubs(&mut self) -> Event {
+        let pc = self.cpu.pc();
+        let count = self.cpu.instr_count;
+        let mut ev = self.step_inner();
+        // Hardware interrupt entry executes no opcode (unlike INT n or a CPU trap).
+        let bios_irq = ev == Event::Continue && self.cpu.instr_count == count && Self::in_stubs(self.cpu.pc());
+        for pass in 0..2 {
+            let mut guard = 0;
+            while ev == Event::Continue && Self::in_stubs(self.cpu.pc()) && guard < 256 {
+                ev = self.step_inner();
+                guard += 1;
+            }
+            if pass == 0 && bios_irq && ev == Event::Continue && self.cpu.pc() == pc {
+                ev = self.step_inner();
+            } else {
+                break;
             }
         }
         ev
@@ -1151,6 +1164,51 @@ impl Machine {
             o = o.wrapping_add(1);
         }
         v
+    }
+}
+
+#[cfg(test)]
+mod irq_step_tests {
+    use super::*;
+
+    #[test]
+    fn bios_timer_irq_does_not_consume_the_debugger_step() {
+        for history in [false, true] {
+            let mut m = Machine::new();
+            m.load_com(&[0xB8, 0x34, 0x12, 0x90, 0xF4]).unwrap(); // MOV AX,1234h; NOP; HLT
+            m.history_enabled = history;
+            m.sys.irq.push_back(8);
+            let before = m.cpu.clone();
+            assert_eq!(m.step(), Event::Continue);
+            assert_eq!(m.cpu.ip, before.ip + 3);
+            assert_eq!(m.cpu.regs[cpu::AX], 0x1234);
+            if history {
+                assert!(m.step_back());
+                assert_eq!(m.cpu, before);
+                assert_eq!(m.sys.irq.front(), Some(&8));
+                assert_eq!(m.step(), Event::Continue);
+                assert_eq!(m.cpu.regs[cpu::AX], 0x1234);
+            }
+        }
+    }
+
+    #[test]
+    fn user_timer_handler_remains_visible_to_the_debugger() {
+        for vector in [8u8, 0x1C] {
+            let mut m = Machine::new();
+            m.load_com(&[0xB8, 0x34, 0x12, 0xF4]).unwrap();
+            let cs = m.cpu.cs();
+            m.sys.mem.write16(vector as u32 * 4, 0x200);
+            m.sys.mem.write16(vector as u32 * 4 + 2, cs);
+            m.sys.mem.load(linear(cs, 0x200), &[0x43, 0xCF]); // INC BX; IRET
+            m.sys.irq.push_back(8);
+            assert_eq!(m.step(), Event::Continue);
+            assert_eq!(m.cpu.pc(), linear(cs, 0x200));
+            assert_eq!(m.cpu.regs[cpu::AX], 0);
+            let bx = m.cpu.regs[cpu::BX];
+            assert_eq!(m.step(), Event::Continue);
+            assert_eq!(m.cpu.regs[cpu::BX], bx + 1);
+        }
     }
 }
 
