@@ -57,8 +57,12 @@ Then press **F8** (or **Step**) a few times. Went too far? **⇧F8** steps back.
   (`BX 000Fh → 000Eh`, `CF 0 → 1`) and why the flags came out the way they did.
 - **Debug at the source level.** Breakpoints with conditions, watches, call stack, Run to cursor, Step over / out,
   stop on condition, stepping into `emu8086.inc` macros.
-- **Two assembly languages.** The Emu8086 / MASM dialect and NASM (`nasm -f bin`), detected automatically.
+- **Three assembler dialects.** Emu8086 / MASM, NASM (`nasm -f bin`) and A86, detected automatically.
   COM, EXE, BIN and boot-sector programs.
+  A86 files (`.a86`, `.8`, `.08`, `.8x`) use leading-zero hexadecimal numbers, `BIT`/`BY`, typed
+  memory, repeated local labels, `#EM` macros and structures. Choose A86 in the syntax options or
+  assemble with `rustemu asm file --syntax a86`. A386 instructions still require a 386 CPU;
+  the emulator implements 8086/80186. Object-file linking and character-loop macros are not supported.
 - **A real-feeling PC.** BIOS and DOS services (INT 10h, 16h, 21h, 13h, 33h…), text and VGA 13h graphics, a
   keyboard, a mouse, floppies, a sandboxed drive C:, and the 8087 coprocessor.
 - **Emu8086 compatibility.** All 84 examples shipped with Emu8086 assemble and run (except one written for FASM),
@@ -146,7 +150,7 @@ MIT — see [LICENSE](LICENSE).
 The MIT license does not cover the Emu8086 materials (Emu8086 was an 8086 emulator published at emu8086.com; the
 site and the company no longer exist):
 
-- the **examples** in `examples/` (except `hello_nasm.asm`, `boot_nasm.asm` and the MIPS examples in
+- the **examples** in `examples/` (except `hello_nasm.asm`, `boot_nasm.asm`, `hello_a86.a86` and the MIPS examples in
   `examples/mips/`) are files from the Emu8086 distribution, unchanged (only the text encoding of `thermometer.asm`
   was converted), and belong to the authors of Emu8086;
 - the **`emu8086.inc` library** (`crates/rustemu-asm/inc/`) reproduces the Emu8086 library: its macros and

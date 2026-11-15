@@ -349,16 +349,32 @@ impl Session {
     /// Resolves a name of the loaded program for debugger expressions (case-insensitive).
     pub fn lookup_symbol(&self, name: &str) -> Option<expr::SymbolRef> {
         let p = self.program.as_ref()?;
-        let s = p.symbols.iter().find(|s| s.name.eq_ignore_ascii_case(name))?;
+        let s = p.symbols.iter().find(|s| s.name.eq_ignore_ascii_case(name)).or_else(|| {
+            if p.dialect != rustemu_asm::Dialect::A86 {
+                return None;
+            }
+            if name.eq_ignore_ascii_case("end") {
+                return p.symbols.iter().find(|s| s.name == "__A86_END");
+            }
+            let pc = self.x86().map(|m| m.cpu.ip as i64).unwrap_or(0);
+            p.symbols
+                .iter()
+                .filter(|s| s.display_name().eq_ignore_ascii_case(name))
+                .max_by_key(|s| (s.value <= pc, if s.value <= pc { s.value } else { -s.value }))
+        })?;
         // MIPS: a name is its address (flat memory); [name] reads there.
         if self.target.arch() == Arch::Mips32 {
             return Some(expr::SymbolRef::Value(s.value));
         }
         Some(match s.kind {
             SymbolKind::Variable => {
-                let (seg, off) = match self.target.arch() {
-                    Arch::I8086 => self.x86_symbol_seg_off(s)?,
-                    Arch::Mips32 => return None,
+                let (seg, off) = if p.dialect == rustemu_asm::Dialect::A86 && s.segment.is_none() {
+                    (self.x86()?.cpu.sregs[rustemu_core::cpu::DS], s.value as u16)
+                } else {
+                    match self.target.arch() {
+                        Arch::I8086 => self.x86_symbol_seg_off(s)?,
+                        Arch::Mips32 => return None,
+                    }
                 };
                 let size = s.size.unwrap_or(1).clamp(1, 8);
                 // NASM: the name is the address, [name] the value.

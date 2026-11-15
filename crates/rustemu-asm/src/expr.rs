@@ -143,6 +143,8 @@ pub struct Parser<'a> {
     pub pos: usize,
     /// NASM syntax: `byte [x]` without PTR, `$$`, C operators, little-endian character constants.
     pub nasm: bool,
+    /// A86 operators and abbreviated memory types.
+    pub a86: bool,
     /// Nesting now: parentheses, brackets, unary operators, `NOT`, `?:` (see [`MAX_NESTING`]).
     depth: u32,
     /// Operands parsed by this parser (see [`MAX_OPERANDS`]).
@@ -163,7 +165,7 @@ type PResult<T> = Result<T, (usize, String)>;
 impl<'a> Parser<'a> {
     /// A parser at the start of `toks` (MASM syntax).
     pub fn new(toks: &'a [Token]) -> Self {
-        Parser { toks, pos: 0, nasm: false, depth: 0, operands: 0 }
+        Parser { toks, pos: 0, nasm: false, a86: false, depth: 0, operands: 0 }
     }
 
     /// The next token.
@@ -446,6 +448,27 @@ impl<'a> Parser<'a> {
                 BinOp::Add
             } else if self.eat_p('-') {
                 BinOp::Sub
+            } else if self.a86 && self.eat_kw("BY") {
+                let r = self.mul_expr()?;
+                let byte = |e| Expr::Bin(BinOp::And, Box::new(e), Box::new(Expr::Num(255)));
+                l = Expr::Bin(
+                    BinOp::Or,
+                    Box::new(Expr::Bin(BinOp::Shl, Box::new(byte(l)), Box::new(Expr::Num(8)))),
+                    Box::new(byte(r)),
+                );
+                continue;
+            } else if self.a86
+                && match self.peek() {
+                    Some(Tok::Num(_) | Tok::Str(_) | Tok::P('(' | '[' | '$')) => true,
+                    Some(Tok::Ident(s)) => {
+                        !["DUP", "SHL", "SHR", "MOD", "AND", "OR", "XOR", "EQ", "NE", "LT", "LE", "GT", "GE"]
+                            .iter()
+                            .any(|w| s.eq_ignore_ascii_case(w))
+                    }
+                    _ => false,
+                }
+            {
+                BinOp::Add
             } else {
                 return Ok(l);
             };
@@ -481,6 +504,10 @@ impl<'a> Parser<'a> {
     }
 
     fn unary_inner(&mut self) -> PResult<Expr> {
+        if self.a86 && self.eat_kw("BIT") {
+            let e = self.unary()?;
+            return Ok(Expr::Bin(BinOp::Shl, Box::new(Expr::Num(1)), Box::new(e)));
+        }
         if self.eat_p('~') {
             let e = self.unary()?;
             return Ok(Expr::Un(UnOp::Not, Box::new(e)));
@@ -495,6 +522,16 @@ impl<'a> Parser<'a> {
             ));
         }
         if self.eat_p('-') {
+            if self.a86
+                && let Some(Tok::Num(n)) = self.peek().cloned()
+            {
+                self.pos += 1;
+                let mut e = Expr::Num(n.wrapping_neg());
+                while self.peek() == Some(&Tok::P('[')) {
+                    e = Expr::Bin(BinOp::Add, Box::new(e), Box::new(self.primary()?));
+                }
+                return Ok(e);
+            }
             let e = self.unary()?;
             return Ok(Expr::Un(UnOp::Neg, Box::new(e)));
         }
@@ -519,6 +556,30 @@ impl<'a> Parser<'a> {
         // Size / distance qualifiers.
         if let Some(Tok::Ident(id)) = self.peek() {
             let u = id.to_ascii_uppercase();
+            if self.a86 {
+                let size = match u.as_str() {
+                    "B" | "BYTE" => Some(1),
+                    "W" | "WORD" => Some(2),
+                    "D" | "DWORD" => Some(4),
+                    "Q" | "QWORD" => Some(8),
+                    "T" | "TBYTE" => Some(10),
+                    _ => None,
+                };
+                if let Some(size) = size {
+                    self.pos += 1;
+                    self.eat_kw("PTR");
+                    let e = if !matches!(self.peek(), None | Some(Tok::P(',' | ')' | ']'))) {
+                        self.add_expr()?
+                    } else {
+                        Expr::Num(0)
+                    };
+                    return Ok(Expr::Ptr(size, Box::new(Expr::Mem(Box::new(e)))));
+                }
+                if u == "LONG" {
+                    self.pos += 1;
+                    return Ok(Expr::Dist(Dist::Near, Box::new(self.add_expr()?)));
+                }
+            }
             let size = match u.as_str() {
                 "BYTE" => Some(1),
                 "WORD" => Some(2),
@@ -659,6 +720,13 @@ pub type SegId = usize;
 pub enum SymVal {
     /// A constant.
     Const(i64),
+    /// An absolute typed memory offset (A86 STRUC fields and typed EQU declarations).
+    Typed {
+        /// Offset, without a relocatable segment.
+        value: i64,
+        /// Element size in bytes.
+        size: u8,
+    },
     /// Code label or variable inside segment `seg`.
     Label {
         /// Its segment.
@@ -678,6 +746,10 @@ pub enum SymVal {
 
 /// Symbols seen by [`eval`]: what the assembler knows in the current pass.
 pub trait Env {
+    /// A86 permits arithmetic on absolute offsets in its flat address space.
+    fn a86(&self) -> bool {
+        false
+    }
     /// The value of `name`.
     fn lookup(&self, name: &str) -> Option<SymVal>;
     /// Whether the symbol is known to exist (it may have no value yet in early passes).
@@ -766,6 +838,9 @@ pub fn eval(e: &Expr, env: &dyn Env) -> Result<Val, String> {
         }
         Expr::Sym(name) => match env.lookup(name) {
             Some(SymVal::Const(n)) => Val::num(n),
+            Some(SymVal::Typed { value, size }) => {
+                Val { num: value, mem: true, size: Some(size), ..Default::default() }
+            }
             Some(SymVal::Label { seg, off, size, far, .. }) => Val {
                 num: off,
                 mem: size.is_some(),
@@ -832,7 +907,7 @@ pub fn eval(e: &Expr, env: &dyn Env) -> Result<Val, String> {
                     let t = match v.size {
                         Some(s) => s as i64,
                         None if v.far_label => 0xFFFE,
-                        None if v.label_seg.is_some() => 0xFFFF,
+                        None if v.label_seg.is_some() && !env.a86() => 0xFFFF,
                         None => 0,
                     };
                     Val::num(t)
@@ -849,7 +924,7 @@ pub fn eval(e: &Expr, env: &dyn Env) -> Result<Val, String> {
                     Val { num: n, unknown: v.unknown, ..Default::default() }
                 }
                 _ => {
-                    if !v.is_plain() && !v.unknown {
+                    if !(v.is_plain() || v.unknown || (env.a86() && v.regs.is_empty() && v.seg_base.is_none())) {
                         return Err("operator requires a constant".into());
                     }
                     let n = match op {
@@ -863,9 +938,32 @@ pub fn eval(e: &Expr, env: &dyn Env) -> Result<Val, String> {
             }
         }
         Expr::Bin(op, a, b) => {
-            let x = eval(a, env)?;
-            let y = eval(b, env)?;
-            bin(*op, x, y)?
+            let mut x = eval(a, env)?;
+            let mut y = eval(b, env)?;
+            let left_type = (x.mem, x.size);
+            if env.a86() {
+                if *op == BinOp::Add && x.label_seg.is_some() && y.label_seg.is_some() {
+                    y.label_seg = None;
+                }
+                if *op == BinOp::Sub && x.label_seg.is_none() {
+                    y.label_seg = None;
+                }
+                if !matches!(op, BinOp::Add | BinOp::Sub)
+                    && x.regs.is_empty()
+                    && y.regs.is_empty()
+                    && x.seg_base.is_none()
+                    && y.seg_base.is_none()
+                {
+                    x = Val { num: x.num, unknown: x.unknown, ..Default::default() };
+                    y = Val { num: y.num, unknown: y.unknown, ..Default::default() };
+                }
+            }
+            let mut value = bin(*op, x, y)?;
+            if env.a86() && *op == BinOp::Sub {
+                value.mem = left_type.0;
+                value.size = left_type.1;
+            }
+            value
         }
     })
 }

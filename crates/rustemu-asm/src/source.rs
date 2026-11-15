@@ -71,6 +71,8 @@ pub struct Preprocessor<'a> {
     pub out: Vec<Line>,
     /// NASM dialect: `%` directives, `&` is an operator, backquoted strings.
     pub nasm: bool,
+    /// A86 source and macro notation; independent of NASM/MASM selection.
+    pub a86: bool,
     /// Files being processed, the outermost first (to catch an INCLUDE cycle).
     open_files: Vec<String>,
     /// NASM `%define name(params) body` (by upper-case name): expanded where they are used.
@@ -116,7 +118,7 @@ fn strip_comment(text: &str) -> &str {
 }
 
 /// Splits macro arguments at top-level commas, honouring quotes, (), and <> grouping.
-fn split_args(s: &str) -> Vec<String> {
+pub(crate) fn split_args(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut depth = 0;
@@ -341,6 +343,7 @@ impl<'a> Preprocessor<'a> {
             source_lines: 0,
             out: Vec::new(),
             nasm: false,
+            a86: false,
             open_files: Vec::new(),
             nasm_functions: HashMap::new(),
             expanded: 0,
@@ -420,7 +423,19 @@ impl<'a> Preprocessor<'a> {
         let numbered: Vec<(u32, String)> = if self.nasm {
             self.nasm_lines(file, text)
         } else {
-            text.lines().enumerate().map(|(i, t)| (i as u32 + 1, t.to_string())).collect()
+            text.lines()
+                .enumerate()
+                .map(|(i, t)| {
+                    (
+                        i as u32 + 1,
+                        if self.a86 && strip_comment(t).trim().eq_ignore_ascii_case("#em") {
+                            "ENDM".into()
+                        } else {
+                            t.to_string()
+                        },
+                    )
+                })
+                .collect()
         };
         numbered
             .into_iter()
@@ -658,9 +673,16 @@ impl<'a> Preprocessor<'a> {
     }
 
     fn eval_const(&self, text: &str) -> Option<i64> {
-        let toks = if self.nasm { tokenize_nasm(text).ok()? } else { tokenize(text).ok()? };
+        let toks = if self.a86 {
+            crate::lexer::tokenize_a86(text).ok()?
+        } else if self.nasm {
+            tokenize_nasm(text).ok()?
+        } else {
+            tokenize(text).ok()?
+        };
         let mut p = Parser::new(&toks);
         p.nasm = self.nasm;
+        p.a86 = self.a86;
         let e = p.expr().ok()?;
         eval(&e, &ConstEnv(&self.consts)).ok().map(|v| v.num)
     }
@@ -997,7 +1019,7 @@ impl<'a> Preprocessor<'a> {
             }
 
             // Everything after END is ignored (Emu8086 allows free text there).
-            if w1 == "END" && depth == 0 && !self.nasm {
+            if w1 == "END" && depth == 0 && !self.nasm && !self.a86 {
                 self.out.push(l);
                 return;
             }
@@ -1041,6 +1063,13 @@ impl<'a> Preprocessor<'a> {
                     self.out.push(Line { text: format!("{lbl}:"), ..l.clone() });
                 }
                 let m = &self.macros[&cw];
+                if self.a86 {
+                    match crate::a86::expand_macro(&m.body, &args, depth + 1, &l, self.cancel.clone()) {
+                        Ok(expanded) => self.process(expanded, depth + 1),
+                        Err(msg) => self.error(&l, msg),
+                    }
+                    continue;
+                }
                 let mut map = HashMap::new();
                 for (k, (p, def)) in m.params.iter().enumerate() {
                     let v = args.get(k).cloned().filter(|a| !a.is_empty()).or_else(|| def.clone()).unwrap_or_default();

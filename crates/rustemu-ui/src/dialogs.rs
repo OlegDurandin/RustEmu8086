@@ -18,7 +18,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     crate::examples_ui::more_examples_window(app, ctx);
 }
 
-const AUTO_SYNTAX: &str = "Detected from the source (NASM for bits 16, section, times, resb, %define, \
+const AUTO_SYNTAX: &str = "A86 for .a86/.8/.08/.8x files or #a86#/#EM; otherwise detected from the source (NASM for bits 16, section, times, resb, %define, \
      byte [..]...); a program that does not assemble that way is tried in the other syntax";
 
 /// The Options menu: the most used settings and the options window with all of them.
@@ -37,6 +37,7 @@ pub fn options_menu(app: &mut App, ui: &mut Ui) {
         ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(AUTO_SYNTAX);
         ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
         ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
+        ui.radio_value(&mut app.settings.syntax, SyntaxChoice::A86, "A86");
     } else {
         egui::containers::menu::SubMenuButton::new("MARS settings")
             .config(crate::mars_settings::menu_config())
@@ -174,6 +175,7 @@ fn options_window(app: &mut App, ctx: &egui::Context) {
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Auto, "auto").on_hover_text(AUTO_SYNTAX);
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Masm, "Emu8086 (MASM)");
                     ui.radio_value(&mut app.settings.syntax, SyntaxChoice::Nasm, "NASM");
+                    ui.radio_value(&mut app.settings.syntax, SyntaxChoice::A86, "A86");
                 });
                 ui.end_row();
                 if app.arch() != rustemu_session::Arch::I8086 {

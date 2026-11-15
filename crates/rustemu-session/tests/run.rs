@@ -12,6 +12,60 @@ fn nasm_examples_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples")
 }
 
+#[test]
+fn a86_source_runs_and_steps_with_correct_hex_constants_and_local_labels() {
+    let src = "clear macro\n#rx1l\nxor #x,#x\n#em\nclear ax,dx\nmov cx,3\nl1: inc dx\nloop l1\nmov ah,02\nmov dl,'A'\nint 021\nmov ax,04c00\nint 021\n";
+    let mut s = Session::new();
+    s.load_named("book.8", src.as_bytes().to_vec()).unwrap();
+    assert_eq!(s.program.as_ref().unwrap().dialect, rustemu_asm::Dialect::A86);
+    for _ in 0..100 {
+        match s.target.step() {
+            Event::Continue => {}
+            Event::Terminated(code) => {
+                assert_eq!(code, 0);
+                assert_eq!(s.target.output(), b"A");
+                return;
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+    panic!("A86 program did not terminate");
+}
+
+#[test]
+fn a86_local_structure_fields_remain_available_to_watches() {
+    let mut s = Session::new();
+    s.load_named("fields.a86", b"struc\nb0 db ?\nrecord ends\nmov b0,42\nint 020\n".to_vec()).unwrap();
+    assert_eq!(s.target.step(), Event::Continue);
+    assert_eq!(s.compile("b0").unwrap().eval(&*s.target), 42);
+}
+
+#[test]
+fn a86_word_memory_moves_and_swaps_preserve_ax_and_stack() {
+    let mut s = Session::new();
+    s.load_named(
+        "memory.a86",
+        b"jmp start\nx dw 1\ny dw 2\nz dw 3\nstart:mov ax,055aa\nmov x,y\nxchg x,z\ndone:int 020\n".to_vec(),
+    )
+    .unwrap();
+    let done = s.program.as_ref().unwrap().symbols.iter().find(|v| v.name == "DONE").unwrap().value as u16;
+    let before = s.x86().unwrap().cpu.clone();
+    for _ in 0..30 {
+        if s.x86().unwrap().cpu.ip == done {
+            break;
+        }
+        assert_eq!(s.target.step(), Event::Continue);
+    }
+    let cpu = &s.x86().unwrap().cpu;
+    assert_eq!(cpu.ip, done);
+    assert_eq!(cpu.regs[rustemu_core::cpu::AX], 0x55aa);
+    assert_eq!(cpu.regs[rustemu_core::cpu::SP], before.regs[rustemu_core::cpu::SP]);
+    assert_eq!(cpu.flags, before.flags);
+    for (name, value) in [("x", 3), ("y", 2), ("z", 2)] {
+        assert_eq!(s.compile(name).unwrap().eval(&*s.target), value);
+    }
+}
+
 /// Runs a program to completion feeding `input` as keystrokes.
 fn run_src(src: &str, input: &str) -> (Session, Event) {
     let prog = rustemu_asm::assemble_str(src).unwrap_or_else(|e| panic!("{e}"));

@@ -83,6 +83,7 @@ struct Assembler {
     code_seg: Option<SegId>,
     /// NASM dialect (flat `-f bin` output, `.data` / `.bss` sections aligned to 4).
     nasm: bool,
+    a86: bool,
     /// Element size of NASM data labels (shown as variables in the debugger).
     data_sizes: HashMap<String, u8>,
     /// ORG of the program (start of the NASM `.text` section).
@@ -90,6 +91,9 @@ struct Assembler {
 }
 
 impl Env for Assembler {
+    fn a86(&self) -> bool {
+        self.a86
+    }
     fn lookup(&self, name: &str) -> Option<SymVal> {
         let unresolved = if self.syms.contains_key(name) { &self.unresolved } else { &self.prev_unresolved };
         if unresolved.contains(name) {
@@ -139,11 +143,15 @@ pub(crate) fn assemble_controlled(
     let nasm = dialect == Dialect::Nasm;
     let mut pp = Preprocessor::new(loader);
     pp.nasm = nasm;
+    pp.a86 = dialect == Dialect::A86;
     pp.cancel = cancel.clone();
     pp.add_file(name, source);
     let files = pp.files.clone();
     let mut errors = std::mem::take(&mut pp.errors);
-    let lines = std::mem::take(&mut pp.out);
+    let mut lines = std::mem::take(&mut pp.out);
+    if dialect == Dialect::A86 {
+        crate::a86::prepare(&mut lines, &mut errors, cancel.clone());
+    }
 
     let mut stmts = Vec::new();
     for (i, l) in lines.iter().enumerate() {
@@ -154,7 +162,13 @@ pub(crate) fn assemble_controlled(
         if errors.len() >= MAX_DIAGNOSTICS {
             break;
         }
-        let parsed = if nasm { parse_line_nasm(&l.text) } else { parse_line(&l.text) };
+        let parsed = if dialect == Dialect::A86 {
+            crate::a86::parse_line(&l.text)
+        } else if nasm {
+            parse_line_nasm(&l.text)
+        } else {
+            parse_line(&l.text)
+        };
         match parsed {
             Ok(stmt) => stmts.push(StmtInfo { stmt, line: i }),
             Err((at, msg)) => {
@@ -211,6 +225,7 @@ pub(crate) fn assemble_controlled(
         data_seg: None,
         code_seg: None,
         nasm,
+        a86: dialect == Dialect::A86,
         data_sizes: HashMap::new(),
         org: None,
     };
@@ -272,6 +287,7 @@ pub(crate) fn assemble_controlled(
     let sources = std::mem::take(&mut a.sources);
     a.build(files)
         .map(|mut p| {
+            p.dialect = dialect;
             p.source_bytes = pp.source_bytes;
             p.expanded_bytes = pp.expanded_bytes;
             p.processed_lines = pp.expanded;
@@ -389,6 +405,13 @@ impl Assembler {
         self.fasm = fasm;
         // Emu8086: COM when ORG 100h is found, EXE when segments are used, COM otherwise.
         self.format = explicit.unwrap_or(if org_100h || !has_segments { Format::Com } else { Format::Exe });
+        if self.a86
+            && explicit.is_none()
+            && !has_segments
+            && self.stmts.iter().any(|s| matches!(s.stmt.kind, StmtKind::Org(Expr::Num(0))))
+        {
+            self.format = Format::Bin;
+        }
         if self.nasm {
             // NASM -f bin: ORG 100h is a COM program, ORG 7C00h a boot sector, anything else BIN.
             let org = self.stmts.iter().find_map(|s| match &s.stmt.kind {
@@ -681,7 +704,12 @@ impl Assembler {
             StmtKind::Equ(name, e) | StmtKind::Assign(name, e) => match eval(e, self) {
                 Ok(v) => {
                     let redefinable = matches!(st.kind, StmtKind::Assign(..));
-                    self.define(idx, name, equ_value(&v), redefinable);
+                    let value = if self.a86 && v.mem && v.label_seg.is_none() {
+                        SymVal::Typed { value: v.num, size: v.size.unwrap_or(1) }
+                    } else {
+                        equ_value(&v)
+                    };
+                    self.define(idx, name, value, redefinable);
                     if v.unknown {
                         self.unresolved.insert(name.clone());
                         self.unknown_equs.push((idx, name.clone()));
@@ -786,6 +814,35 @@ impl Assembler {
     }
 
     fn instruction(&mut self, idx: usize, prefixes: &[String], mnem: &str, ops: &[Operand]) {
+        if self.a86 && ops.len() == 2 && matches!(mnem, "MOV" | "XCHG") {
+            use crate::encode::{Op, classify};
+            if let (Ok(Op::Mem(a)), Ok(Op::Mem(b))) = (classify(&ops[0], self), classify(&ops[1], self))
+                && a.size.or(b.size).unwrap_or(2) == 2
+                && b.size.or(a.size).unwrap_or(2) == 2
+            {
+                if mnem == "MOV" {
+                    self.instruction(idx, prefixes, "PUSH", &ops[1..]);
+                    self.instruction(idx, prefixes, "POP", &ops[..1]);
+                } else {
+                    let ax = Operand::Expr(Expr::Reg(crate::expr::Reg::R16(0)));
+                    self.instruction(idx, &[], "PUSH", std::slice::from_ref(&ax));
+                    self.instruction(idx, prefixes, "MOV", &[ax.clone(), ops[0].clone()]);
+                    self.instruction(idx, prefixes, "XCHG", &[ax.clone(), ops[1].clone()]);
+                    self.instruction(idx, prefixes, "MOV", &[ops[0].clone(), ax.clone()]);
+                    self.instruction(idx, &[], "POP", std::slice::from_ref(&ax));
+                }
+                return;
+            }
+        }
+        if self.a86
+            && mnem == "LEA"
+            && ops.len() == 2
+            && let Operand::Expr(expr) = &ops[1]
+            && (matches!(expr, Expr::Reg(_)) || eval(expr, self).is_ok_and(|v| !v.mem && v.regs.is_empty()))
+        {
+            self.instruction(idx, prefixes, "MOV", ops);
+            return;
+        }
         let start_loc = self.loc();
         let ctx = Ctx {
             loc: start_loc,
@@ -1118,9 +1175,14 @@ impl Assembler {
             .iter()
             .filter(|(n, _)| !n.starts_with('@'))
             .map(|(n, v)| {
-                let kind = self.sym_kinds.get(n).copied().unwrap_or(SymbolKind::Constant);
+                let kind = if matches!(v, SymVal::Typed { .. }) {
+                    SymbolKind::Variable
+                } else {
+                    self.sym_kinds.get(n).copied().unwrap_or(SymbolKind::Constant)
+                };
                 let (segment, value, size) = match v {
                     SymVal::Const(c) => (None, *c, None),
+                    SymVal::Typed { value, size } => (None, *value, Some(*size)),
                     SymVal::Label { seg, off, size, .. } => {
                         (Some(layout[*seg] as u16), *off, size.or_else(|| self.data_sizes.get(n).copied()))
                     }

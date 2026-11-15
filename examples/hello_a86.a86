@@ -1,0 +1,17 @@
+; A86: leading-zero hexadecimal constants and positional macros.
+#a86#
+
+clear macro
+#rx1l
+    xor #x, #x
+#em
+
+start:
+    clear ax, bx, dx
+    mov dx, offset message
+    mov ah, 09
+    int 021
+    mov ax, 04c00
+    int 021
+
+message db 'A86 works!', 0d, 0a, '$'
