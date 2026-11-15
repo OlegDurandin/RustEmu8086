@@ -25,8 +25,12 @@ FFFFFFFFh for MIPS. Invalid numbers never fall back to defaults.
 rustemu asm hello.asm                 # -> hello.com
 rustemu asm hello_exe.asm -l -s       # .exe + listing (.lst) + symbols (.symbol)
 rustemu asm prog.asm -o out.bin       # output file name
-rustemu asm boot.asm --syntax nasm    # nasm or masm; detected by default
+rustemu asm boot.asm --syntax nasm    # a86, nasm or masm; detected by default
+rustemu asm examples/hello_a86.a86 -o hello.com
 ```
+
+A86 sources (`.a86`, `.8`, `.08`, `.8x`) are also supported by `run`. `--syntax` applies to `asm`;
+`run` uses detection or the dialect stored in a portable project. See [A86 syntax](A86-syntax).
 
 ## Running — `rustemu run`
 

@@ -14,7 +14,9 @@ BOUND кодируется для уже существующей модели 8
 объектный компоновщик. Посимвольные макроциклы и часть редких расширений A86 не реализованы.
 Неподдержанные конструкции диагностируются; соответствие байт-в-байт оригинальному A86 не заявляется.
 
-Функциональные результаты корпуса книги (исходники не переписывались):
+Поддерживается работа с листингами для реального режима из книги
+«Ассемблер и программная модель x86/64» в пределах указанных выше ограничений.
+Функциональные результаты проверки корпуса книги (исходники не переписывались):
 До внедрения: Auto собирал 15/128 отдельных файлов и 5/33 упражнений = 20/161.
 После внедрения: Auto собирает 95/128 отдельных файлов и 22/33 упражнений = 117/161.
 Проверены также 5 include-файлов и 11 готовых COM/EXE.
@@ -28,7 +30,10 @@ BOUND кодируется для уже существующей модели 8
 сохранение настройки GUI, регрессии MASM/NASM, сравнение кодировок с NASM,
 перебор коротких некорректных строк и лимиты/отмена макросов.
 
-Пример: examples/hello_a86.a86
+Пример: examples/hello_a86.a86; меню examples → Hello, world (A86).
+Вывод: Hello from A86! и перевод строки; код завершения 0.
+Показаны позиционный макрос clear, цикл #Rx1L и шестнадцатеричные числа с ведущим нулём.
+Руководство: wiki/Синтаксис-A86.md и wiki/A86-syntax.md.
 Запуск: target/release/rustemu run examples/hello_a86.a86 --max 1000
 Принудительная сборка: target/release/rustemu asm program --syntax a86 -o program.com
 
@@ -36,49 +41,3 @@ BOUND кодируется для уже существующей модели 8
 Подробный JSON: target/book-corpus-a86-reviewed/results.json
 Полная таблица: target/book-corpus-a86-reviewed/index.html
 Повторение: /usr/bin/python3 scripts/check_book_corpus.py <папка arch> --out <новая папка>
-
-Отклонённые исходники в Auto (первая диагностика, подробности — в JSON):
-02/test2.8 | 02/test2.8(5:14) DUP count out of range
-03/exa10.8 | 03/exa10.8(12:16) NOT: register or memory operand expected
-03/exa12.8 | 03/exa12.8(1:15) undefined symbol 'WORD1'
-03/exa13.8 | 03/exa13.8(3) symbol 'GAMMA' already defined (line 2)
-03/exa15.8 | 03/exa15.8(5:12) undefined symbol 'L2'
-03/exa5.8 | 03/exa5.8(5:6) invalid register in address expression
-04/exa13.8 | 04/exa13.8(9:17) invalid combination of address registers
-04/exa14.8 | 04/exa14.8(3:17) memory-to-memory operation is not allowed
-04/exa15.8 | 04/exa15.8(1:17) memory-to-memory operation is not allowed
-04/exa4.8 | 04/exa4.8(5:17) invalid INC operand
-04/exa5.8 | 04/exa5.8(5:17) operand size not specified (use BYTE PTR or WORD PTR)
-07/ref_2.8 | 07/ref_2.8(18:21) value 256 out of byte range
-08/fxch.8 | 08/fxch.8(7:9) undefined symbol '.'
-09/ea2_1.08 | 09/ea2_1.08(17:17) undefined symbol 'WORK_WITH_AREA'
-09/ea2_2.08 | 09/ea2_2.08(12:28) undefined symbol 'AREA'
-09/jump.8 | 09/jump.8(1:17) undefined symbol '????'
-09/reboot.8 | 09/reboot.8(1:17) invalid INC operand
-09/seg_reg.8 | 09/seg_reg.8(4:9) A86 MOV cannot load CS
-10/gp.asm | 10/gp.asm(3:17) undefined symbol 'EDI'
-10/gp_2.8x | 10/gp_2.8x(11:17) A386 operand 'eax' requires a 386 target; the A86 target is 8086/80186
-10/gp_3.asm | 10/gp_3.asm(25:9) expression expected
-10/gp_4.asm | 10/gp_4.asm(35:9) expression expected
-12/a32_str.asm | 12/a32_str.asm(3:17) undefined symbol 'ESI'
-12/a4_str/a4_str.8x | 12/a4_str/a4_str.8x(1:17) A386 operand 'esi' requires a 386 target; the A86 target is 8086/80186
-12/cmd_1/cmd_1.8x | 12/cmd_1/cmd_1.8x(3:17) A386 operand 'eax' requires a 386 target; the A86 target is 8086/80186
-12/cmd_2.asm | 12/cmd_2.asm(5:17) unexpected 'ax'
-12/cx_ecx/cx_ecx.8x | 12/cx_ecx/cx_ecx.8x(1:17) A386 operand 'ecx' requires a 386 target; the A86 target is 8086/80186
-12/find_3/find_3.8x | 12/find_3/find_3.8x(12:17) A386 operand 'esi' requires a 386 target; the A86 target is 8086/80186
-12/ind32/ind32.8x | 12/ind32/ind32.8x(1:17) A386 operand 'edx' requires a 386 target; the A86 target is 8086/80186
-12/mul_div/mul_div.8x | 12/mul_div/mul_div.8x(1:17) A386 operand 'eax' requires a 386 target; the A86 target is 8086/80186
-12/new_cmd/new_cmd.8x | 12/new_cmd/new_cmd.8x(6:17) A386 operand 'eax' requires a 386 target; the A86 target is 8086/80186
-12/o4_ret/o4_ret.8x | 12/o4_ret/o4_ret.8x(2:9) A386 operand 'o4' requires a 386 target; the A86 target is 8086/80186
-12/xlat/xlat.8x | 12/xlat/xlat.8x(2:17) A386 operand 'ebx' requires a 386 target; the A86 target is 8086/80186
-03/quiz1.txt.part-02.8 | 03/quiz1.txt.part-02.8(4:14) value 65792 does not fit in a word
-03/quiz2.txt.part-03.8 | 03/quiz2.txt.part-03.8(4:13) value -1538 does not fit in a byte
-03/quiz2.txt.part-05.8 | 03/quiz2.txt.part-05.8assembly did not converge
-03/quiz2.txt.part-07.8 | 03/quiz2.txt.part-07.8(3:14) undefined symbol 'GAMMA'
-03/quiz3.txt.part-01.8 | 03/quiz3.txt.part-01.8(6:1) unexpected '$'
-03/quiz3.txt.part-02.8 | 03/quiz3.txt.part-02.8assembly did not converge
-03/quiz3.txt.part-04.8 | 03/quiz3.txt.part-04.8(3:14) value -486 does not fit in a byte
-03/quiz3.txt.part-05.8 | 03/quiz3.txt.part-05.8(6:14) DUP count out of range
-04/quiz2.txt.part-02.8 | 04/quiz2.txt.part-02.8(3:17) destination cannot be a constant
-04/quiz2.txt.part-03.8 | 04/quiz2.txt.part-03.8(6:17) operand size not specified (use BYTE PTR or WORD PTR)
-04/quiz2.txt.part-06.8 | 04/quiz2.txt.part-06.8(3:17) destination cannot be a constant

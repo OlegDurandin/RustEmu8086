@@ -8,6 +8,7 @@
 **Language**
 - [Emu8086 syntax](Emu8086-syntax)
 - [NASM syntax](NASM-syntax)
+- [A86 syntax](A86-syntax)
 - [8087 coprocessor](8087-coprocessor)
 - [emu8086.inc library](Emu8086-inc-library)
 - [BIOS and DOS interrupts](BIOS-and-DOS-interrupts)
@@ -39,6 +40,7 @@
 **Язык**
 - [Синтаксис Emu8086](Синтаксис-Emu8086)
 - [Синтаксис NASM](Синтаксис-NASM)
+- [Синтаксис A86](Синтаксис-A86)
 - [Сопроцессор 8087](Сопроцессор-8087)
 - [Библиотека emu8086.inc](Библиотека-emu8086)
 - [Прерывания BIOS и DOS](Прерывания-BIOS-и-DOS)

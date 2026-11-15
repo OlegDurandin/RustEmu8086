@@ -43,7 +43,7 @@ browser.
 | `rustemu-target` | the boundary between a processor and the rest: the `Target` trait (steps, step back, breakpoints, memory, disassembly, registers by name). No dependencies |
 | `rustemu-core` | the 8086 processor (+ 80186 extensions), 1 MB of memory, `Machine` (loading, steps, step back, breakpoints), BIOS, DOS, video, devices, disassembler, 8087; `Machine` implements `Target`. No GUI dependencies |
 | `rustemu-mips` | MIPS32 as in MARS: the integer instructions and coprocessor 1 (floating point), memory and exceptions, the system services (`syscall`), a text console, files in a sandbox, the memory-mapped devices (keyboard and display, Digital Lab Sim), step back; the assembler of MARS's dialect with its macros and `.include`, a disassembler; `impl Target` |
-| `rustemu-asm` | the Emu8086 / MASM and NASM assembler: preprocessor, multi-pass assembly, encoding, listing; the built-in `emu8086.inc` |
+| `rustemu-asm` | the Emu8086 / MASM, NASM and A86 assembler: preprocessor, multi-pass assembly, encoding, listing; the built-in `emu8086.inc` |
 | `rustemu-session` | glue between the assembler and the emulator through `Target`: source line ↔ address, debugger expressions, call stack, Step Over / Out; the 8086 part (program formats, floppies) in `x86.rs` |
 | `rustemu-cli` | the `rustemu` program |
 | `rustemu-ui` | the shared part of the interface: application state, editor, screen, debug windows, reference |
@@ -79,6 +79,10 @@ cargo test --workspace
 cargo test -p rustemu-desktop -p rustemu-tablet   # UI tests, PNG snapshots in target/ui-snapshots/
 ```
 
+- **A86**: `cargo test -p rustemu-asm --test a86_dialect` and
+  `cargo test -p rustemu-session --test run a86_`. Textbook corpus runner:
+  `python3 scripts/check_book_corpus.py <arch-folder> --out <new-report-folder>`.
+  See [A86 syntax](A86-syntax) and `reports/a86-dialect-2026-11-15.txt` for limits and results.
 - **NASM**: if `nasm` is installed (`brew install nasm`), ~18 000 instruction encodings and whole NASM programs are
   compared with it byte for byte.
 - **Emu8086 examples** (the `examples` folder, files from the Emu8086 distribution, unchanged):

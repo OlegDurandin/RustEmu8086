@@ -3,7 +3,7 @@
 **English** · [Русский](Сопроцессор-8087)
 
 RustEmu8086 emulates the **8087** math coprocessor (FPU): a second processor "attached" to the 8086 that works
-with real numbers. Its instructions start with `F` and work in both syntaxes — Emu8086 and NASM.
+with real numbers. Its instructions start with `F` and work in Emu8086, NASM and [A86](A86-syntax). A86 also accepts stack operands `0`…`7`.
 
 ```asm
 ; hypotenuse: sqrt(3^2 + 4^2)

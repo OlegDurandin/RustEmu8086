@@ -102,7 +102,7 @@ for example `21`, then Enter — the program prints `Twice: 42`. On a tablet the
 ## What next
 
 - Ready-made examples: **examples** on the toolbar — the same as in Emu8086 (Hello, world, add and subtract,
-  compare numbers, traffic lights, LED display, stepper motor…), plus two NASM examples; **more examples...** —
+  compare numbers, traffic lights, LED display, stepper motor…), plus two NASM examples and **Hello, world (A86)** ([A86 syntax](A86-syntax)); **more examples...** —
   all 84 examples shipped with Emu8086, each with a description; the filter searches names and descriptions (for
   example, `stack` or `mouse`).
 - Instruction and interrupt reference: hover over an instruction or `int 21h`, **F1** opens the article.

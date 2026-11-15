@@ -17,7 +17,7 @@ On an iPad you can add the site to the Home Screen: Safari → Share → Add to 
 
 Requires macOS 11 or later, on Apple Silicon or Intel.
 
-Open `.asm`, `.nasm` and `.inc` files from Finder with **Open With → RustEmu8086**, or drop them
+Open `.asm`, `.nasm`, `.a86`, `.8`, `.08`, `.8x` and `.inc` files from Finder with **Open With → RustEmu8086**, or drop them
 on the application icon. This also works while the app is running; unsaved changes prompt for
 confirmation before another document opens. Inside the app, use **File → Open…** (`⌘O`).
 

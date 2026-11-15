@@ -95,5 +95,5 @@ after *Hide* it does not come back until the next wait).
   only its windows: no 8086 drive, devices, FPU or debug log, but MARS's Keyboard and Display MMIO Simulator,
   Bitmap Display and Digital Lab Sim; the reference is MIPS's);
 - tools: Reference, Calculator, Base converter, ASCII codes;
-- *Desktop layout* — switch to the Emu8086 interface; **Options** — the assembler syntax (auto / Emu8086 / NASM)
+- *Desktop layout* — switch to the Emu8086 interface; **Options** — the assembler syntax (auto / Emu8086 / NASM / A86)
   and *all options…*; About.
