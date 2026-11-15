@@ -152,7 +152,12 @@ pub fn parse_line(line: &str) -> Result<Stmt, PErr> {
 
 /// Parses the tokens of one line (MASM dialect).
 pub fn parse_tokens(toks: &[Token]) -> Result<Stmt, PErr> {
+    parse_tokens_mode(toks, false)
+}
+
+pub(crate) fn parse_tokens_mode(toks: &[Token], a86: bool) -> Result<Stmt, PErr> {
     let mut p = Parser::new(toks);
+    p.a86 = a86;
     let mut label = None;
     let mut colon = false;
 
@@ -307,6 +312,9 @@ fn named_directive(p: &mut Parser, name: String, dir: &str) -> Result<StmtKind, 
 fn data_items(p: &mut Parser, size: u8) -> Result<Vec<DataItem>, PErr> {
     let mut items = Vec::new();
     if p.at_end() {
+        if p.a86 {
+            return Ok(items);
+        }
         return Err((p.col(), "data expected".into()));
     }
     loop {
@@ -333,6 +341,11 @@ fn data_item(p: &mut Parser, size: u8) -> Result<DataItem, PErr> {
         return Ok(DataItem::Str(s));
     }
     // A floating-point number, possibly signed.
+    if p.a86
+        && let Some(item) = crate::a86::floating_data(p, size)?
+    {
+        return Ok(item);
+    }
     let sign = match p.peek() {
         Some(Tok::P(c @ ('-' | '+'))) if matches!(p.peek_at(1), Some(Tok::Float(_))) => Some(*c),
         _ => None,
@@ -348,6 +361,9 @@ fn data_item(p: &mut Parser, size: u8) -> Result<DataItem, PErr> {
     let e = p.expr()?;
     if p.eat_kw("DUP") {
         if !p.eat_p('(') {
+            if p.a86 {
+                return Ok(DataItem::Dup(e, vec![data_item(p, size)?]));
+            }
             return Err((p.col(), "expected '(' after DUP".into()));
         }
         let mut inner = Vec::new();

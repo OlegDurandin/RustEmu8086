@@ -25,9 +25,11 @@ fn short_lines_never_panic() {
                 k /= n;
             }
             let line = line.join(" ");
-            for (dialect, src) in
-                [(Dialect::Nasm, format!("bits 16\n{line}\n")), (Dialect::Masm, format!("org 100h\n{line}\n"))]
-            {
+            for (dialect, src) in [
+                (Dialect::Nasm, format!("bits 16\n{line}\n")),
+                (Dialect::Masm, format!("org 100h\n{line}\n")),
+                (Dialect::A86, format!("{line}\n")),
+            ] {
                 let r = std::panic::catch_unwind(|| {
                     let _ = assemble_dialect("t.asm", &src, &mut FsLoader { include_dirs: Vec::new() }, Some(dialect));
                 });

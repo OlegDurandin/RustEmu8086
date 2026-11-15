@@ -1,4 +1,4 @@
-//! 8086 assembler: the Emu8086 / MASM dialect and the NASM dialect (`-f bin` programs).
+//! 8086 assembler: Emu8086 / MASM, NASM (`-f bin` programs) and A86.
 //!
 //! ```
 //! let prog = rustemu_asm::assemble_str("org 100h\nmov ax, 5\nret\n").unwrap();
@@ -7,6 +7,7 @@
 
 #![warn(missing_docs)]
 
+mod a86;
 mod asm;
 pub mod encode;
 mod errpos;
@@ -32,14 +33,17 @@ pub enum Dialect {
     /// NASM `-f bin`: `mov ax, var` loads the address, `[var]` reads memory, `byte [x]`, `section`,
     /// `times`, `resb`, `%macro`, local labels `.name`.
     Nasm,
+    /// A86: leading-zero hexadecimal numbers, typed variables, local labels and `#EM` macros.
+    A86,
 }
 
 impl Dialect {
-    /// Name shown to the user (`Emu8086/MASM`, `NASM`).
+    /// Name shown to the user (`Emu8086/MASM`, `NASM`, `A86`).
     pub fn name(self) -> &'static str {
         match self {
             Dialect::Masm => "Emu8086/MASM",
             Dialect::Nasm => "NASM",
+            Dialect::A86 => "A86",
         }
     }
 }
@@ -47,7 +51,21 @@ impl Dialect {
 /// Guesses the dialect of a source file: `.nasm` files, an explicit `#nasm#` line, or NASM-only
 /// constructs (`bits 16`, `[org ..]`, `section .text`, `%define`, `%macro`, `times`, `resb`, `$$`)
 /// select NASM; everything else is Emu8086/MASM.
+/// A86 file extensions and explicit A86 markers take precedence and never fall back to a
+/// different dialect: doing so could silently change the values of numbers such as `0100`.
 pub fn detect_dialect(name: &str, text: &str) -> Dialect {
+    if [".a86", ".8", ".08", ".8x"].iter().any(|s| name.to_ascii_lowercase().ends_with(s))
+        || text.lines().any(|l| {
+            if !l.trim_start().starts_with('#') {
+                return false;
+            }
+            let code = code_without_strings(l).trim().to_ascii_lowercase();
+            matches!(code.as_str(), "#a86" | "#a86#" | "#em")
+                || (code.starts_with("#rx") && code.as_bytes().get(3).is_some_and(u8::is_ascii_digit))
+        })
+    {
+        return Dialect::A86;
+    }
     if name.to_ascii_lowercase().ends_with(".nasm") {
         return Dialect::Nasm;
     }
@@ -502,6 +520,9 @@ pub fn assemble_dialect(
         Some(d) => run(loader, d),
         None => {
             let guess = detect_dialect(name, source);
+            if guess == Dialect::A86 {
+                return run(loader, guess);
+            }
             let other = if guess == Dialect::Masm { Dialect::Nasm } else { Dialect::Masm };
             run(loader, guess).or_else(|errors| run(loader, other).map_err(|_| errors))
         }
@@ -549,6 +570,9 @@ pub fn assemble_cancellable(
         Some(d) => run(loader, d),
         None => {
             let d = detect_dialect(name, text);
+            if d == Dialect::A86 {
+                return run(loader, d);
+            }
             run(loader, d).or_else(|e| {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     Err(e)

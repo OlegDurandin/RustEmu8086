@@ -129,8 +129,9 @@ impl Args {
                 "--syntax" => {
                     args.syntax = Some(match value.to_ascii_lowercase().as_str() {
                         "nasm" => rustemu_asm::Dialect::Nasm,
+                        "a86" => rustemu_asm::Dialect::A86,
                         "masm" | "emu8086" => rustemu_asm::Dialect::Masm,
-                        _ => return Err(format!("invalid --syntax '{value}': expected nasm or masm")),
+                        _ => return Err(format!("invalid --syntax '{value}': expected a86, nasm or masm")),
                     })
                 }
                 "-o" => {

@@ -35,7 +35,7 @@ cargo run -p rustemu-cli -- asm examples/projects/mips-input.remu -o /tmp/projec
 - `entry`: the main source's relative path, present in `files`.
 - `files`: map of relative POSIX paths to UTF-8 source text. Includes and enabled exception
   handlers are packaged. MARS directory assembly applies to `.asm` / `.s` files beside `entry`.
-- `dialect`: `Masm`, `Nasm`, or `null` for detection (8086).
+- `dialect`: `Masm`, `Nasm`, `A86`, or `null` for detection (8086).
 - `mars`: shared MARS settings, including memory configuration, delayed branching, pseudo
   instructions, start at main, self-modifying code, warnings, program arguments, popup input,
   directory assembly and the internal exception-handler path.

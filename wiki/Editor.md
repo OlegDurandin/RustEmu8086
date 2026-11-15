@@ -54,7 +54,7 @@ range`). The place of the error is underlined with a wavy line, and clicking the
   checkboxes; on the Mac — which folder is drive C: (see
   [BIOS and DOS interrupts](BIOS-and-DOS-interrupts#where-files-are-stored)), in the browser — the interface layout.
 - The **Options** menu (before **Help**) — the most frequently changed settings: windows (classic Emu8086 or
-  panels), assembler syntax (auto / Emu8086 / NASM), theme; **all options…** opens the **options** window.
+  panels), assembler syntax (auto / Emu8086 / NASM / A86), theme; **all options…** opens the **options** window.
 
 ## What is remembered
 

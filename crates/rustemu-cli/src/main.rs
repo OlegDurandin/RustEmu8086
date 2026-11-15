@@ -15,7 +15,7 @@ use args::{Args, Command};
 const USAGE: &str = "\
 usage:
   rustemu asm <file> [-o <out>] [-l] [-s]       assemble (-l listing, -s symbols)
-      --syntax <s>       8086: nasm or masm (Emu8086); detected from the source by default
+      --syntax <s>       8086: a86, nasm or masm (Emu8086); detected by default
       -o <out>           MIPS: write the text segment as binary (MARS's dump .text)
   rustemu run <file> [options]                  run .asm/.s/.com/.exe/.bin/.boot headless
       --input <text>     keyboard input (\\n = Enter); otherwise stdin is used

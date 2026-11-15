@@ -3,8 +3,7 @@
 **English** · [Русский](Синтаксис-Emu8086)
 
 The main language of RustEmu8086 is the MASM dialect understood by Emu8086. Programs from textbooks and the
-Emu8086 examples assemble unchanged. The second language is [NASM](NASM-syntax); the syntax is detected
-automatically.
+Emu8086 examples assemble unchanged. Other dialects are [NASM](NASM-syntax) and [A86](A86-syntax); the syntax is detected automatically.
 
 A full description of every instruction (flags, an example) is in the built-in reference: **F1** on a word in the
 editor.

@@ -57,8 +57,10 @@ impl App {
             return;
         }
         let dir = self.doc.path.as_ref().and_then(|p| p.parent());
-        let filters: [crate::platform::Filter; 2] =
-            [("Assembly or project", &["asm", "s", "nasm", "inc", "txt", "remu"]), ("All files", &["*"])];
+        let filters: [crate::platform::Filter; 2] = [
+            ("Assembly or project", &["asm", "s", "nasm", "a86", "8", "08", "8x", "inc", "txt", "remu"]),
+            ("All files", &["*"]),
+        ];
         if let Some(p) = crate::platform::pick_file(&filters, dir) {
             let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
             if matches!(ext.as_str(), "com" | "exe" | "bin" | "boot") {

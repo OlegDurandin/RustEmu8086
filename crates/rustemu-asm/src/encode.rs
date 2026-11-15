@@ -373,6 +373,7 @@ pub fn is_mnemonic(m: &str) -> bool {
         || matches!(
             m,
             "MOV"
+                | "BOUND"
                 | "TEST"
                 | "XCHG"
                 | "INC"
@@ -421,6 +422,10 @@ pub fn encode(prefixes: &[String], mnem: &str, ops: &[Operand], env: &dyn Env, c
     let mut e = Enc::default();
     for p in prefixes {
         e.b(match p.as_str() {
+            "ES" => 0x26,
+            "CS" => 0x2E,
+            "SS" => 0x36,
+            "DS" => 0x3E,
             "LOCK" => 0xF0,
             "REPNE" | "REPNZ" => 0xF2,
             _ => 0xF3,
@@ -743,6 +748,14 @@ pub fn encode(prefixes: &[String], mnem: &str, ops: &[Operand], env: &dyn Env, c
                 }
                 _ => return Err(format!("{mnem} requires a 16-bit operand")),
             }
+        }
+        "BOUND" => {
+            want(2)?;
+            let Op::R16(r) = ops[0] else { return Err("BOUND: 16-bit register expected".into()) };
+            if !matches!(ops[1], Op::Mem(_)) {
+                return Err("BOUND: memory operand expected".into());
+            }
+            emit_rm(&mut e, &[0x62], r, &ops[1])?;
         }
         "LEA" | "LDS" | "LES" => {
             want(2)?;

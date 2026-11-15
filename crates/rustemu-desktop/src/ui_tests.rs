@@ -9,6 +9,28 @@ use rustemu_ui::testing::{app_with_example, save};
 use rustemu_ui::tools::Tool;
 
 #[test]
+fn a86_syntax_setting_roundtrips_and_controls_assembly() {
+    use rustemu_ui::app::SyntaxChoice;
+    let settings = Settings { last_file: None, syntax: SyntaxChoice::A86, ..Settings::default() };
+    let stored = ron_for_a86_setting(&settings);
+    assert_eq!(stored.syntax, SyntaxChoice::A86);
+    let mut app = App::with_settings(stored);
+    app.doc.text = "mov ax,0100\nint 020\n".into();
+    app.emulate();
+    let program = app.session.program.as_ref().unwrap();
+    assert_eq!(program.dialect, rustemu_asm::Dialect::A86);
+    assert_eq!(program.image, [0xb8, 0, 1, 0xcd, 0x20]);
+    app.single_step();
+    assert_eq!(app.session.x86().unwrap().cpu.regs[rustemu_core::cpu::AX], 256);
+}
+
+fn ron_for_a86_setting(settings: &Settings) -> Settings {
+    let mut storage = MemStorage::default();
+    eframe::set_value(&mut storage, eframe::APP_KEY, settings);
+    eframe::get_value(&storage, eframe::APP_KEY).unwrap()
+}
+
+#[test]
 fn nasm_bios_boot_sector_single_steps_to_halt() {
     let mut app = App::with_settings(Settings { last_file: None, timer_irq: true, ..Settings::default() });
     app.doc.text = include_str!("../../../tests/programs/brokenthorn_boot.asm").into();

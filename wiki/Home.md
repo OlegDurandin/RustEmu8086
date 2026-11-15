@@ -22,7 +22,8 @@ the stack and the screen are all in view, and you can step back when you go too 
 | Topic | What it covers |
 |---|---|
 | [Emu8086 syntax](Emu8086-syntax) | directives, COM / EXE / BIN / BOOT formats, operand sizes |
-| [NASM syntax](NASM-syntax) | the second assembly language, as in `nasm -f bin` |
+| [NASM syntax](NASM-syntax) | flat binaries, as in `nasm -f bin` |
+| [A86 syntax](A86-syntax) | numbers, typed memory, local labels, macros, structures and an example |
 | [8087 coprocessor](8087-coprocessor) | floating point: `FLD`, `FADD`, `FSQRT`, the FPU window |
 | [emu8086.inc library](Emu8086-inc-library) | `PRINT`, `SCAN_NUM`, `PRINT_NUM` and other macros |
 | [BIOS and DOS interrupts](BIOS-and-DOS-interrupts) | which INT 10h, 16h, 21h, 13h… functions are supported |

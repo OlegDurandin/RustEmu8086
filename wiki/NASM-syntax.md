@@ -26,10 +26,11 @@ Automatically. NASM is selected if the file has any of these:
 - `times`, `resb` / `resw` / `resd`, `$$`;
 - a size without `ptr`: `byte [..]`, `word [..]`.
 
-The `.nasm` file extension and a `#nasm#` line also select NASM. If a program does not assemble in the syntax
-detected this way but does in the other one, the other one is used (for example, `push word 5` or `` `a` ``
-without other signs of NASM). To set it explicitly: the **Options** menu or the **options** window → *assembler
-syntax* (auto / Emu8086 / NASM); on the command line — `rustemu asm file --syntax nasm`. The build message says
+The `.nasm` file extension and a `#nasm#` line also select NASM. Unless A86 was detected
+(see [A86 syntax](A86-syntax)), a program that fails in the detected MASM/NASM syntax is retried in the other
+one (for example, `push word 5` or `` `a` `` without other signs of NASM).
+To set it explicitly: the **Options** menu or the **options** window → *assembler
+syntax* (auto / Emu8086 / NASM / A86); on the command line — `rustemu asm file --syntax nasm`. The build message says
 which syntax the program was assembled with.
 
 Templates: **new** → the *use NASM syntax* checkbox (COM, BIN, boot sector); the `hello_nasm.asm` and

@@ -52,7 +52,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
   <array>
     <dict>
       <key>CFBundleTypeName</key><string>8086 Assembly Source</string>
-      <key>CFBundleTypeExtensions</key><array><string>asm</string><string>nasm</string><string>inc</string></array>
+      <key>CFBundleTypeExtensions</key><array><string>asm</string><string>nasm</string><string>inc</string><string>a86</string><string>8</string><string>08</string><string>8x</string></array>
       <key>CFBundleTypeRole</key><string>Editor</string>
     </dict>
   </array>

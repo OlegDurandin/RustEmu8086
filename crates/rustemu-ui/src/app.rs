@@ -38,6 +38,8 @@ pub enum SyntaxChoice {
     Masm,
     /// NASM (`-f bin`).
     Nasm,
+    /// A86 (including `.8` sources).
+    A86,
 }
 
 impl SyntaxChoice {
@@ -47,6 +49,7 @@ impl SyntaxChoice {
             SyntaxChoice::Auto => None,
             SyntaxChoice::Masm => Some(rustemu_asm::Dialect::Masm),
             SyntaxChoice::Nasm => Some(rustemu_asm::Dialect::Nasm),
+            SyntaxChoice::A86 => Some(rustemu_asm::Dialect::A86),
         }
     }
 }

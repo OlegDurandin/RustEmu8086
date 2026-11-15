@@ -1,0 +1,19 @@
+; A86: print a greeting using DOS, then exit.
+; Demonstrates leading-zero hex constants and positional macros.
+#a86#
+
+; #Rx1L repeats the next line for each argument; #x is the current one.
+clear macro
+#rx1l
+    xor #x, #x
+#em
+
+start:
+    clear ax, bx, dx         ; Expands to three XOR instructions.
+    mov dx, offset message  ; DS:DX points to the '$'-terminated string.
+    mov ah, 09              ; DOS function 09: print a string.
+    int 021                 ; A86: 021 = hexadecimal 21 (decimal 33).
+    mov ax, 04c00           ; DOS function 4C: exit with code 0.
+    int 021
+
+message db 'Hello from A86!', 0d, 0a, '$'  ; CR, LF and DOS terminator.

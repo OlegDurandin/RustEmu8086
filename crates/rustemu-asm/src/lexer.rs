@@ -78,13 +78,40 @@ pub fn parse_number_nasm(s: &str) -> Option<i64> {
 
 /// Splits a line into tokens, stopping at a `;` comment.
 pub fn tokenize(line: &str) -> Result<Vec<Token>, (usize, String)> {
-    tokenize_with(line, false)
+    tokenize_with(line, false, false)
 }
 
 /// Like [`tokenize`] for the NASM dialect: `.` may appear in names (local labels `.loop`),
 /// backquoted strings with C escapes, `$1F` hexadecimal numbers and NASM number prefixes.
 pub fn tokenize_nasm(line: &str) -> Result<Vec<Token>, (usize, String)> {
-    tokenize_with(line, true)
+    tokenize_with(line, true, false)
+}
+
+/// A86 numeric notation (a leading zero selects hex; `xB`/`xD` force a base).
+pub fn parse_number_a86(s: &str) -> Option<i64> {
+    let s = s.replace('_', "").to_ascii_lowercase();
+    if let Some(n) = s.strip_suffix('k') {
+        return n.parse::<i64>().ok()?.checked_mul(1024);
+    }
+    let default = if s.starts_with('0') { 16 } else { 10 };
+    for (suffix, radix) in [("xb", 2), ("xd", 10), ("xh", 16), ("h", 16), ("xq", 8), ("xo", 8), ("q", 8), ("o", 8)] {
+        if let Some(n) = s.strip_suffix(suffix) {
+            return i64::from_str_radix(n, radix).ok();
+        }
+    }
+    if default == 10 {
+        for (suffix, radix) in [('b', 2), ('d', 10)] {
+            if let Some(n) = s.strip_suffix(suffix) {
+                return i64::from_str_radix(n, radix).ok();
+            }
+        }
+    }
+    i64::from_str_radix(&s, default).ok()
+}
+
+/// Tokenizes A86; an unclosed quote denotes the rest of that source line.
+pub fn tokenize_a86(line: &str) -> Result<Vec<Token>, (usize, String)> {
+    tokenize_with(line, false, true)
 }
 
 /// Contents of a NASM backquoted string starting after the opening backquote at `b[i]`;
@@ -121,7 +148,7 @@ fn backquoted(b: &[u8], mut i: usize, start: usize) -> Result<(Vec<u8>, usize), 
     }
 }
 
-fn tokenize_with(line: &str, nasm: bool) -> Result<Vec<Token>, (usize, String)> {
+fn tokenize_with(line: &str, nasm: bool, a86: bool) -> Result<Vec<Token>, (usize, String)> {
     let b = line.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -141,6 +168,9 @@ fn tokenize_with(line: &str, nasm: bool) -> Result<Vec<Token>, (usize, String)> 
             let mut s = Vec::new();
             loop {
                 if i >= b.len() {
+                    if a86 {
+                        break;
+                    }
                     return Err((start, "unterminated string".into()));
                 }
                 if b[i] == q {
@@ -207,7 +237,13 @@ fn tokenize_with(line: &str, nasm: bool) -> Result<Vec<Token>, (usize, String)> 
                 i += 1;
             }
             let text = line[start..i].replace('_', "");
-            let parsed = if nasm { parse_number_nasm(&text) } else { parse_number(&text) };
+            let parsed = if a86 {
+                parse_number_a86(&text)
+            } else if nasm {
+                parse_number_nasm(&text)
+            } else {
+                parse_number(&text)
+            };
             let n = parsed.ok_or((start, format!("invalid number '{text}'")))?;
             out.push(Token { tok: Tok::Num(n), col: start });
             continue;

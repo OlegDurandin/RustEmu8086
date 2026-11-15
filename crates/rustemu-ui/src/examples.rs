@@ -93,7 +93,7 @@ macro_rules! example {
     };
 }
 
-/// The examples of Emu8086 (its `examples` folder, as they are) and our NASM examples, by file
+/// The examples of Emu8086 (its `examples` folder, as they are) and our NASM/A86 examples, by file
 /// name: "more examples..." lists them all.
 pub const EXAMPLES: &[(&str, &str)] = &[
     example!("0_sample_add_huge_numbers.asm"),
@@ -134,6 +134,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     example!("file-operations.asm"),
     example!("float.asm"),
     example!("hello.asm"),
+    example!("hello_a86.a86"),
     example!("hello_nasm.asm"),
     example!("HelloWorld.asm"),
     example!("HexConvertor.asm"),
@@ -184,7 +185,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     example!("z04.asm"),
 ];
 
-/// The Examples menu: Emu8086's items (its captions) and the files they open, then NASM.
+/// The Examples menu: Emu8086's items (its captions) and the files they open, then NASM/A86.
 pub const MENU: &[(&str, &str)] = &[
     ("Hello, world (.com)", "1_sample.asm"),
     ("Hello, world (.exe)", "exetest.asm"),
@@ -199,6 +200,7 @@ pub const MENU: &[(&str, &str)] = &[
     ("simple i/o", "simple_io.asm"),
     ("Hello, world (NASM)", "hello_nasm.asm"),
     ("boot sector (NASM)", "boot_nasm.asm"),
+    ("Hello, world (A86)", "hello_a86.a86"),
 ];
 
 /// What an example does: its caption in the Examples menu and the comment at the top of the file

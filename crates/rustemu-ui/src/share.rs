@@ -209,6 +209,7 @@ impl App {
                 None => crate::app::SyntaxChoice::Auto,
                 Some(rustemu_asm::Dialect::Masm) => crate::app::SyntaxChoice::Masm,
                 Some(rustemu_asm::Dialect::Nasm) => crate::app::SyntaxChoice::Nasm,
+                Some(rustemu_asm::Dialect::A86) => crate::app::SyntaxChoice::A86,
             };
         }
     }

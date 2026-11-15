@@ -1,4 +1,4 @@
-//! The Examples menu, as in Emu8086 (plus NASM, and the MIPS examples), and the "more
+//! The Examples menu, as in Emu8086 (plus NASM/A86, and the MIPS examples), and the "more
 //! examples..." window.
 
 use egui::{RichText, Ui};
@@ -41,7 +41,7 @@ pub fn mips_examples(app: &mut App, ui: &mut Ui, emulate: bool) {
     }
 }
 
-/// Emu8086's Examples menu (plus NASM) and "more examples...".
+/// Emu8086's Examples menu (plus NASM/A86) and "more examples...".
 pub fn x86_examples(app: &mut App, ui: &mut Ui, emulate: bool) {
     for &(caption, file) in crate::examples::MENU {
         if file == "hello_nasm.asm" {
