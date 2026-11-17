@@ -23,10 +23,12 @@ mod exec;
 mod files;
 mod session;
 mod shortcuts;
+mod state;
 mod storage;
 
 pub use arch::{OpenAs, Workspace};
 pub use rustemu_session::detect_arch;
+pub use state::ExecutionState;
 
 /// Assembler syntax (options window).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -667,6 +669,8 @@ pub struct App {
     pub program: Program,
     /// The run loop.
     pub exec: Exec,
+    /// Isolated offline exercise checks and their public feedback.
+    pub learning: crate::learning::LearningState,
     /// Breakpoints, watches, conditions.
     pub debugger: Debugger,
     /// Positions of the views.
@@ -720,7 +724,7 @@ pub enum PendingAction {
     /// A source uploaded from the computer, to keep in "my programs": its name and text.
     Import(String, String),
     /// A program from a link.
-    Shared(crate::share::Shared),
+    Shared(Box<crate::share::Shared>),
     /// Quit the application.
     Quit,
 }
@@ -762,6 +766,7 @@ impl App {
             build: Default::default(),
             program: Default::default(),
             exec: Default::default(),
+            learning: Default::default(),
             debugger: Default::default(),
             view: Default::default(),
             dialogs: Default::default(),
@@ -841,7 +846,7 @@ impl App {
             PendingAction::Program(name) => self.open_program(&name),
             PendingAction::Upload => self.web.pending_upload = Some(crate::platform::UploadFor::Open),
             PendingAction::Import(name, text) => self.import_program(&name, text),
-            PendingAction::Shared(s) => self.open_shared(s),
+            PendingAction::Shared(s) => self.open_shared(*s),
             PendingAction::Quit => {}
         }
     }

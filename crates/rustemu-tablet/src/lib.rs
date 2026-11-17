@@ -155,6 +155,10 @@ fn tablet_ui(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         ui,
         |ui| {
             tabs_row(app, t, ui);
+            rustemu_ui::learning::entry_ui(app, ui);
+            if app.execution_ui(ui) {
+                t.keypad.open = true;
+            }
             ui.add_space(GAP);
             let rect = ui.available_rect_before_wrap();
             match t.tab {

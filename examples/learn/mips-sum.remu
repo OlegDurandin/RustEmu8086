@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "architecture": "MIPS32",
+  "entry": "main.s",
+  "dialect": null,
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.s": ".text\nmain:\n# TODO: read two integers, calculate $t0\nli $v0,10\nsyscall\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "mips-sum",
+    "title": "MIPS Sum two integers",
+    "description": "Level: beginner. Read two integers using syscall 5. Store their 32-bit sum in $t0 using unsigned addition; overflow wraps. Exit with syscall 10. Checks cover $t0 and exit status.",
+    "architecture": "MIPS32",
+    "starter_code": ".text\nmain:\n# TODO: read two integers, calculate $t0\nli $v0,10\nsyscall\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "Save the first value before reading again. Use ADDU for wrapping addition.",
+    "cases": [
+      {
+        "name": "positive",
+        "input": "3\n4\n",
+        "initial_registers": {},
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 7
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "signed",
+        "input": "-3\n9\n",
+        "initial_registers": {},
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 6
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "wrap",
+        "input": "2147483647\n1\n",
+        "initial_registers": {},
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 2147483648
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      }
+    ]
+  }
+}

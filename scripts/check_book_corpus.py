@@ -48,6 +48,12 @@ def runtime_status(r):
     return "terminated"  # DOS may return any exit code, including nonzero.
 
 
+def source_listings(files):
+    """Exclude generated quiz fragments when replaying a retained archive-copy."""
+    return [p for p in files if p.suffix.lower() in (".8", ".08", ".8x", ".asm")
+            and not re.search(r"\.txt\.part-\d+\.8$", p.name, re.I)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
@@ -68,7 +74,7 @@ def main():
     for chapter in range(1, 13):
         shutil.copytree(root / f"{chapter:02}", inputs / f"{chapter:02}")
     files = sorted(p for p in inputs.rglob("*") if p.is_file())
-    listings = [p for p in files if p.suffix.lower() in (".8", ".08", ".8x", ".asm")]
+    listings = source_listings(files)
     includes = [p for p in files if p.suffix.lower() == ".inc"]
     quiz_origins = {}
     for p in files:

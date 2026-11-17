@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "architecture": "8086",
+  "entry": "main.asm",
+  "dialect": "Masm",
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.asm": "org 100h\n; TODO: increment AL and propagate carry into AH\nhlt\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "8086-carry",
+    "title": "8086 Carry across AL and AH",
+    "description": "Level: beginner. Add 1 to AL. Propagate its carry into AH using ADC. Finish with HLT. Cases set AX; checks cover AX, AL, AH, CF and ZF.",
+    "architecture": "8086",
+    "starter_code": "org 100h\n; TODO: increment AL and propagate carry into AH\nhlt\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "ADD changes CF. ADC AH,0 uses the carry from AL.",
+    "cases": [
+      {
+        "name": "carry",
+        "input": "",
+        "initial_registers": {
+          "AX": 255
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 256,
+            "AL": 0,
+            "AH": 1,
+            "CF": 0,
+            "ZF": 0
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "no carry",
+        "input": "",
+        "initial_registers": {
+          "AX": 4610
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 4611,
+            "CF": 0,
+            "ZF": 0
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "word wraps",
+        "input": "",
+        "initial_registers": {
+          "AX": 65535
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 0,
+            "CF": 1,
+            "ZF": 1
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      }
+    ]
+  }
+}

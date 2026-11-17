@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "architecture": "MIPS32",
+  "entry": "main.s",
+  "dialect": null,
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.s": ".data\nslot: .word 0\n.text\nmain:\n# TODO: store and reload the word\nli $v0,10\nsyscall\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "mips-memory",
+    "title": "MIPS LW SW aligned memory",
+    "description": "Level: beginner. Store $t1 in slot at 10010000h and load it into $t0. Preserve $t1. Check register and little endian bytes.",
+    "architecture": "MIPS32",
+    "starter_code": ".data\nslot: .word 0\n.text\nmain:\n# TODO: store and reload the word\nli $v0,10\nsyscall\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "LA computes an address; LW/SW transfer four aligned bytes. Inspect slot and the temporary registers used by pseudoinstructions.",
+    "cases": [
+      {
+        "name": "0",
+        "input": "",
+        "initial_registers": {
+          "$t1": 0
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 0,
+            "$t1": 0
+          },
+          "memory": [
+            {
+              "address": 268500992,
+              "bytes": [
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "42",
+        "input": "",
+        "initial_registers": {
+          "$t1": 42
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 42,
+            "$t1": 42
+          },
+          "memory": [
+            {
+              "address": 268500992,
+              "bytes": [
+                42,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "4294967295",
+        "input": "",
+        "initial_registers": {
+          "$t1": 4294967295
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 4294967295,
+            "$t1": 4294967295
+          },
+          "memory": [
+            {
+              "address": 268500992,
+              "bytes": [
+                255,
+                255,
+                255,
+                255
+              ]
+            }
+          ],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      }
+    ]
+  }
+}

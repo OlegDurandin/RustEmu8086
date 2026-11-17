@@ -12,6 +12,7 @@ fn project(mips: bool) -> Project {
         dialect: None,
         mars: Default::default(),
         input: String::new(),
+        exercise: None,
         files: BTreeMap::from([
             (
                 "src/main.asm".into(),

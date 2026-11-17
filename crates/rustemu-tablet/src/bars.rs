@@ -143,7 +143,8 @@ fn project_button(app: &mut App, ui: &mut Ui) {
 
 /// A row of the project menu: an icon, the action and what it does.
 fn menu_row(ui: &mut Ui, icon: Icon, title: &str, hint: &str) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(440.0, 52.0), Sense::click());
+    let width = ui.available_width().clamp(220.0, 440.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 58.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let p = ui.painter();
     if resp.hovered() || resp.is_pointer_button_down_on() {
@@ -151,15 +152,15 @@ fn menu_row(ui: &mut Ui, icon: Icon, title: &str, hint: &str) -> bool {
     }
     paint_icon(p, icon, egui::pos2(rect.left() + 22.0, rect.center().y), 22.0, pal::TEXT);
     p.text(
-        egui::pos2(rect.left() + 46.0, rect.center().y),
+        egui::pos2(rect.left() + 46.0, rect.top() + 17.0),
         Align2::LEFT_CENTER,
         title,
         FontId::proportional(17.0),
         pal::TEXT,
     );
     p.text(
-        egui::pos2(rect.right() - 12.0, rect.center().y),
-        Align2::RIGHT_CENTER,
+        egui::pos2(rect.left() + 46.0, rect.top() + 40.0),
+        Align2::LEFT_CENTER,
         hint,
         FontId::proportional(14.0),
         pal::WEAK,
@@ -179,7 +180,7 @@ fn project_menu(app: &mut App, ui: &mut Ui) {
         app.guarded(PendingAction::New);
         done = true;
     }
-    let open_hint = if app.session.mips().is_some() { "ASM · S" } else { "ASM · COM · EXE · BIN" };
+    let open_hint = "Source, binary or .remu project";
     if menu_row(ui, Icon::Folder, "Open from Files…", open_hint) {
         app.guarded(if browser { PendingAction::Upload } else { PendingAction::Open(None) });
         done = true;
@@ -205,7 +206,11 @@ fn project_menu(app: &mut App, ui: &mut Ui) {
         }
         done = true;
     }
-    let share_hint = if browser { "Share sheet" } else { "Link to the web version" };
+    if menu_row(ui, Icon::Download, "Export project (.remu)", "Sources, includes, settings and input") {
+        app.dialogs.share = Some(rustemu_ui::share::ShareDialog::new(false));
+        done = true;
+    }
+    let share_hint = "One source file only";
     if menu_row(ui, Icon::Share, "Share source", share_hint) {
         app.share_source();
         done = true;
@@ -350,17 +355,8 @@ pub(crate) fn status_bar(app: &mut App, t: &mut TabletState, ui: &mut Ui) {
         app.build_status_ui(ui);
         ui.set_min_height(30.0);
         let m = &*app.session.target;
-        let (state, color) = if !app.loaded() {
-            ("Not loaded", pal::WEAK)
-        } else if m.terminated().is_some() {
-            ("Terminated", pal::WEAK)
-        } else if m.is_waiting_input() {
-            ("Waiting for input", pal::AMBER)
-        } else if app.run != RunMode::Paused {
-            ("Running", pal::TEAL)
-        } else {
-            ("Paused", pal::TEXT)
-        };
+        let state = app.execution_state().label();
+        let color = pal::TEXT;
         ui.label(RichText::new(state).size(16.0).color(color));
         let sep = |ui: &mut Ui| ui.label(RichText::new("·").size(16.0).color(pal::WEAK));
         let mips = app.session.mips();

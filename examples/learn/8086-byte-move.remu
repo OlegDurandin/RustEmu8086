@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "architecture": "8086",
+  "entry": "main.asm",
+  "dialect": "Masm",
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.asm": "org 100h\n; TODO: implement the goal\nhlt\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "8086-byte-move",
+    "title": "8086 MOV byte halves",
+    "description": "Level: beginner. Copy AH to BL and AL to BH, preserving AX. Check AX and BX; HLT.",
+    "architecture": "8086",
+    "starter_code": "org 100h\n; TODO: implement the goal\nhlt\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "Inspect AH/AL and BH/BL before each MOV. Writing one byte leaves the other byte unchanged.",
+    "cases": [
+      {
+        "name": "4660",
+        "input": "",
+        "initial_registers": {
+          "AX": 4660
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 4660,
+            "BX": 13330
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "0",
+        "input": "",
+        "initial_registers": {
+          "AX": 0
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 0,
+            "BX": 0
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "65408",
+        "input": "",
+        "initial_registers": {
+          "AX": 65408
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 65408,
+            "BX": 33023
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      }
+    ]
+  }
+}

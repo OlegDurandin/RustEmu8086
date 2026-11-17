@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "architecture": "MIPS32",
+  "entry": "main.s",
+  "dialect": null,
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.s": ".data\nvalues: .word 3,-5,17,8\n.text\nmain:\n# TODO: maximum of four signed words in $t0, leave array unchanged\nli $v0,10\nsyscall\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "mips-max",
+    "title": "MIPS Maximum in an array",
+    "description": "Level: beginner. Find the signed maximum of values [3,-5,17,8] in $t0, without changing the array. Exit using syscall 10. The package uses the default MARS memory layout.",
+    "architecture": "MIPS32",
+    "starter_code": ".data\nvalues: .word 3,-5,17,8\n.text\nmain:\n# TODO: maximum of four signed words in $t0, leave array unchanged\nli $v0,10\nsyscall\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "Load the first element as the current maximum. Compare three remaining words as signed integers.",
+    "cases": [
+      {
+        "name": "signed maximum",
+        "input": "",
+        "initial_registers": {},
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 17
+          },
+          "memory": [
+            {
+              "address": 268500992,
+              "bytes": [
+                3,
+                0,
+                0,
+                0,
+                251,
+                255,
+                255,
+                255,
+                17,
+                0,
+                0,
+                0,
+                8,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "Ignore misleading initial maximum",
+        "input": "",
+        "initial_registers": {
+          "$t0": 2147483647
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 17
+          },
+          "memory": [
+            {
+              "address": 268500992,
+              "bytes": [
+                3,
+                0,
+                0,
+                0,
+                251,
+                255,
+                255,
+                255,
+                17,
+                0,
+                0,
+                0,
+                8,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      }
+    ]
+  }
+}

@@ -91,6 +91,18 @@ fn emulator_ui(app: &mut App, ui: &mut Ui) {
 /// The run controls of the emulator window and the step delay; `more` adds the processor's own
 /// settings after the delay.
 pub fn controls(app: &mut App, ui: &mut Ui, more: impl FnOnce(&mut App, &mut Ui)) {
+    app.execution_ui(ui);
+    ui.horizontal_wrapped(|ui| {
+        let last = if app.arch() == rustemu_session::Arch::I8086 {
+            app.session.last_step(app.settings.show_macro_code).map(|s| s.text)
+        } else {
+            rustemu_ui::mips_ui::last_step(app).map(|s| s.text)
+        };
+        ui.label(format!("Last executed instruction: {}", last.as_deref().unwrap_or("none yet")));
+        if let Some(v) = app.session.current_view(app.settings.show_macro_code) {
+            ui.label(format!("Next instruction: {}", rustemu_ui::debugger::file_line(app, v.file, v.line)));
+        }
+    });
     let loaded = app.loaded();
     ui.horizontal_wrapped(|ui| {
         if ui.button("📂 Load").on_hover_text("Open an executable or source file").clicked() {

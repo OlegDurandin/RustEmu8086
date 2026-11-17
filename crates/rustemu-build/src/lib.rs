@@ -10,6 +10,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+pub mod exercise;
 pub mod mars;
 pub mod project;
 

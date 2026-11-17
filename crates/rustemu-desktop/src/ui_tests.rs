@@ -9,6 +9,82 @@ use rustemu_ui::testing::{app_with_example, save};
 use rustemu_ui::tools::Tool;
 
 #[test]
+fn pilot_first_success_and_cancel_check_keep_source() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    h.get_by_label("📚 examples").click();
+    h.run_steps(2);
+    h.get_by_label("First success").hover();
+    h.run_steps(3);
+    h.get_by_label("Start with MIPS Hello").click();
+    h.run_steps(2);
+    assert_eq!(h.state().arch(), rustemu_session::Arch::Mips32);
+    h.state_mut().doc.saved_text = h.state().doc.text.clone();
+    rustemu_ui::learning::open_example(h.state_mut(), 0);
+    h.state_mut().doc.text = "org 100h\nagain: jmp again\n".into();
+    h.run_steps(2);
+    h.get_by_label("Проверить решение / Check solution").click();
+    h.run_steps(1);
+    h.get_by_label("Cancel check").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Check cancelled").is_some());
+    h.get_by_label("Edit code").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Проверить решение / Check solution").is_none());
+    assert_eq!(h.state().doc.text, "org 100h\nagain: jmp again\n");
+}
+
+#[test]
+fn ux_input_and_context_roundtrip_without_reset() {
+    use rustemu_session::Arch;
+    use rustemu_ui::app::{ExecutionState, RunMode, SyntaxChoice};
+    let mut app = App::with_settings(Settings { last_file: None, ..Default::default() });
+    app.settings.syntax = SyntaxChoice::Masm;
+    app.doc.text = "org 100h\nmov ah,0\nint 16h\nmov bl,al\nret\n; unsaved 8086\n".into();
+    let mut h = harness(app);
+    h.run();
+    h.state_mut().emulate();
+    h.state_mut().start_run();
+    run_frames(&mut h, 5);
+    assert_eq!(h.state().execution_state(), ExecutionState::WaitingInput);
+    assert!(h.query_by_label_contains("Ожидается клавиша").is_some());
+    h.get_by_label("Enter a key").click();
+    h.run_steps(2);
+    assert!(h.state().windows[Tool::Screen]);
+    h.state_mut().session.target.push_char(b'x');
+    run_frames(&mut h, 5);
+    assert_eq!(h.state().execution_state(), ExecutionState::Finished);
+    assert_eq!(h.state().session.x86().unwrap().cpu.regs[rustemu_core::cpu::BX] & 255, b'x' as u16);
+    save(&mut h, "60_ux_desktop_finished");
+    let source = h.state().doc.text.clone();
+    h.state_mut().switch_arch(Arch::Mips32);
+    h.state_mut().load_mips_example(1); // sum.s
+    h.state_mut().doc.text.push_str("\n# unsaved MIPS\n");
+    h.state_mut().emulate();
+    h.state_mut().start_run();
+    run_frames(&mut h, 5);
+    assert_eq!(h.state().execution_state(), ExecutionState::WaitingInput);
+    assert!(h.state().windows[Tool::RunIo]);
+    assert!(h.query_by_label_contains("Enter an integer in Run I/O").is_some());
+    h.get_by_label("Open Run I/O").click();
+    h.run_steps(2);
+    for ch in "5\n".bytes() {
+        h.state_mut().session.target.push_char(ch);
+    }
+    run_frames(&mut h, 5);
+    assert_eq!(h.state().run, RunMode::Paused);
+    assert!(h.state().session.mips().unwrap().console.text().contains("15"));
+    let mips_source = h.state().doc.text.clone();
+    h.state_mut().settings.mars.delayed_branching = true;
+    h.state_mut().switch_arch(Arch::I8086);
+    assert_eq!(h.state().doc.text, source);
+    assert_eq!(h.state().settings.syntax, SyntaxChoice::Masm);
+    h.state_mut().switch_arch(Arch::Mips32);
+    assert_eq!(h.state().doc.text, mips_source);
+    assert!(h.state().settings.mars.delayed_branching);
+}
+
+#[test]
 fn a86_syntax_setting_roundtrips_and_controls_assembly() {
     use rustemu_ui::app::SyntaxChoice;
     let settings = Settings { last_file: None, syntax: SyntaxChoice::A86, ..Settings::default() };
@@ -89,10 +165,45 @@ fn harness(app: App) -> Harness<'static, App> {
     let h = Harness::builder()
         .with_size([1440.0, 900.0])
         .with_max_steps(64)
+        .with_context_setup(rustemu_ui::fonts::install)
         .build_ui_state(|ui, app: &mut App| crate::ui::main_ui(app, ui), app);
     rustemu_ui::fonts::install(&h.ctx);
     h.state().apply_theme(&h.ctx);
     h
+}
+
+#[test]
+fn learning_card_checks_solution_without_replacing_editor_or_debugger() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    h.state_mut().doc.saved_text = h.state().doc.text.clone();
+    rustemu_ui::learning::open_example(h.state_mut(), 0);
+    h.state_mut().doc.text = include_str!("../../../tests/learning-solutions/8086-carry.asm").into();
+    h.state_mut().emulate();
+    h.state_mut().single_step();
+    let text = h.state().doc.text.clone();
+    let pc = h.state().session.target.pc();
+    h.run_steps(2);
+    h.get_by_label("Проверить решение / Check solution").click();
+    for _ in 0..2000 {
+        h.run_steps(1);
+        std::thread::yield_now();
+        if h.state().learning.results.len() == 3 {
+            break;
+        }
+    }
+    assert_eq!(h.state().learning.results.len(), 3);
+    assert!(h.state().learning.results.iter().all(|r| r.passed));
+    assert_eq!(h.state().doc.text, text);
+    assert_eq!(h.state().session.target.pc(), pc);
+    save(&mut h, "61_learning_desktop");
+    h.state_mut().settings.syntax = rustemu_ui::app::SyntaxChoice::Nasm;
+    h.run_steps(2);
+    assert!(h.state().learning.results.is_empty(), "settings changes invalidate old passes");
+    assert!(h.query_by_label_contains("Source or settings changed").is_some());
+    h.get_by_label("Return to code").click();
+    h.run_steps(2);
+    assert_eq!(h.state().doc.text, text);
 }
 
 /// eframe storage in memory; counts the values written. With a quota it keeps the old value of a

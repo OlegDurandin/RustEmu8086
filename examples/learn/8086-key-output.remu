@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "architecture": "8086",
+  "entry": "main.asm",
+  "dialect": "Masm",
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.asm": "org 100h\n; TODO: implement the goal\nhlt\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "8086-key-output",
+    "title": "8086 Keyboard and DOS output",
+    "description": "Level: beginner. Read one key using INT 16h. Copy its ASCII to BL and print once using DOS AH=2. End with HLT. Input is provided by each case.",
+    "architecture": "8086",
+    "starter_code": "org 100h\n; TODO: implement the goal\nhlt\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "INT 16h AH=0 returns ASCII in AL. DOS AH=2 prints DL. Inspect BL before changing AH.",
+    "cases": [
+      {
+        "name": "A",
+        "input": "A",
+        "initial_registers": {},
+        "expected": {
+          "output": "A",
+          "registers": {
+            "BL": 65
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "z",
+        "input": "z",
+        "initial_registers": {},
+        "expected": {
+          "output": "z",
+          "registers": {
+            "BL": 122
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "0",
+        "input": "0",
+        "initial_registers": {},
+        "expected": {
+          "output": "0",
+          "registers": {
+            "BL": 48
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      }
+    ]
+  }
+}

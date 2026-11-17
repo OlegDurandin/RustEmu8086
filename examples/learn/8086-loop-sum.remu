@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "architecture": "8086",
+  "entry": "main.asm",
+  "dialect": "Masm",
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.asm": "org 100h\n; TODO: implement the goal\nhlt\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "8086-loop-sum",
+    "title": "8086 LOOP triangular sum",
+    "description": "Level: beginner. Sum 1 through initial CX into AX; support CX=0 without wrapping the loop. Leave CX=0. Finish HLT.",
+    "architecture": "8086",
+    "starter_code": "org 100h\n; TODO: implement the goal\nhlt\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "LOOP decrements CX. Starting with zero wraps to FFFF without a guard. Inspect CX and AX at the branch.",
+    "cases": [
+      {
+        "name": "0",
+        "input": "",
+        "initial_registers": {
+          "CX": 0
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 0,
+            "CX": 0
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "1",
+        "input": "",
+        "initial_registers": {
+          "CX": 1
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 1,
+            "CX": 0
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "10",
+        "input": "",
+        "initial_registers": {
+          "CX": 10
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 55,
+            "CX": 0
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      }
+    ]
+  }
+}

@@ -26,6 +26,7 @@ pub mod fonts;
 pub mod help;
 pub mod highlight;
 pub mod inspect;
+pub mod learning;
 pub mod library_ui;
 pub mod mars_settings;
 pub mod mips_devices;
@@ -48,6 +49,7 @@ pub fn windows(app: &mut app::App, ctx: &egui::Context, host: &mut dyn tools::Ho
     tools::windows(app, ctx, host);
     dialogs::dialogs(app, ctx);
     mips_ui::dialog_window(app, ctx);
+    learning::window(app, ctx);
 }
 
 /// Window options of the desktop applications.

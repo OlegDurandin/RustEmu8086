@@ -30,6 +30,8 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Tests
         run: cargo test --workspace
+      - name: Corpus runner regression tests
+        run: python3 scripts/test_book_corpus.py
 
   # The application for download: a universal (Apple Silicon + Intel) RustEmu8086.app in a zip,
   # attached to every successful run on main (Actions -> the run -> Artifacts).
@@ -69,6 +71,17 @@ jobs:
       - name: Build the site
         working-directory: crates/rustemu-web
         run: trunk build --release --public-url /RustEmu8086/
+      - name: Record deployed build
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('crates/rustemu-web/dist/build-info.json').write_text(json.dumps({
+              'commit': os.environ['GITHUB_SHA'],
+              'profile': 'pilot-readiness-v1',
+              'run_id': os.environ['GITHUB_RUN_ID'],
+          }, indent=2) + '\n')
+          PY
       - uses: actions/upload-pages-artifact@v3
         with:
           path: crates/rustemu-web/dist

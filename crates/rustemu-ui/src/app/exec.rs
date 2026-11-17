@@ -90,6 +90,7 @@ impl App {
         self.run = RunMode::Paused;
         self.begin_exec();
         if self.catching(|app| app.session.target.step_back()) == Some(true) {
+            self.exec.last_event = None;
             self.status = "Stepped back".into();
         } else {
             self.status = "No more history".into();

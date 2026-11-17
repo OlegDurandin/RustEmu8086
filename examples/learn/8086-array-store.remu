@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "architecture": "8086",
+  "entry": "main.asm",
+  "dialect": "Masm",
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.asm": "org 100h\n; TODO: store AX into slot\nhlt\norg 01ffh\ndb 55h\nslot dw 0\ndb 0aah\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "8086-array-store",
+    "title": "8086 Store a word in memory",
+    "description": "Level: beginner. Store AX into slot. Preserve AX and guard bytes. DS=0700h, slot at 0200h. Check the word and both guard bytes.",
+    "architecture": "8086",
+    "starter_code": "org 100h\n; TODO: store AX into slot\nhlt\norg 01ffh\ndb 55h\nslot dw 0\ndb 0aah\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "Inspect DS:0200 and its neighbours. A word is little endian; writing two bytes must not change the guard bytes.",
+    "cases": [
+      {
+        "name": "0",
+        "input": "",
+        "initial_registers": {
+          "AX": 0
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 0
+          },
+          "memory": [
+            {
+              "address": 29183,
+              "bytes": [
+                85,
+                0,
+                0,
+                170
+              ]
+            }
+          ],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "4660",
+        "input": "",
+        "initial_registers": {
+          "AX": 4660
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 4660
+          },
+          "memory": [
+            {
+              "address": 29183,
+              "bytes": [
+                85,
+                52,
+                18,
+                170
+              ]
+            }
+          ],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "65535",
+        "input": "",
+        "initial_registers": {
+          "AX": 65535
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "AX": 65535
+          },
+          "memory": [
+            {
+              "address": 29183,
+              "bytes": [
+                85,
+                255,
+                255,
+                170
+              ]
+            }
+          ],
+          "termination": "Halted"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "architecture": "MIPS32",
+  "entry": "main.s",
+  "dialect": null,
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.s": ".text\nmain:\n# TODO: implement the goal\nli $v0,10\nsyscall\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "mips-call",
+    "title": "MIPS JAL JR procedure",
+    "description": "Level: beginner. Call a procedure that doubles $t1 into $t0; return using $ra. Preserve $t1 and $sp. Delay slots disabled. Exit normally.",
+    "architecture": "MIPS32",
+    "starter_code": ".text\nmain:\n# TODO: implement the goal\nli $v0,10\nsyscall\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "JAL sets $ra, JR returns through it. Inspect PC/$ra across the call and preserve $sp.",
+    "cases": [
+      {
+        "name": "0",
+        "input": "",
+        "initial_registers": {
+          "$t1": 0
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 0,
+            "$t1": 0,
+            "$sp": 2147479548,
+            "$ra": 4194308
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "21",
+        "input": "",
+        "initial_registers": {
+          "$t1": 21
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 42,
+            "$t1": 21,
+            "$sp": 2147479548,
+            "$ra": 4194308
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "2147483648",
+        "input": "",
+        "initial_registers": {
+          "$t1": 2147483648
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 0,
+            "$t1": 2147483648,
+            "$sp": 2147479548,
+            "$ra": 4194308
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      }
+    ]
+  }
+}

@@ -30,6 +30,9 @@ pub struct Project {
     pub files: BTreeMap<String, String>,
     /// Prepared console input; LF is Enter. Reapplied on load/reload.
     pub input: String,
+    /// Optional versioned public exercise. Absent in ordinary version 1 projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exercise: Option<Box<crate::exercise::Exercise>>,
 }
 
 /// Normalizes an internal source reference without allowing escape from the package.
@@ -59,6 +62,9 @@ impl Project {
         }
         if !matches!(self.architecture.as_str(), "8086" | "MIPS32") {
             return Err("Unknown project architecture".into());
+        }
+        if let Some(exercise) = &self.exercise {
+            exercise.validate(&self.architecture)?;
         }
         if self.files.is_empty() || self.files.len() > MAX_SOURCE_FILES {
             return Err("Project file budget exceeded".into());
@@ -165,6 +171,7 @@ impl Project {
             mars,
             files,
             input,
+            exercise: None,
         };
         p.validate()?;
         // Rebuild without filesystem fallbacks: refuse an apparently complete but unusable export.

@@ -149,12 +149,12 @@ impl App {
             shared.text = p.files[&p.entry].clone();
             shared.arch = Arch::from_name(&p.architecture).unwrap();
         }
-        self.guarded(PendingAction::Shared(shared));
+        self.guarded(PendingAction::Shared(Box::new(shared)));
     }
 
     pub(crate) fn open_shared(&mut self, s: Shared) {
         self.dialogs.open_in = Some(s.arch);
-        if !self.enter_workspace_for(&PendingAction::Shared(s.clone()), None, "") {
+        if !self.enter_workspace_for(&PendingAction::Shared(Box::new(s.clone())), None, "") {
             return;
         }
         self.store_session();
@@ -326,6 +326,7 @@ pub fn share_dialog(app: &mut App, ctx: &egui::Context) {
                 }
             };
             ui.label(format!("{} source files; MARS settings and arguments included", project.files.len()));
+            ui.weak("Portable project: includes, settings and prepared input. No live CPU state or personal drive C: files.");
             let input_label = ui.label("Prepared console input (Enter = new line):");
             ui.add(
                 egui::TextEdit::multiline(&mut project.input)
@@ -425,6 +426,7 @@ mod project_tests {
 
     fn package(mips: bool) -> rustemu_build::project::Project {
         rustemu_build::project::Project {
+            exercise: None,
             version: 1, architecture: if mips { "MIPS32" } else { "8086" }.into(),
             entry: "main.asm".into(), dialect: None,
             mars: crate::mars_settings::MarsSettings {

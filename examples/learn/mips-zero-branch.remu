@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "architecture": "MIPS32",
+  "entry": "main.s",
+  "dialect": null,
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.s": ".text\nmain:\n# TODO: implement the goal\nli $v0,10\nsyscall\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "mips-zero-branch",
+    "title": "MIPS BEQ zero classification",
+    "description": "Level: beginner. Set $t0 to 1 when $a0 is zero, otherwise 2. Delay slots are explicitly disabled by this package. Exit normally.",
+    "architecture": "MIPS32",
+    "starter_code": ".text\nmain:\n# TODO: implement the goal\nli $v0,10\nsyscall\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "BEQ compares equality. Both paths must assign the result. Inspect PC at the branch; this task disables delay slots.",
+    "cases": [
+      {
+        "name": "0",
+        "input": "",
+        "initial_registers": {
+          "$a0": 0
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 1,
+            "$a0": 0
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "1",
+        "input": "",
+        "initial_registers": {
+          "$a0": 1
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 2,
+            "$a0": 1
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      },
+      {
+        "name": "4294967295",
+        "input": "",
+        "initial_registers": {
+          "$a0": 4294967295
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "$t0": 2,
+            "$a0": 4294967295
+          },
+          "memory": [],
+          "termination": {
+            "Exited": 0
+          }
+        }
+      }
+    ]
+  }
+}

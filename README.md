@@ -4,6 +4,8 @@
 
 <h1 align="center">RustEmu8086</h1>
 
+Pilot Readiness V1 adds 12 practice tasks under **Examples → Learn**. Physical-device validation is pending; see the [iPad/Safari checklist (Russian)](docs/ipad-pilot-checklist.md).
+
 <p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
 
 <p align="center"><b>Learn x86 assembly by watching your code execute.</b></p>
@@ -155,8 +157,9 @@ The MIT license does not cover the Emu8086 materials (Emu8086 was an 8086 emulat
 site and the company no longer exist):
 
 - the **examples** in `examples/` (except `hello_nasm.asm`, `boot_nasm.asm`, `hello_a86.a86` and the MIPS examples in
-  `examples/mips/`) are files from the Emu8086 distribution, unchanged (only the text encoding of `thermometer.asm`
-  was converted), and belong to the authors of Emu8086;
+  `examples/mips/`, `examples/projects/` and `examples/learn/`) are files from the Emu8086 distribution
+  and belong to its authors. `thermometer.asm` has converted text encoding; `scasw.asm` corrects the
+  adjustment of DI to the start of the matched word;
 - the **`emu8086.inc` library** (`crates/rustemu-asm/inc/`) reproduces the Emu8086 library: its macros and
   procedures, their names, parameters and behaviour belong to the authors of Emu8086; the text of the file was
   written for RustEmu8086.

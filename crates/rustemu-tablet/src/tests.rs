@@ -89,6 +89,60 @@ fn tablet_run_step_and_tabs() {
 }
 
 #[test]
+fn learning_card_is_available_on_tablet_and_keeps_mips_source() {
+    let mut t = TabletApp::new(app_with_example(0));
+    t.app.doc.saved_text = t.app.doc.text.clone();
+    rustemu_ui::learning::open_example(&mut t.app, 2);
+    t.app.doc.text = include_str!("../../../tests/learning-solutions/mips-sum.s").into();
+    let text = t.app.doc.text.clone();
+    let mut h = tablet_harness(t, [1024.0, 768.0]);
+    h.run_steps(2);
+    h.get_by_label("Проверить решение / Check solution").click();
+    for _ in 0..2000 {
+        h.run_steps(1);
+        std::thread::yield_now();
+        if h.state().app.learning.results.len() == 3 {
+            break;
+        }
+    }
+    assert_eq!(h.state().app.learning.results.len(), 3);
+    assert!(h.state().app.learning.results.iter().all(|r| r.passed));
+    assert_eq!(h.state().app.doc.text, text);
+    h.run_steps(3); // allow the window to settle after the results are added
+    let back = h.get_by_label("Return to code").rect();
+    assert!(back.height() >= 43.0, "touch target must be at least 44 points");
+    assert!(h.ctx.content_rect().contains_rect(back), "return control must remain on screen");
+    let card = egui::AreaState::load(&h.ctx, egui::Id::unique("exercise_card")).unwrap().rect();
+    assert!(card.contains_rect(back), "return control must fit inside the exercise card");
+    save(&mut h, "61_learning_tablet");
+    h.get_by_label("Return to code").click();
+    h.run_steps(2);
+    assert_eq!(h.state().app.doc.text, text);
+}
+
+#[test]
+fn pilot_catalog_cards_fit_narrow_view_and_return_to_editor() {
+    for i in 0..rustemu_ui::learning::EXAMPLES.len() {
+        let mut t = TabletApp::new(app_with_example(0));
+        t.app.doc.saved_text = t.app.doc.text.clone();
+        rustemu_ui::learning::open_example(&mut t.app, i);
+        let source = t.app.doc.text.clone();
+        let id = t.app.doc.project.as_ref().unwrap().exercise.as_ref().unwrap().id.clone();
+        let mut h = tablet_harness(t, [700.0, 980.0]);
+        h.run_steps(3);
+        let edit = h.get_by_label("Edit code").rect();
+        assert!(edit.height() >= 43.0 && h.ctx.content_rect().contains_rect(edit), "{id}");
+        let check = h.get_by_label("Проверить решение / Check solution").rect();
+        assert!(check.height() >= 43.0 && h.ctx.content_rect().contains_rect(check), "{id}");
+        save(&mut h, &format!("62_pilot_{id}"));
+        h.get_by_label("Edit code").click();
+        h.run_steps(2);
+        assert!(h.query_by_label("Проверить решение / Check solution").is_none());
+        assert_eq!(h.state().app.doc.text, source);
+    }
+}
+
+#[test]
 fn tablet_keyboard_types_into_the_program() {
     let i = example("echo.asm");
     let mut h = tablet_harness(TabletApp::new(app_with_example(i)), [1376.0, 1032.0]);
@@ -297,6 +351,41 @@ fn waiting_for_a_key_is_explained() {
     h.get_by_label("BIOS internals").click();
     h.run_steps(2);
     assert!(h.query_by_label_contains("BIOS code serving INT 21h").is_some());
+}
+
+#[test]
+fn ux_int16_and_mips_input_resume_in_narrow_layouts() {
+    use rustemu_session::Arch;
+    use rustemu_ui::app::ExecutionState;
+    for size in [[1024.0, 768.0], [768.0, 1024.0], [700.0, 980.0]] {
+        let mut t = app_with_text("org 100h\nmov ah,0\nint 16h\nmov bl,al\nret\n");
+        t.app.emulate();
+        t.app.start_run();
+        let mut h = tablet_harness(t, size);
+        h.run_steps(5);
+        assert_eq!(h.state().app.execution_state(), ExecutionState::WaitingInput);
+        assert!(h.query_by_label_contains("Ожидается клавиша").is_some());
+        h.get_by_label("key A").click();
+        h.run_steps(5);
+        assert_eq!(h.state().app.execution_state(), ExecutionState::Finished);
+        assert_eq!(h.state().app.session.x86().unwrap().cpu.regs[rustemu_core::cpu::BX] & 255, b'a' as u16);
+        h.state_mut().app.switch_arch(Arch::Mips32);
+        h.state_mut().app.load_mips_example(1);
+        h.state_mut().app.emulate();
+        h.state_mut().app.start_run();
+        h.run_steps(5);
+        assert_eq!(h.state().app.execution_state(), ExecutionState::WaitingInput);
+        assert!(!h.state().state.keypad.open);
+        assert!(h.query_by_label("Open Run I/O").is_some());
+        assert!(h.query_by_label_contains("Enter an integer in Run I/O").is_some());
+        for ch in "5\n".bytes() {
+            h.state_mut().app.session.target.push_char(ch);
+        }
+        h.run_steps(5);
+        assert_eq!(h.state().app.execution_state(), ExecutionState::Finished);
+        assert!(h.state().app.session.mips().unwrap().console.text().contains("15"));
+        save(&mut h, &format!("60_ux_tablet_{}", size[0]));
+    }
 }
 
 #[test]

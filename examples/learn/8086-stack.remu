@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "architecture": "8086",
+  "entry": "main.asm",
+  "dialect": "Masm",
+  "mars": {
+    "delayed_branching": false,
+    "self_modifying": false,
+    "start_at_main": true,
+    "pseudo_instructions": true,
+    "warnings_are_errors": false,
+    "memory": "Default",
+    "program_arguments_enabled": false,
+    "program_arguments": "",
+    "assemble_all": false,
+    "exception_handler_enabled": false,
+    "exception_handler": "",
+    "popup_input": false
+  },
+  "files": {
+    "main.asm": "org 100h\n; TODO: exchange BX and CX using PUSH and POP\nhlt\n"
+  },
+  "input": "",
+  "exercise": {
+    "version": 1,
+    "id": "8086-stack",
+    "title": "8086 Swap using the stack",
+    "description": "Level: beginner. Swap BX and CX using PUSH and POP. Restore SP. Finish with HLT. Cases set BX and CX. Checks include registers and the two stack words in SS=0700h.",
+    "architecture": "8086",
+    "starter_code": "org 100h\n; TODO: exchange BX and CX using PUSH and POP\nhlt\n",
+    "step_limit": 10000,
+    "time_limit_ms": 1000,
+    "hint": "The last pushed word is popped first. Two PUSH must be balanced by two POP.",
+    "cases": [
+      {
+        "name": "two words",
+        "input": "",
+        "initial_registers": {
+          "BX": 4660,
+          "CX": 22136
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "BX": 22136,
+            "CX": 4660,
+            "SP": 65534
+          },
+          "memory": [
+            {
+              "address": 94202,
+              "bytes": [
+                120,
+                86,
+                52,
+                18
+              ]
+            }
+          ],
+          "termination": "Halted"
+        }
+      },
+      {
+        "name": "other words",
+        "input": "",
+        "initial_registers": {
+          "BX": 61453,
+          "CX": 1
+        },
+        "expected": {
+          "output": null,
+          "registers": {
+            "BX": 1,
+            "CX": 61453,
+            "SP": 65534
+          },
+          "memory": [],
+          "termination": "Halted"
+        }
+      }
+    ]
+  }
+}

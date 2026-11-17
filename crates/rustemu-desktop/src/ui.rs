@@ -7,6 +7,7 @@ use rustemu_ui::app::{App, PendingAction, RunMode};
 use rustemu_ui::tools::Tool;
 
 pub fn main_ui(app: &mut App, ui: &mut Ui) {
+    // Exercise checks use private sessions and are advanced by the shared windows pass below.
     let ctx = ui.ctx().clone();
     // Set again by the screen window when it is shown and focused (read by next frame's shortcuts).
     app.screen.focused = false;
@@ -63,7 +64,7 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
                 }
             });
             ui.separator();
-            if ui.button("Save                 ⌘S").clicked() {
+            if ui.button("Save                 ⌘S").on_hover_text("Save to its file, or keep a draft in this browser; use Export project for portable includes and input").clicked() {
                 app.save();
             }
             if ui.button("Save as…             ⇧⌘S").clicked() {
@@ -75,6 +76,9 @@ fn menu_bar(app: &mut App, ui: &mut Ui) {
                 app.download_source();
             }
             if ui.button("Share link…").on_hover_text("A link that opens this program in the web version").clicked() {
+                app.dialogs.share = Some(rustemu_ui::share::ShareDialog::new(false));
+            }
+            if ui.button("Export project (.remu)…").on_hover_text("Sources, includes, architecture settings and prepared input").clicked() {
                 app.dialogs.share = Some(rustemu_ui::share::ShareDialog::new(false));
             }
             if ui.button("Save compiled file   ⌘B").clicked() {
@@ -353,6 +357,7 @@ pub fn arch_selector(app: &mut App, ui: &mut Ui) {
 }
 
 fn toolbar(app: &mut App, ui: &mut Ui) {
+    rustemu_ui::learning::entry_ui(app, ui);
     ui.horizontal(|ui| {
         arch_selector(app, ui);
         ui.separator();

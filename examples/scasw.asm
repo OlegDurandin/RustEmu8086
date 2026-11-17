@@ -44,13 +44,14 @@ found:
     mov ah, 9
     int 21h
 
-; di contains the address of searched word:
-    dec di  
+; SCASW advances DI past the matched word (2 bytes).
+; Move back by one word so ES:DI points to the start of the match:
+    sub di, 2
 
 ; wait for any key press...
     mov ah, 0
     int 16h
-    
+
 
 exit_here:
     ret  ; return control to operating system...
