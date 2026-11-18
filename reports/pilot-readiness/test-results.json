@@ -1,0 +1,27 @@
+{
+  "passed": 499,
+  "failed": 0,
+  "ignored": 2,
+  "suites": 53,
+  "exercises": 12,
+  "cases": 34,
+  "architectures": {
+    "8086": 6,
+    "MIPS32": 6
+  },
+  "real_browser": "BLOCKED",
+  "physical_iPad": "MANUAL REQUIRED",
+  "simulator": "NOT RUN",
+  "MARS": "NOT CONFIGURED",
+  "hardware_8088": "NOT RUN",
+  "stop_latency": "NOT MEASURED",
+  "static_package_tests": 3,
+  "python_corpus_runner_tests": 2,
+  "real_desktop_gui": {
+    "passed": 11,
+    "failed": 0,
+    "report": "desktop-gui.md",
+    "clean_profile": false,
+    "stop_latency": "NOT MEASURED"
+  }
+}

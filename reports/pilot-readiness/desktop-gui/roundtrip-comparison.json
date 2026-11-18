@@ -1,0 +1,13 @@
+{
+  "equal_fields": {
+    "files": true,
+    "exercise": true,
+    "architecture": true,
+    "entry": true,
+    "mars": true,
+    "input": true,
+    "dialect": true,
+    "version": true
+  },
+  "export_sha256": "9bc617600836c811f89623e58637deeead64d9508d55441e91d67eb73c3d77b0"
+}

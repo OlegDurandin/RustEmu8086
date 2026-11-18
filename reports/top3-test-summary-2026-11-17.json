@@ -1,0 +1,40 @@
+{
+  "date": "2026-11-17",
+  "command": "cargo test --workspace --offline",
+  "exit_code": 0,
+  "suites": 53,
+  "passed": 496,
+  "failed": 0,
+  "ignored": 2,
+  "ignored_tests": [
+    "singlestep_8088",
+    "instructions_per_second"
+  ],
+  "MARS_configured": false,
+  "NASM_comparison": "passed",
+  "GNU_MIPS_comparison": "passed",
+  "browser_scope": "Chrome loaded local WASM; further URL control blocked by Computer Use; no full browser E2E",
+  "real_iPad_tested": false,
+  "screenshots": {
+    "60_ux_tablet_700.png": {
+      "sha256": "49b698819cac8846498aa02644c9a97fe66e4324782032b4362fff16aa0abb5b",
+      "bytes": 159306
+    },
+    "61_learning_desktop.png": {
+      "sha256": "8a8fb6db503fe988fcf202f457311cbf2623e53627fb6173d2691e490569b238",
+      "bytes": 178354
+    },
+    "61_learning_tablet.png": {
+      "sha256": "6abaa54a3d17aa7895d388f82e5e391d5f4e2ab41cccaad98472ca4640af3eaa",
+      "bytes": 167982
+    },
+    "60_ux_desktop_finished.png": {
+      "sha256": "d48786fd9dc3e906b714a20ebe7fd800a636634947ce090d2807f088595324af",
+      "bytes": 191360
+    },
+    "32_tablet_waiting.png": {
+      "sha256": "37ee8e46cf7e9dbb49c6b3ecffa7ce8559f5bce8c22f7013cc44c714b3209933",
+      "bytes": 235562
+    }
+  }
+}

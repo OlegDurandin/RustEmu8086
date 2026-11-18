@@ -1,0 +1,79 @@
+[
+  {
+    "command": [
+      "target/debug/rustemu",
+      "run",
+      "examples/hello_a86.a86",
+      "--max",
+      "1000"
+    ],
+    "code": 0,
+    "stdout": "Hello from A86!\n",
+    "stderr": "",
+    "expected": "Hello from A86!\n",
+    "passed": true,
+    "binary_sha256": "e4337708ad427baffd5170e263c892386eafdc173314b8f02889c1d6d375399e"
+  },
+  {
+    "command": [
+      "target/debug/rustemu",
+      "run",
+      "examples/scasw.asm",
+      "--max",
+      "1000",
+      "--input",
+      "x"
+    ],
+    "code": 0,
+    "stdout": "\"yes\" - found!\n",
+    "stderr": "",
+    "expected": "\"yes\" - found!\n",
+    "passed": true,
+    "binary_sha256": "e4337708ad427baffd5170e263c892386eafdc173314b8f02889c1d6d375399e"
+  },
+  {
+    "command": [
+      "target/debug/rustemu",
+      "run",
+      "examples/mips/hello.s",
+      "--max",
+      "1000"
+    ],
+    "code": 0,
+    "stdout": "Hello, MIPS!\n",
+    "stderr": "",
+    "expected": "Hello, MIPS!\n",
+    "passed": true,
+    "binary_sha256": "e4337708ad427baffd5170e263c892386eafdc173314b8f02889c1d6d375399e"
+  },
+  {
+    "command": [
+      "target/debug/rustemu",
+      "run",
+      "examples/projects/8086-include.remu",
+      "--max",
+      "1000"
+    ],
+    "code": 0,
+    "stdout": "X!",
+    "stderr": "",
+    "expected": "X!",
+    "passed": true,
+    "binary_sha256": "e4337708ad427baffd5170e263c892386eafdc173314b8f02889c1d6d375399e"
+  },
+  {
+    "command": [
+      "target/debug/rustemu",
+      "run",
+      "examples/projects/mips-input.remu",
+      "--max",
+      "1000"
+    ],
+    "code": 0,
+    "stdout": "40\n42",
+    "stderr": "",
+    "expected": "40\n42",
+    "passed": true,
+    "binary_sha256": "e4337708ad427baffd5170e263c892386eafdc173314b8f02889c1d6d375399e"
+  }
+]

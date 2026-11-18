@@ -1,0 +1,128 @@
+{
+  "date": "2026-11-17",
+  "type": "real native macOS GUI via CUA",
+  "os": "macOS 26.6.2 (25G83)",
+  "architecture": "ARM64",
+  "app_version": "0.2.1",
+  "binary_sha256": "31d7c0d4055a69a4d6d7e1fbdb7f8e7f6348326f47f22b3da50a08fc65c0ec52",
+  "passed_scenarios": 11,
+  "failed_scenarios": 0,
+  "scope": "11 selected native scenarios, not complete E01-E14",
+  "clean_profile": false,
+  "browser": "BLOCKED; no connected browsers; prior tool restriction retained",
+  "physical_iPad": "NOT RUN",
+  "stop_latency_ms": null,
+  "new_confirmed_production_defects": 0,
+  "roundtrip_equal_fields": [
+    "version",
+    "architecture",
+    "entry",
+    "files",
+    "exercise",
+    "mars",
+    "input",
+    "dialect"
+  ],
+  "roundtrip_sha256": "9bc617600836c811f89623e58637deeead64d9508d55441e91d67eb73c3d77b0",
+  "scenarios": [
+    {
+      "id": "D01",
+      "name": "8086 Hello World -> exit 0",
+      "result": "PASS",
+      "evidence": [
+        "05-hello-run.jpg"
+      ]
+    },
+    {
+      "id": "D02",
+      "name": "Step and step back restore AX/IP",
+      "result": "PASS",
+      "evidence": [
+        "03-after-raise.jpg",
+        "04-hello-stepback.jpg"
+      ]
+    },
+    {
+      "id": "D03",
+      "name": "8086 key wait, Enter a key, A, BL=41h, exit 0",
+      "result": "PASS",
+      "evidence": [
+        "06-input-wait.jpg",
+        "07-input-resumed.jpg"
+      ]
+    },
+    {
+      "id": "D04",
+      "name": "MIPS32 input n=5 -> sum=15, exit 0",
+      "result": "PASS",
+      "evidence": [
+        "15-mips-input.jpg",
+        "16-mips-sum.jpg"
+      ]
+    },
+    {
+      "id": "D05",
+      "name": "Wrong MIPS solution has two failed cases",
+      "result": "PASS",
+      "evidence": [
+        "09-learning-wrong.jpg"
+      ]
+    },
+    {
+      "id": "D06",
+      "name": "Correct MIPS solution has three passed cases",
+      "result": "PASS",
+      "evidence": [
+        "10-learning-correct.jpg"
+      ]
+    },
+    {
+      "id": "D07",
+      "name": "Damaged project rejected, current project preserved",
+      "result": "PASS",
+      "evidence": [
+        "11-damaged-project.jpg",
+        "14-return-code.jpg"
+      ]
+    },
+    {
+      "id": "D08",
+      "name": "GUI export and reopen .remu; metadata/source equality and repeated check",
+      "result": "PASS",
+      "evidence": [
+        "12-export-dialog.jpg",
+        "13-roundtrip-check.jpg",
+        "14-return-code.jpg",
+        "fixtures/gui-roundtrip.remu"
+      ]
+    },
+    {
+      "id": "D09",
+      "name": "Infinite loop Running -> Stop -> Paused",
+      "result": "PASS",
+      "evidence": [
+        "18-loop-running-8086.jpg",
+        "19-loop-stopped.jpg"
+      ]
+    },
+    {
+      "id": "D10",
+      "name": "Invalid assembly and retry do not execute old image; recovery succeeds",
+      "result": "PASS",
+      "evidence": [
+        "20-invalid-assembly.jpg",
+        "21-invalid-run-retry.jpg",
+        "22-recovery-hello.jpg"
+      ]
+    },
+    {
+      "id": "D11",
+      "name": "Unsaved-change Open guard; Cancel keeps sentinel and dirty marker",
+      "result": "PASS",
+      "evidence": [
+        "23-unsaved-guard.jpg",
+        "24-unsaved-cancel.jpg"
+      ]
+    }
+  ]
+}

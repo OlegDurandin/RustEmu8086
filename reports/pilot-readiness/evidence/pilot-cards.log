@@ -1,0 +1,10 @@
+   Compiling rustemu-ui v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-ui)
+   Compiling rustemu-tablet v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-tablet)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.68s
+     Running unittests src/lib.rs (target/debug/deps/rustemu_tablet-0d8a4ffaaf040149)
+
+running 1 test
+test tests::pilot_catalog_cards_fit_narrow_view_and_return_to_editor ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 51.60s
+

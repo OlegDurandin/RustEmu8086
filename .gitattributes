@@ -1,0 +1,6 @@
+# Generated PDFs are binary even when their first bytes contain only ASCII.
+*.pdf binary
+
+# Retain captured evidence byte-for-byte, including HTTP CRLF and tool output.
+reports/pilot-readiness/evidence/** -whitespace
+reports/pilot-readiness/desktop-gui/*.log -whitespace

@@ -1,0 +1,18 @@
+    Blocking waiting for file lock on artifact directory
+    Checking rustemu-build v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-build)
+ Documenting rustemu-build v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-build)
+ Documenting rustemu-session v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-session)
+ Documenting rustemu-core v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-core)
+ Documenting rustemu-asm v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-asm)
+ Documenting rustemu-mips v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-mips)
+ Documenting rustemu-target v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-target)
+    Checking rustemu-ui v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-ui)
+ Documenting rustemu-cli v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-cli)
+ Documenting rustemu-ui v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-ui)
+    Checking rustemu-desktop v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-desktop)
+ Documenting rustemu-desktop v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-desktop)
+    Checking rustemu-tablet v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-tablet)
+ Documenting rustemu-tablet v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-tablet)
+ Documenting rustemu-web v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-web)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 29s
+   Generated /Users/oleg/Research/REmu8086/target/doc/rustemu_asm/index.html and 12 other files

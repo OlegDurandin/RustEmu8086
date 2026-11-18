@@ -1,0 +1,68 @@
+{
+  "date": "2026-11-16",
+  "binary_sha256": "b9b413e59762006f9b28c6f076cffcee699a32a6ff881c5e1dfbe5d8cfa2d2ce",
+  "results": [
+    {
+      "command": [
+        "target/release/rustemu",
+        "run",
+        "examples/hello_a86.a86",
+        "--max",
+        "1000"
+      ],
+      "exit_code": 0,
+      "stdout": "Hello from A86!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "target/release/rustemu",
+        "run",
+        "examples/scasw.asm",
+        "--max",
+        "1000",
+        "--input",
+        "x"
+      ],
+      "exit_code": 0,
+      "stdout": "\"yes\" - found!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "target/release/rustemu",
+        "run",
+        "examples/mips/hello.s",
+        "--max",
+        "1000"
+      ],
+      "exit_code": 0,
+      "stdout": "Hello, MIPS!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "target/release/rustemu",
+        "run",
+        "examples/projects/8086-include.remu",
+        "--max",
+        "1000"
+      ],
+      "exit_code": 0,
+      "stdout": "X!",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "target/release/rustemu",
+        "run",
+        "examples/projects/mips-input.remu",
+        "--max",
+        "1000"
+      ],
+      "exit_code": 0,
+      "stdout": "40\n42",
+      "stderr": ""
+    }
+  ]
+}

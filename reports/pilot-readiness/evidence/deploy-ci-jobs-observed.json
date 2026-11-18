@@ -1,0 +1,353 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 134254059364,
+      "run_id": 44144001978,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/actions/runs/44144001978",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVWolzc8AAAAfQipfZA",
+      "head_sha": "c89ee88fb1e19466f4b6794d7012e698934adbbe",
+      "url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/actions/jobs/134254059364",
+      "html_url": "https://github.com/OlegDurandin/RustEmu8086/actions/runs/44144001978/job/134254059364",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-17T18:05:10Z",
+      "started_at": "2026-11-17T18:10:13Z",
+      "completed_at": "2026-11-17T18:13:31Z",
+      "name": "test",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-17T18:10:14Z",
+          "completed_at": "2026-11-17T18:10:16Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-17T18:10:16Z",
+          "completed_at": "2026-11-17T18:10:19Z"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@stable",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-17T18:10:19Z",
+          "completed_at": "2026-11-17T18:10:35Z"
+        },
+        {
+          "name": "Run Swatinem/rust-cache@v2",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-17T18:10:35Z",
+          "completed_at": "2026-11-17T18:11:04Z"
+        },
+        {
+          "name": "Install NASM (reference assembler for encoding tests)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-17T18:11:04Z",
+          "completed_at": "2026-11-17T18:11:11Z"
+        },
+        {
+          "name": "Install MIPS binutils (reference assembler for the MIPS encoding tests)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-11-17T18:11:11Z",
+          "completed_at": "2026-11-17T18:11:16Z"
+        },
+        {
+          "name": "Format",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-11-17T18:11:16Z",
+          "completed_at": "2026-11-17T18:11:17Z"
+        },
+        {
+          "name": "Clippy",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-11-17T18:11:17Z",
+          "completed_at": "2026-11-17T18:11:26Z"
+        },
+        {
+          "name": "Clippy (web version, WebAssembly)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-11-17T18:11:26Z",
+          "completed_at": "2026-11-17T18:11:30Z"
+        },
+        {
+          "name": "Documentation (broken links, also in private items)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-11-17T18:11:30Z",
+          "completed_at": "2026-11-17T18:11:34Z"
+        },
+        {
+          "name": "Tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-11-17T18:11:34Z",
+          "completed_at": "2026-11-17T18:13:24Z"
+        },
+        {
+          "name": "Corpus runner regression tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-11-17T18:13:24Z",
+          "completed_at": "2026-11-17T18:13:25Z"
+        },
+        {
+          "name": "Post Run Swatinem/rust-cache@v2",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 23,
+          "started_at": "2026-11-17T18:13:25Z",
+          "completed_at": "2026-11-17T18:13:25Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 24,
+          "started_at": "2026-11-17T18:13:25Z",
+          "completed_at": "2026-11-17T18:13:26Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-11-17T18:13:26Z",
+          "completed_at": "2026-11-17T18:13:30Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/check-runs/134254059364",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000000612,
+      "runner_name": "GitHub Actions 1000000612",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 134259413773,
+      "run_id": 44144001978,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/actions/runs/44144001978",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVWolzc8AAAAfQnwTDQ",
+      "head_sha": "c89ee88fb1e19466f4b6794d7012e698934adbbe",
+      "url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/actions/jobs/134259413773",
+      "html_url": "https://github.com/OlegDurandin/RustEmu8086/actions/runs/44144001978/job/134259413773",
+      "status": "in_progress",
+      "conclusion": null,
+      "created_at": "2026-11-17T18:13:31Z",
+      "started_at": "2026-11-17T18:13:38Z",
+      "completed_at": null,
+      "name": "bundle",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-17T18:13:38Z",
+          "completed_at": "2026-11-17T18:13:41Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-17T18:13:41Z",
+          "completed_at": "2026-11-17T18:13:42Z"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@stable",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-17T18:13:42Z",
+          "completed_at": "2026-11-17T18:13:55Z"
+        },
+        {
+          "name": "Run Swatinem/rust-cache@v2",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-17T18:13:55Z",
+          "completed_at": "2026-11-17T18:14:24Z"
+        },
+        {
+          "name": "Build RustEmu8086.app (universal)",
+          "status": "in_progress",
+          "conclusion": null,
+          "number": 5,
+          "started_at": "2026-11-17T18:14:24Z",
+          "completed_at": null
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "pending",
+          "conclusion": null,
+          "number": 6,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run Swatinem/rust-cache@v2",
+          "status": "pending",
+          "conclusion": null,
+          "number": 11,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "pending",
+          "conclusion": null,
+          "number": 12,
+          "started_at": null,
+          "completed_at": null
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/check-runs/134259413773",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000000614,
+      "runner_name": "GitHub Actions 1000000614",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 134259413842,
+      "run_id": 44144001978,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/actions/runs/44144001978",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOVWolzc8AAAAfQnwTUg",
+      "head_sha": "c89ee88fb1e19466f4b6794d7012e698934adbbe",
+      "url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/actions/jobs/134259413842",
+      "html_url": "https://github.com/OlegDurandin/RustEmu8086/actions/runs/44144001978/job/134259413842",
+      "status": "in_progress",
+      "conclusion": null,
+      "created_at": "2026-11-17T18:13:31Z",
+      "started_at": "2026-11-17T18:13:34Z",
+      "completed_at": null,
+      "name": "web",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-11-17T18:13:35Z",
+          "completed_at": "2026-11-17T18:13:40Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-11-17T18:13:40Z",
+          "completed_at": "2026-11-17T18:13:45Z"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@stable",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-11-17T18:13:45Z",
+          "completed_at": "2026-11-17T18:14:01Z"
+        },
+        {
+          "name": "Run Swatinem/rust-cache@v2",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-11-17T18:14:01Z",
+          "completed_at": "2026-11-17T18:14:06Z"
+        },
+        {
+          "name": "Install trunk",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-11-17T18:14:06Z",
+          "completed_at": "2026-11-17T18:14:07Z"
+        },
+        {
+          "name": "Build the site",
+          "status": "in_progress",
+          "conclusion": null,
+          "number": 6,
+          "started_at": "2026-11-17T18:14:07Z",
+          "completed_at": null
+        },
+        {
+          "name": "Record deployed build",
+          "status": "pending",
+          "conclusion": null,
+          "number": 7,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Run actions/upload-pages-artifact@v3",
+          "status": "pending",
+          "conclusion": null,
+          "number": 8,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run Swatinem/rust-cache@v2",
+          "status": "pending",
+          "conclusion": null,
+          "number": 15,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "pending",
+          "conclusion": null,
+          "number": 16,
+          "started_at": null,
+          "completed_at": null
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/OlegDurandin/RustEmu8086/check-runs/134259413842",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000000613,
+      "runner_name": "GitHub Actions 1000000613",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

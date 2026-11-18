@@ -1,0 +1,61 @@
+{
+  "commit": "c89ee88fb1e19466f4b6794d7012e698934adbbe",
+  "previous_commit": "181b02bc220f88dba8b88f3ff3b09105c47f19db",
+  "url": "https://olegdurandin.github.io/RustEmu8086/?ui=tablet&v=c89ee88",
+  "workflow": "https://github.com/OlegDurandin/RustEmu8086/actions/runs/44144001978",
+  "published_build_info": {
+    "commit": "c89ee88fb1e19466f4b6794d7012e698934adbbe",
+    "profile": "pilot-readiness-v1",
+    "run_id": "44144001978"
+  },
+  "remote_test_job": "success",
+  "remote_web_job_last_observed": "in_progress",
+  "publication": "new commit verified by HTTP 200 build-info.json and index.html",
+  "final_actions_status": "unavailable after GitHub unauthenticated API rate limit; no bypass attempted",
+  "local_repeat": "interrupted (exit 130) after loader delays, after remote full test success",
+  "physical_iPad": "NOT RUN",
+  "real_browser_e2e": "NOT RUN",
+  "assets": [
+    {
+      "file": "main.js",
+      "complete": true,
+      "bytes": 165617,
+      "sha256": "f1c96e294620bb877945b13c1a2cc17201fab63652e9f101bdb6eff0a1aff1a5"
+    },
+    {
+      "file": "progress.mjs",
+      "complete": true,
+      "bytes": 1016,
+      "sha256": "0ee49b043c6ccfc9cdbe0a0978aa6edad31cc008691a51552f2ff60fbac20269"
+    },
+    {
+      "file": "worker-loader.js",
+      "complete": true,
+      "bytes": 62,
+      "sha256": "cac1d999a8c0ebcbcee0b9a6c24f0c2efd5c997e6ecfb43d2ef3c7a9b3d96cfa"
+    },
+    {
+      "file": "worker.js",
+      "complete": true,
+      "bytes": 11160,
+      "sha256": "c73ecce3a80257ff549c4659a1242b1b27603d3d5a0b31eaa9d651a746dca70f"
+    },
+    {
+      "file": "worker-compressed.wasm",
+      "complete": true,
+      "bytes": 652578,
+      "sha256": "0a41e3a3f86bb6dd0d9b065f739986236f6615280390b004dbfb41d351ce5b91"
+    },
+    {
+      "file": "main-compressed.wasm",
+      "complete": false,
+      "decoded_prefix_bytes": 2192007,
+      "expected_full_bytes": 9146057,
+      "compressed_transfer_bytes": 745628,
+      "compressed_transfer_expected": 3392573,
+      "http_status": 200,
+      "content_type": "application/wasm",
+      "reason": "90 second network transfer timeout; no full-file hash claimed"
+    }
+  ]
+}

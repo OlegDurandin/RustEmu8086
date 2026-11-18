@@ -1,0 +1,13 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on artifact directory
+    Finished `web` profile [optimized] target(s) in 0.20s
+   Compiling rustemu-ui v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-ui)
+   Compiling rustemu-tablet v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-tablet)
+   Compiling rustemu-desktop v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-desktop)
+   Compiling rustemu-web v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-web)
+    Finished `web` profile [optimized] target(s) in 1m 16s

@@ -1,0 +1,94 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling rustemu-ui v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-ui)
+   Compiling rustemu-desktop v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-desktop)
+   Compiling rustemu-tablet v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-tablet)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 18s
+     Running unittests src/lib.rs (target/debug/deps/rustemu_desktop-17abab7c85777a03)
+
+running 57 tests
+test ui_tests::breakpoints_follow_edited_lines ... ok
+test ui_tests::a86_syntax_setting_roundtrips_and_controls_assembly ... ok
+test ui_tests::conditional_breakpoint_run_to_cursor_and_stop_condition ... ok
+test ui_tests::address_breakpoints_belong_to_one_program ... ok
+test ui_tests::drive_c_is_a_folder_of_its_own ... ok
+test ui_tests::emulator_window_debug_and_file_menus ... ok
+test ui_tests::editing_a_device_clears_step_back_history ... ok
+test ui_tests::full_storage_is_reported_and_retried ... ok
+test ui_tests::compile_error_is_reported ... ok
+test ui_tests::about_window ... ok
+test ui_tests::debugger_windows_snapshot ... ok
+test ui_tests::emu8086_style_emulator_windows ... ok
+test ui_tests::classic_windows_by_default_and_flag_tips ... ok
+test ui_tests::emulator_bottom_buttons_and_aux_menu ... ok
+test ui_tests::memory_drive_window_and_storage ... ok
+test ui_tests::examples_menu_and_more_examples ... ok
+test ui_tests::emulator_menu_snapshots ... ok
+test ui_tests::fpu_window_shows_the_8087 ... ok
+test ui_tests::editor_and_emulate_hello ... ok
+test ui_tests::nasm_bios_boot_sector_single_steps_to_halt ... ok
+test ui_tests::learning_card_checks_solution_without_replacing_editor_or_debugger ... ok
+test ui_tests::nasm_bios_boot_sector_steps_over_to_halt ... ok
+test ui_tests::mars_settings ... ok
+test ui_tests::nasm_templates_and_syntax_setting ... ok
+test ui_tests::disassembly_scrolls_and_tools_go_under_the_screen ... ok
+test ui_tests::no_execution_command_runs_the_old_image_after_a_failed_build ... ok
+test ui_tests::kernel_to_floppy_and_boot_with_the_loader_source ... ok
+test ui_tests::mips_macros ... ok
+test ui_tests::nasm_editor_snapshot ... ok
+test ui_tests::mips_dialogs ... ok
+test ui_tests::mips_panels ... ok
+test ui_tests::pilot_first_success_and_cancel_check_keep_source ... ok
+test ui_tests::options_menu ... ok
+test ui_tests::run_does_not_start_after_assembly_failure ... ok
+test ui_tests::programs_from_links_get_a_temporary_drive ... ok
+test ui_tests::screen_paste_and_copy ... ok
+test ui_tests::new_dialog_menus_and_tools ... ok
+test ui_tests::session_is_restored_after_restart ... ok
+test ui_tests::reference_in_russian ... ok
+test ui_tests::programs_are_kept_in_the_browser ... ok
+test ui_tests::screen_draws_every_cp437_glyph ... ok
+test ui_tests::mips_reference ... ok
+test ui_tests::typing_moves_breakpoints_and_bookmarks ... ok
+test ui_tests::share_links_open_the_program ... ok
+test ui_tests::screen_window_resizes_with_the_mouse ... ok
+test ui_tests::value_viewer_sets_registers_and_memory ... ok
+test ui_tests::stepping_and_debug_windows ... ok
+test ui_tests::short_emulator_panel_scrolls ... ok
+test ui_tests::reference_window_and_editor_lookup ... ok
+test ui_tests::ux_input_and_context_roundtrip_without_reset ... ok
+test ui_tests::panels_and_classic_windows ... ok
+test ui_tests::value_viewer_addresses_and_view_menu_snapshots ... ok
+test ui_tests::nasm_bios_boot_sector_step_button_advances_past_mov_si ... ok
+test ui_tests::stepping_into_library_macros ... ok
+test ui_tests::mips_workspace ... ok
+test ui_tests::graphics_and_devices ... ok
+test ui_tests::mips_devices ... ok
+
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 61.43s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_tablet-7e7d6f2f1ef7fd5c)
+
+running 20 tests
+test cpu::tests::bytes_are_views_of_the_word ... ok
+test keypad::tests::rows_are_equally_wide ... ok
+test keypad::tests::keys_reach_the_bios_buffer ... ok
+test tests::a_key_completes_a_step_that_waits ... ok
+test tests::registers_are_edited_in_the_inspector ... ok
+test tests::tablet_run_step_and_tabs ... ok
+test tests::source_comes_back_from_a_macro_to_the_next_line ... ok
+test tests::source_follows_into_and_out_of_the_library ... ok
+test tests::long_instructions_keep_their_bytes_apart ... ok
+test tests::learning_card_is_available_on_tablet_and_keeps_mips_source ... ok
+test tests::waiting_for_a_key_is_explained ... ok
+test tests::virtual_drive_is_in_the_menu ... ok
+test tests::share_button_and_byte_registers ... ok
+test tests::debug_log_is_a_debugger_tool ... ok
+test tests::visual_step_shows_what_changed ... ok
+test tests::project_menu_opens_examples_and_exports ... ok
+test tests::tablet_keyboard_types_into_the_program ... ok
+test tests::ux_int16_and_mips_input_resume_in_narrow_layouts ... ok
+test tests::tablet_mips_workspace ... ok
+test tests::tablet_layout_snapshots ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.76s
+

@@ -1,0 +1,219 @@
+Прогон глав 01–12, 15 ноября 2026
+128 исходных файлов + 33 упражнения из пяти quiz*.txt = 161 листинг.
+5 include-файлов проверены отдельно. 11 готовых COM/EXE также запущены.
+664 проверки сборки, 83 запуска. Исходники архива не изменены.
+Auto: собрано 20/161 (15/128 основных файлов и 5/33 упражнений), 141 отклонён.
+Встроенный NASM: 12/161. MASM/Emu8086: 18/161. Внешний NASM 3.01: 22/161.
+Завершение или HLT не являются проверкой правильности: многие фрагменты содержат лишь данные,
+не имеют точки выхода или требуют исходного отладчика A86/D86.
+
+Основные препятствия: синтаксис A86; константы с ведущим нулём; команды 386+.
+Наглядно: dw 0100 ;256 → наш код 64 00 (100), а автор подразумевает 00 01 (256).
+int 020 → наш код CD 14 (INT 14h), а автор подразумевает INT 20h.
+Реальный режим 386 с EAX/ESI и префиксами 66/67 не равен модели 8086/80186.
+
+Условия: оригинальные исходники, кроме выделения отдельных упражнений quiz по авторским разделителям;
+без исправления синтаксиса/констант, без дописывания ORG и команды выхода.
+200000 шагов / 5 секунд на запуск; stdin закрыт, IRQ таймера выключен.
+Для внешнего NASM: flat binary при 0100:0000; при явном ORG 100h — COM.
+Остановку на лимите нельзя автоматически считать зависанием: возможны ожидаемые циклы или ожидание IRQ.
+Один готовый postfix.exe запросил ввод; автоматического сценария для него не задавалось.
+Готовые программы главы 12 используют 386+, их случайные HLT/выходы не подтверждают совместимость.
+
+Проверенные главы (исходные файлы / собрано в Auto / упражнения / собрано упражнений):
+01:  0 /  0 /  0 /  0
+02:  7 /  1 /  0 /  0
+03: 17 /  3 / 21 /  3
+04: 13 /  3 / 12 /  2
+05:  2 /  0 /  0 /  0
+06:  9 /  1 /  0 /  0
+07: 13 /  4 /  0 /  0
+08: 19 /  3 /  0 /  0
+09: 16 /  0 /  0 /  0
+10: 16 /  0 /  0 /  0
+11:  5 /  0 /  0 /  0
+12: 11 /  0 /  0 /  0
+
+Наблюдения о NASM:
+Внешний NASM 3.01 принимает 11 фрагментов, которые не принимает наш NASM.
+Из них 6 явно используют 32-битные регистры; остальные требуют отдельного разбора:
+02/var_2.8 — повторное EQU; 03/exa17.8 — DW без операндов;
+05/exa1.8 — DUP без скобок; 06/find_6.8 — LEA без [];
+04/quiz2.txt, упражнение 3 — вывод размера операндов (есть warning NASM об усечении).
+Различие байтов 07/pack_2.8 не обязательно ошибка: наш код разворачивает сдвиг на 4
+в четыре команды 8086, внешний NASM выбирает команду 80186 с непосредственным счётчиком.
+
+Версия исходников эмулятора: 210730bef1bbf05ff2de621904cb579a8c4e4fe1
+SHA256 бинарника: 2c17943b5b210c52e59f47bac8c1d028e75ecc419a3626df0cba908ae34c9efa
+JSON с полными stderr/stdout: /Users/oleg/Research/REmu8086/target/book-corpus-2026-11-15-all/results.json
+Таблица с кликабельными логами: /Users/oleg/Research/REmu8086/target/book-corpus-2026-11-15-all/index.html
+Повторение: /usr/bin/python3 scripts/check_book_corpus.py <папка arch> --out <новая папка>
+Скрипт использует текущий target/release/rustemu и установленный nasm.
+
+Для каждого листинга:
+02/bmp_0.8: ошибка сборки | 02/bmp_0.8(11:25) unexpected 'bitsPerPixel'
+02/test1.8: ошибка сборки | 02/test1.8(4:14) unterminated string
+02/test2.8: ошибка сборки | 02/test2.8(1:21) expected '(' after DUP
+02/test3.8: halted
+02/var_0a.8: ошибка сборки | 02/var_0a.8(1:14) invalid number '1k'
+02/var_0b.8: ошибка сборки | 02/var_0b.8(1:14) invalid number '1k'
+02/var_2.8: ошибка сборки | 02/var_2.8(3:1) symbol 'SZ' already defined (line 1)
+03/exa1.8: ошибка сборки | 03/exa1.8(2:11) invalid number '0abcd1234'
+03/exa10.8: ошибка сборки | 03/exa10.8(4:19) unexpected number 2
+03/exa11.8: ошибка сборки | 03/exa11.8(1:20) expected '(' after DUP
+03/exa12.8: ошибка сборки | 03/exa12.8(1:34) expected '(' after DUP
+03/exa13.8: ошибка сборки | 03/exa13.8(4:10) data expected
+03/exa14.8: ошибка сборки | 03/exa14.8(3:18) unexpected '>'
+03/exa15.8: ошибка сборки | 03/exa15.8(3:19) unexpected '>'
+03/exa16.8: halted
+03/exa17.8: ошибка сборки | 03/exa17.8(2:10) data expected
+03/exa18.8: terminated
+03/exa2.8: ошибка сборки | 03/exa2.8(4:6) invalid number '055aa'
+03/exa3.8: terminated
+03/exa5.8: ошибка сборки | 03/exa5.8(2:17) invalid number '011xb'
+03/exa6.8: ошибка сборки | 03/exa6.8(1:20) expected '(' after DUP
+03/exa7.8: ошибка сборки | 03/exa7.8(2:19) invalid number '10000000xb'
+03/exa8.8: ошибка сборки | 03/exa8.8(7:18) unexpected number 5
+03/exa9.8: ошибка сборки | 03/exa9.8(3:18) unexpected number 2
+04/exa1.8: terminated
+04/exa12.8: ошибка сборки | 04/exa12.8(4:21) unexpected 'area'
+04/exa13.8: ошибка сборки | 04/exa13.8(3:17) MOV expects 2 operand(s), got 3
+04/exa14.8: ошибка сборки | 04/exa14.8(1:17) undefined symbol 'W'
+04/exa15.8: ошибка сборки | 04/exa15.8(1:26) undefined symbol 'W'
+04/exa2.8: terminated
+04/exa3.8: terminated
+04/exa4.8: ошибка сборки | 04/exa4.8(5:17) invalid INC operand
+04/exa5.8: ошибка сборки | 04/exa5.8(19:17) invalid number '0f'
+04/exa6.8: ошибка сборки | 04/exa6.8(2:17) undefined symbol 'B'
+04/exa7.8: ошибка сборки | 04/exa7.8(2:17) undefined symbol 'B'
+04/exa8.8: ошибка сборки | 04/exa8.8(3:47) invalid number '1k'
+04/exa9.8: ошибка сборки | 04/exa9.8(3:47) invalid number '1k'
+05/exa1.8: ошибка сборки | 05/exa1.8(2:24) expected '(' after DUP
+05/exa2.8: ошибка сборки | 05/exa2.8(1:1) missing ENDM
+06/cnt_1.8: ошибка сборки | 06/cnt_1.8(4:1) missing ENDM
+06/cnt_2.8: ошибка сборки | 06/cnt_2.8(4:1) missing ENDM
+06/find_1.8: ошибка сборки | 06/find_1.8(13:17) undefined symbol 'B'
+06/find_1b.8: ошибка сборки | 06/find_1b.8(12:17) undefined symbol 'B'
+06/find_2.8: ошибка сборки | 06/find_2.8(5:24) invalid number '07fff'
+06/find_3.8: ошибка сборки | 06/find_3.8(5:24) invalid number '07fff'
+06/find_4.8: ошибка сборки | 06/find_4.8(5:24) invalid number '07fff'
+06/find_5.8: ошибка сборки | 06/find_5.8(13:17) undefined symbol 'B'
+06/find_6.8: terminated
+07/pack_1.8: ошибка сборки | 07/pack_1.8(1:15) invalid number '0110xb'
+07/pack_1b.8: ошибка сборки | 07/pack_1b.8(6:1) missing ENDM
+07/pack_2.8: instruction_limit
+07/ref_1.8: ошибка сборки | 07/ref_1.8(8:10) data expected
+07/ref_2.8: ошибка сборки | 07/ref_2.8(5:17) invalid number '0ff'
+07/ref_3.8: terminated
+07/test1.8: ошибка сборки | 07/test1.8(1:1) missing ENDM
+07/test11.8: halted
+07/test12.8: instruction_limit
+07/test2.8: ошибка сборки | 07/test2.8(3:32) expected ')'
+07/var_1.8: ошибка сборки | 07/var_1.8(3:20) unexpected number 0
+07/var_1b.8: ошибка сборки | 07/var_1b.8(3:20) unexpected number 0
+07/var_2.8: ошибка сборки | 07/var_2.8(1:1) missing ENDM
+08/calc_1.8: terminated
+08/fld_1.8: ошибка сборки | 08/fld_1.8(3:17) floating-point numbers are only allowed in DD, DQ and DT data
+08/fld_2.8: ошибка сборки | 08/fld_2.8(10:17) invalid operands for FLD
+08/fprem1.8: ошибка сборки | 08/fpu.inc(58:1) missing ENDM
+08/fsave.8: ошибка сборки | 08/fpu.inc(58:1) missing ENDM
+08/fst_1.8: ошибка сборки | 08/fst_1.8(5:17) invalid operands for FST
+08/fst_2.8: ошибка сборки | 08/fst_2.8(9:17) invalid operands for FSTP
+08/fxch.8: ошибка сборки | 08/fxch.8(1:1) missing ENDM
+08/inner.8: ошибка сборки | 08/inner.8(9:1) only resb/resw/resd/resq/rest/alignb can be inside struc, not db
+08/log_1.8: ошибка сборки | 08/log_1.8(12:17) undefined symbol 'D'
+08/log_2.8: ошибка сборки | 08/log_2.8(11:17) undefined symbol 'D'
+08/math_1.8: ошибка сборки | 08/math_1.8(17:17) invalid operands for FADD
+08/math_2.8: ошибка сборки | 08/math_2.8(15:17) invalid operands for FDIV
+08/miss.8: instruction_limit
+08/power.8: ошибка сборки | 08/fpu.inc(58:1) missing ENDM
+08/round.8: ошибка сборки | 08/fpu.inc(58:1) missing ENDM
+08/test1.8: ошибка сборки | 08/test1.8(17:1) missing ENDM
+08/test2.8: ошибка сборки | 08/test2.8(5:1) missing ENDM
+08/types.8: terminated
+09/ea1.8: ошибка сборки | 09/seg_mem.inc(1:1) missing ENDM
+09/ea2.08: ошибка сборки | 09/ea2.08(10:24) expected '(' after DUP
+09/ea2_1.08: ошибка сборки | 09/ea2_1.08(23:21) invalid number '04c'
+09/ea2_2.08: ошибка сборки | 09/ea2_2.08(4:24) expected '(' after DUP
+09/jump.8: ошибка сборки | 09/jump.8(1:18) unexpected '????'
+09/prep.8: ошибка сборки | 09/prep.8(3:1) struc needs a name
+09/reboot.8: ошибка сборки | 09/reboot.8(1:19) unexpected number 0
+09/seg_reg.8: ошибка сборки | 09/seg_reg.8(2:21) invalid number '0b800'
+09/stack_1.8: ошибка сборки | 09/seg_mem.inc(1:1) missing ENDM
+09/stack_2.8: ошибка сборки | 09/seg_mem.inc(1:1) missing ENDM
+09/steps.8: ошибка сборки | 09/seg_mem.inc(1:1) missing ENDM
+09/task1.8: ошибка сборки | 09/seg_mem.inc(1:1) missing ENDM
+09/task2.8: ошибка сборки | 09/seg_mem.inc(1:1) missing ENDM
+09/vid_1.8: ошибка сборки | 09/vid_1.8(1:23) unexpected 'by'
+09/vid_2.8: ошибка сборки | 09/vid_2.8(1:21) invalid number '0b800'
+09/vid_3.8: ошибка сборки | 09/vid_3.8(3:23) unexpected 'by'
+10/bound.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/brk.8: ошибка сборки | 10/brk.8(1:23) unexpected 'brk2'
+10/gp.asm: ошибка сборки | 10/gp.asm(3:17) undefined symbol 'EDI'
+10/gp_2.8x: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/gp_3.asm: ошибка сборки | 10/gp_3.asm(25:9) expression expected
+10/gp_4.asm: ошибка сборки | 10/gp_4.asm(35:9) expression expected
+10/int080.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/into.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/isr_1.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/isr_2.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/isr_3.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/isr_4.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/isr_5a.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/isr_5b.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/trace.8: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+10/tsr1k.8: ошибка сборки | 10/tsr1k.8(1:17) invalid number '1k'
+11/i1c_1.8: ошибка сборки | 11/i1c_1.8(6:17) unexpected 'w'
+11/i8.8: ошибка сборки | 11/vect.inc(1:1) missing ENDM
+11/i9.8: ошибка сборки | 11/vect.inc(1:1) missing ENDM
+11/rtc.8: ошибка сборки | 11/rtc.8(1:1) missing ENDM
+11/sw_irq0.8: ошибка сборки | 11/sw_irq0.8(3:25) unexpected number 0
+12/a32_str.asm: ошибка сборки | 12/a32_str.asm(3:17) undefined symbol 'ESI'
+12/a4_str/a4_str.8x: ошибка сборки | 12/a4_str/a4_str.8x(11:22) invalid number '0ffff'
+12/cmd_1/cmd_1.8x: ошибка сборки | 12/cmd_1/cmd_1.8x(4:17) unexpected 'ax'
+12/cmd_2.asm: ошибка сборки | 12/cmd_2.asm(5:17) unexpected 'ax'
+12/cx_ecx/cx_ecx.8x: ошибка сборки | 12/cx_ecx/cx_ecx.8x(2:17) unexpected '>'
+12/find_3/find_3.8x: ошибка сборки | 12/find_3/find_3.8x(2:17) invalid number '07fffffff'
+12/ind32/ind32.8x: ошибка сборки | 12/ind32/ind32.8x(1:17) undefined symbol 'EDX'
+12/mul_div/mul_div.8x: ошибка сборки | 12/mul_div/mul_div.8x(1:17) undefined symbol 'EAX'
+12/new_cmd/new_cmd.8x: ошибка сборки | 12/new_cmd/new_cmd.8x(9:22) invalid number '0aa550000'
+12/o4_ret/o4_ret.8x: ошибка сборки | 12/o4_ret/o4_ret.8x(1:17) PUSH expects 1 operand(s), got 2
+12/xlat/xlat.8x: ошибка сборки | 12/xlat/xlat.8x(1:17) undefined symbol 'B'
+03/quiz1.txt.part-01.8: ошибка сборки | 03/quiz1.txt.part-01.8(3:18) unexpected 'by'
+03/quiz1.txt.part-02.8: ошибка сборки | 03/quiz1.txt.part-02.8(3:14) unterminated string
+03/quiz1.txt.part-03.8: terminated
+03/quiz1.txt.part-04.8: ошибка сборки | 03/quiz1.txt.part-04.8(3:30) invalid number '0ffff'
+03/quiz1.txt.part-05.8: ошибка сборки | 03/quiz1.txt.part-05.8(3:14) invalid number '3k'
+03/quiz1.txt.part-06.8: terminated
+03/quiz1.txt.part-07.8: instruction_limit
+03/quiz1.txt.part-08.8: ошибка сборки | 03/quiz1.txt.part-08.8(3:14) invalid number '0102ff04'
+03/quiz1.txt.part-09.8: ошибка сборки | 03/quiz1.txt.part-09.8(3:30) expected '(' after DUP
+03/quiz2.txt.part-01.8: ошибка сборки | 03/quiz2.txt.part-01.8(3:19) expected '(' after DUP
+03/quiz2.txt.part-02.8: ошибка сборки | 03/quiz2.txt.part-02.8(3:18) expected ')'
+03/quiz2.txt.part-03.8: ошибка сборки | 03/quiz2.txt.part-03.8(6:14) invalid number '1k'
+03/quiz2.txt.part-04.8: ошибка сборки | 03/quiz2.txt.part-04.8(8:20) expected '(' after DUP
+03/quiz2.txt.part-05.8: ошибка сборки | 03/quiz2.txt.part-05.8(5:25) expected '(' after DUP
+03/quiz2.txt.part-06.8: ошибка сборки | 03/quiz2.txt.part-06.8(3:40) expected '(' after DUP
+03/quiz2.txt.part-07.8: ошибка сборки | 03/quiz2.txt.part-07.8(4:29) expected '(' after DUP
+03/quiz3.txt.part-01.8: ошибка сборки | 03/quiz3.txt.part-01.8(3:20) expected '(' after DUP
+03/quiz3.txt.part-02.8: ошибка сборки | 03/quiz3.txt.part-02.8(5:29) expected '(' after DUP
+03/quiz3.txt.part-03.8: ошибка сборки | 03/quiz3.txt.part-03.8(3:39) expected '(' after DUP
+03/quiz3.txt.part-04.8: ошибка сборки | 03/quiz3.txt.part-04.8(4:32) expected '(' after DUP
+03/quiz3.txt.part-05.8: ошибка сборки | 03/quiz3.txt.part-05.8(5:14) invalid number '1k'
+04/quiz1.txt.part-01.8: ошибка сборки | 04/quiz1.txt.part-01.8(3:25) unexpected number 0
+04/quiz1.txt.part-02.8: ошибка сборки | 04/quiz1.txt.part-02.8(3:21) invalid number '0ff'
+04/quiz1.txt.part-03.8: ошибка сборки | 04/quiz1.txt.part-03.8(3:21) invalid number '01ff'
+04/quiz1.txt.part-04.8: ошибка сборки | 04/quiz1.txt.part-04.8(3:21) invalid number '01ff'
+04/quiz1.txt.part-05.8: terminated
+04/quiz1.txt.part-06.8: ошибка сборки | 04/quiz1.txt.part-06.8(3:26) expected ')'
+04/quiz2.txt.part-01.8: ошибка сборки | 04/quiz2.txt.part-01.8(5:23) invalid number '0fffe'
+04/quiz2.txt.part-02.8: ошибка сборки | 04/quiz2.txt.part-02.8(3:17) destination cannot be a constant
+04/quiz2.txt.part-03.8: ошибка сборки | 04/quiz2.txt.part-03.8(6:17) operand size not specified (use BYTE PTR or WORD PTR)
+04/quiz2.txt.part-04.8: ошибка сборки | 04/quiz2.txt.part-04.8(3:17) undefined symbol 'W'
+04/quiz2.txt.part-05.8: halted
+04/quiz2.txt.part-06.8: ошибка сборки | 04/quiz2.txt.part-06.8(3:17) destination cannot be a constant
+08/fpu.inc: ошибка сборки | 08/fpu.inc(47:1) struc needs a name
+09/seg_mem.inc: ошибка сборки | 09/seg_mem.inc(1:1) missing ENDM
+10/tst_nasm.inc: include: без запуска
+10/vect.inc: ошибка сборки | 10/vect.inc(1:1) missing ENDM
+11/vect.inc: ошибка сборки | 11/vect.inc(1:1) missing ENDM

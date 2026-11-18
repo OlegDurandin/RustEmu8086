@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="8086 assembler, emulator and debugger in the browser, compatible with Emu8086 programs">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0b1220">
+  <title>RustEmu8086</title>
+  
+<script type="module">
+async function __trunkInitializer(init, source, sourceSize, initializer, initWithObject) {
+  if (initializer === undefined) {
+    return await init(initWithObject ? { module_or_path: source } : source);
+  }
+
+  const {
+    onStart, onProgress, onComplete, onSuccess, onFailure
+  } = initializer;
+
+  onStart?.();
+
+  const response = fetch(source)
+      .then((response) => {
+        const reader = response.body.getReader();
+        const headers = response.headers;
+        const status = response.status;
+        const statusText = response.statusText;
+
+        const total = sourceSize;
+        let current = 0;
+
+        const stream = new ReadableStream({
+          start(controller) {
+            function push() {
+              reader.read().then(({done, value}) => {
+                if (done) {
+                  onProgress?.({current: total, total});
+                  controller.close();
+                  return;
+                }
+
+                current += value.byteLength;
+                onProgress?.({current, total});
+                controller.enqueue(value);
+                push();
+              });
+            }
+
+            push();
+          },
+        });
+
+        return {
+          stream, init: {
+            headers, status, statusText
+          }
+        };
+      })
+      .then(({stream, init}) =>
+          new Response(stream, init),
+      );
+
+  return init(initWithObject ? { module_or_path: response } : response)
+      .then((value) => {
+        onComplete?.();
+        onSuccess?.(value);
+        return value;
+      }, (reason) => {
+        onComplete?.();
+        onFailure?.(reason);
+        return reason;
+      });
+}
+
+
+import init, * as bindings from '/RustEmu8086/rustemu-web-c6b8ac21a13c3139.js';
+import initializer from '/RustEmu8086/progress-85c884c4d318ebce.mjs';
+
+const wasm = await __trunkInitializer(init, '/RustEmu8086/rustemu-web-989215ec1dffa28f_bg.wasm', 9146057, initializer(), true);
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+  
+  <link rel="icon" href="/RustEmu8086/icon-256-79e88441ff08a91a.png" integrity="sha384-R1Nv4gzFM3aMl2OfGpo2ZIueKPctREf1+A2lG583GN5Qu7AZO/wIeUA30+DwAnMo"/>
+  
+  <link rel="apple-touch-icon" href="icon-256.png">
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b1220; }
+    /* eframe sizes the canvas to its parent. */
+    #rustemu_canvas { position: absolute; inset: 0; width: 100%; height: 100%; outline: none; }
+    #rustemu_status {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: #d8e0ec; font: 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 16px;
+      flex-direction: column; gap: 12px; text-align: center;
+    }
+    #rustemu_status .bar { width: min(320px, 80vw); height: 4px; border-radius: 2px; background: #1e293b; overflow: hidden; }
+    #rustemu_status .bar > div { width: 0; height: 100%; background: #60a5fa; transition: width 0.15s; }
+  </style>
+<link rel="modulepreload" href="/RustEmu8086/rustemu-web-c6b8ac21a13c3139.js" crossorigin="anonymous" integrity="sha384-ysqetjehBYeYKaAamR0o7ldKMJWO2/pEj8o802HCnkapAu7zA25p5RLi+Wlz4UTE"><link rel="modulepreload" href="/RustEmu8086/progress-85c884c4d318ebce.mjs" crossorigin="anonymous" integrity="sha384-+Je9bvTfAIIbxhgs1TBejbG/IELoKuKesQKWcB+kqysEo+Mj3PJMxZ8cMAUYxXfe"><link rel="preload" href="/RustEmu8086/rustemu-web-989215ec1dffa28f_bg.wasm" crossorigin="anonymous" integrity="sha384-sN3NYR9NRjii/bBvBdapBAaUvaawjJXUczo9Fe8wv1+Ky0syOXp/7MiGacfDXel5" as="fetch" type="application/wasm"></head>
+<body>
+  <canvas id="rustemu_canvas"></canvas>
+  <div id="rustemu_status"><div class="text">Loading RustEmu8086…</div><div class="bar"><div></div></div></div>
+</body>
+</html>

@@ -1,0 +1,6 @@
+    Blocking waiting for file lock on build directory
+    Checking rustemu-ui v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-ui)
+    Checking rustemu-desktop v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-desktop)
+    Checking rustemu-tablet v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-tablet)
+    Checking rustemu-web v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-web)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 36s

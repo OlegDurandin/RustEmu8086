@@ -1,0 +1,17 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling rustemu-ui v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-ui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 53s
+     Running tests/learning.rs (target/debug/deps/learning-c8beddabc0021692)
+
+running 8 tests
+test imported_budgets_and_memory_addresses_are_validated_before_execution ... ok
+test legacy_v1_and_exercise_projects_roundtrip_with_settings ... ok
+test output_and_memory_failures_are_distinct_from_termination ... ok
+test limits_and_unsupported_services_are_explicit_failures ... ok
+test case_timeout_and_input_exhaustion_never_pass ... ok
+test grading_does_not_mutate_open_session_editor_or_personal_drive ... ok
+test catalog_reference_solutions_pass_and_wrong_solutions_fail_the_right_conditions ... ok
+test pilot_catalog_inventory_determinism_and_negative_cases ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

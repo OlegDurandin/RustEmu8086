@@ -1,0 +1,834 @@
+   Compiling rustemu-tablet v0.2.1 (/Users/oleg/Research/REmu8086/crates/rustemu-tablet)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.95s
+     Running unittests src/lib.rs (target/debug/deps/rustemu_asm-f6567dfdd0d0adf2)
+
+running 12 tests
+test lexer::tests::numbers ... ok
+test errpos::tests::parse_positions_cover_the_token ... ok
+test lexer::tests::tokens ... ok
+test source::tests::substitution_rules ... ok
+test errpos::tests::finds_the_part_the_message_is_about ... ok
+test parse::tests::labels_and_instr ... ok
+test parse::tests::data_and_dup ... ok
+test parse::tests::prefixes_and_directives ... ok
+test evaluate_tests::expressions ... ok
+test source::tests::conditionals_and_rept ... ok
+test source::tests::macro_expansion ... ok
+test library::tests::indexes_builtin_library ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/a86_dialect.rs (target/debug/deps/a86_dialect-08f385f7f6ee69e1)
+
+running 18 tests
+test detection_does_not_capture_unrelated_emu_directives_or_comments ... ok
+test a386_is_reported_explicitly_without_dialect_fallback ... ok
+test a86_typed_offset_arithmetic ... ok
+test macro_include_and_original_file_table ... ok
+test a86_macro_parameters_repeats_and_debug_locations ... ok
+test labelled_segment_override_and_repeat_count ... ok
+test numeric_bases_are_distinct_from_masm_and_nasm ... ok
+test byte_combination_bit_and_typed_memory ... ok
+test floating_expressions_and_stack_shorthand ... ok
+test dup_empty_declarations_and_redefinable_equ ... ok
+test repeated_local_labels_have_directional_references ... ok
+test shorthand_preserves_registers_and_order ... ok
+test segment_loads_enter_and_bound ... ok
+test numeric_loops_can_export_labels_and_constants_survive_macro_calls ... ok
+test nested_macro_calls_keep_local_forward_data_separate ... ok
+test structures_are_typed_overlays_without_allocating_bytes ... ok
+test macro_loops_are_bounded_and_cancellable ... ok
+test large_structure_offsets_do_not_build_deep_expression_trees ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/bombs.rs (target/debug/deps/bombs-234d29de199b62bb)
+
+running 5 tests
+test nested_text_equates ... ok
+test deep_expressions_are_errors ... ok
+test text_substitution_bombs_stop ... ok
+test a_full_segment_of_rept_still_assembles ... ok
+test expansion_bombs_stop ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.30s
+
+     Running tests/nasm_compare.rs (target/debug/deps/nasm_compare-6e749c9d3d67daaf)
+
+running 1 test
+test encodings_match_nasm ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running tests/nasm_dialect.rs (target/debug/deps/nasm_dialect-3f73881f7ecf8b7d)
+
+running 8 tests
+test dialect_detection ... ok
+test data_labels_are_variables_for_the_debugger ... ok
+test local_labels_are_scoped ... ok
+test auto_dialect_falls_back_to_the_other_one ... ok
+test formats_from_org ... ok
+test fpu_in_masm_syntax ... ok
+test nasm_specific_errors ... ok
+test programs_match_nasm ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/no_panics.rs (target/debug/deps/no_panics-7449642dbffb8361)
+
+running 1 test
+test short_lines_never_panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.91s
+
+     Running tests/programs.rs (target/debug/deps/programs-c2b767c019c09459)
+
+running 19 tests
+test error_has_line_number ... ok
+test far_procs_and_calls ... ok
+test equ_dup_and_expressions ... ok
+test exe_segments_and_relocations ... ok
+test com_hello ... ok
+test emu_directives_and_formats ... ok
+test listing_and_line_map ... ok
+test include_cycles_are_errors ... ok
+test jumps_short_near_and_inverted ... ok
+test masm6_startup_and_exit ... ok
+test shifts_by_immediate_expand ... ok
+test variables_are_memory ... ok
+test simplified_segments ... ok
+test circular_equ_is_an_error ... ok
+test operand_sizes_follow_emu8086 ... ok
+test emu8086_syntax_quirks ... ok
+test macros_and_include ... ok
+test data_is_limited_to_a_segment ... ok
+test deeply_nested_if_is_fast ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_build-3f5b5e9e9e3c40dc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/worker.rs (target/debug/deps/rustemu_assembler_worker-4f8d9031f1fadeaa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/portable.rs (target/debug/deps/portable-bbbf4b864c207a84)
+
+running 5 tests
+test source_lookup_does_not_substitute_same_basename_in_another_folder ... ok
+test native_export_collects_used_dependencies_and_rebuilds_after_the_folder_is_gone ... ok
+test reject_versions_paths_ambiguous_names_missing_entry_and_budgets ... ok
+test package_roundtrip_and_nested_includes_build_without_host ... ok
+test project_mode_and_exception_handler_work_from_memory ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/protocol.rs (target/debug/deps/protocol-1e29b885efbc961e)
+
+running 4 tests
+test cancellation_and_source_limits_return_controlled_results ... ok
+test both_results_survive_worker_wire_roundtrip ... ok
+test both_assemblers_bound_diagnostics ... ok
+test response_transfer_bounds_escaped_text_before_retaining_oversized_json ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+     Running unittests src/main.rs (target/debug/deps/rustemu-2dba07c6ac60b94b)
+
+running 8 tests
+test tests::short_mz_is_reported_instead_of_panicking ... ok
+test args::tests::values_are_not_rescanned_as_flags ... ok
+test args::tests::explicit_defaults_and_boundaries_are_valid ... ok
+test tests::the_processor_of_a_file ... ok
+test args::tests::rejected_options_never_fall_back_to_defaults ... ok
+test tests::sleeping_only_consumes_steps_actually_executed ... ok
+test tests::mips_file_loader_stops_before_reading_an_oversized_source ... ok
+test tests::mips_text_segment_round_trip ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cli.rs (target/debug/deps/cli-75f2f0fad1ffb0b6)
+
+running 6 tests
+test trace_preserves_dos_input_and_exit ... ok
+test trace_preserves_multiple_mmio_keys_console_input_exit_and_registers ... ok
+test valid_assembly_origins_help_and_literal_option_values_work ... ok
+test portable_packages_run_without_host_sources_and_use_packaged_input ... ok
+test invalid_options_fail_before_execution_or_output_file_creation ... ok
+test trace_and_normal_stop_at_the_same_instruction_for_both_processors ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_core-5ed91b3df36aee4b)
+
+running 26 tests
+test fpu::tests::bcd_and_save ... ok
+test disasm::fpu_tests::names_8087_instructions ... ok
+test fpu::tests::stack_and_compare ... ok
+test fpu::tests::load_add_store ... ok
+test fpu::tests::integers_rounding_and_sqrt ... ok
+test font::tests::every_visible_character_has_a_glyph ... ok
+test font::tests::cp437_roundtrip ... ok
+test dos::tests::dates ... ok
+test log::tests::step_back_restores_the_log ... ok
+test machine::mz_tests::mz_image_excludes_the_header_and_overlay ... ok
+test machine::mz_tests::mz_validation_rejects_truncation_and_bad_relocations ... ok
+test memdrive::tests::bytes_round_trip ... ok
+test memdrive::tests::user_paths_and_folders ... ok
+test memdrive::tests::dos_errors ... ok
+test devices::tests::snapshot_uses_deltas_for_collections_and_lengths_for_buffers ... ok
+test robot::tests::default_room_matches_emu8086 ... ok
+test robot::tests::moves_examines_and_switches_lamps ... ok
+test dos::tests::chdir_with_relative_root_keeps_the_relative_dos_path ... ok
+test target::tests::registers_read_and_write_by_name ... ok
+test machine::irq_step_tests::user_timer_handler_remains_visible_to_the_debugger ... ok
+test dos::tests::find_in_subdirectory_reports_the_file_size ... ok
+test machine::irq_step_tests::bios_timer_irq_does_not_consume_the_debugger_step ... ok
+test dos::tests::dos_paths_cannot_escape_root_through_symlinks ... ok
+test memdrive::tests::the_drive_has_a_capacity ... ok
+test memdrive::tests::batch_write_checks_entry_budget_before_creating_parents ... ok
+test log::tests::repeats_are_counted_and_the_log_is_bounded ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/cpu.rs (target/debug/deps/cpu-2ff16342d948e68c)
+
+running 22 tests
+test divide_by_zero_raises_int0 ... ok
+test far_jump_call_and_int ... ok
+test adc_sbb ... ok
+test flags_push_pop_and_lahf ... ok
+test loop_and_jcc ... ok
+test bop_is_reported ... ok
+test inc_dec_preserve_cf ... ok
+test bp_defaults_to_ss ... ok
+test alu_trace_records_last_operation ... ok
+test bcd ... ok
+test disasm_samples ... ok
+test i80186_extensions ... ok
+test memory_modrm_and_segments ... ok
+test mov_and_add_flags ... ok
+test mul_div ... ok
+test ports ... ok
+test push_pop_call_ret ... ok
+test reg8_halves ... ok
+test shifts_and_rotates ... ok
+test strings_rep ... ok
+test sub_borrow_and_cmp ... ok
+test trap_flag_single_step ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/singlestep.rs (target/debug/deps/singlestep-4e74f61e4067d4b9)
+
+running 1 test
+test singlestep_8088 ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_desktop-e65cefee62ce8805)
+
+running 57 tests
+test ui_tests::breakpoints_follow_edited_lines ... ok
+test ui_tests::address_breakpoints_belong_to_one_program ... ok
+test ui_tests::a86_syntax_setting_roundtrips_and_controls_assembly ... ok
+test ui_tests::conditional_breakpoint_run_to_cursor_and_stop_condition ... ok
+test ui_tests::drive_c_is_a_folder_of_its_own ... ok
+test ui_tests::emulator_window_debug_and_file_menus ... ok
+test ui_tests::editing_a_device_clears_step_back_history ... ok
+test ui_tests::full_storage_is_reported_and_retried ... ok
+test ui_tests::about_window has been running for over 60 seconds
+test ui_tests::classic_windows_by_default_and_flag_tips has been running for over 60 seconds
+test ui_tests::compile_error_is_reported has been running for over 60 seconds
+test ui_tests::debugger_windows_snapshot has been running for over 60 seconds
+test ui_tests::disassembly_scrolls_and_tools_go_under_the_screen has been running for over 60 seconds
+test ui_tests::editor_and_emulate_hello has been running for over 60 seconds
+test ui_tests::emu8086_style_emulator_windows has been running for over 60 seconds
+test ui_tests::emulator_bottom_buttons_and_aux_menu has been running for over 60 seconds
+test ui_tests::emulator_menu_snapshots has been running for over 60 seconds
+test ui_tests::examples_menu_and_more_examples has been running for over 60 seconds
+test ui_tests::fpu_window_shows_the_8087 has been running for over 60 seconds
+test ui_tests::graphics_and_devices has been running for over 60 seconds
+test ui_tests::compile_error_is_reported ... ok
+test ui_tests::about_window ... ok
+test ui_tests::debugger_windows_snapshot ... ok
+test ui_tests::classic_windows_by_default_and_flag_tips ... ok
+test ui_tests::emu8086_style_emulator_windows ... ok
+test ui_tests::emulator_bottom_buttons_and_aux_menu ... ok
+test ui_tests::memory_drive_window_and_storage ... ok
+test ui_tests::emulator_menu_snapshots ... ok
+test ui_tests::editor_and_emulate_hello ... ok
+test ui_tests::fpu_window_shows_the_8087 ... ok
+test ui_tests::examples_menu_and_more_examples ... ok
+test ui_tests::nasm_bios_boot_sector_single_steps_to_halt ... ok
+test ui_tests::kernel_to_floppy_and_boot_with_the_loader_source ... ok
+test ui_tests::nasm_bios_boot_sector_steps_over_to_halt ... ok
+test ui_tests::learning_card_checks_solution_without_replacing_editor_or_debugger ... ok
+test ui_tests::mars_settings ... ok
+test ui_tests::disassembly_scrolls_and_tools_go_under_the_screen ... ok
+test ui_tests::nasm_templates_and_syntax_setting ... ok
+test ui_tests::no_execution_command_runs_the_old_image_after_a_failed_build ... ok
+test ui_tests::mips_dialogs ... ok
+test ui_tests::nasm_editor_snapshot ... ok
+test ui_tests::pilot_first_success_and_cancel_check_keep_source ... ok
+test ui_tests::mips_panels ... ok
+test ui_tests::mips_macros ... ok
+test ui_tests::options_menu ... ok
+test ui_tests::run_does_not_start_after_assembly_failure ... ok
+test ui_tests::programs_from_links_get_a_temporary_drive ... ok
+test ui_tests::screen_paste_and_copy ... ok
+test ui_tests::new_dialog_menus_and_tools ... ok
+test ui_tests::session_is_restored_after_restart ... ok
+test ui_tests::programs_are_kept_in_the_browser ... ok
+test ui_tests::reference_in_russian ... ok
+test ui_tests::mips_reference ... ok
+test ui_tests::screen_draws_every_cp437_glyph ... ok
+test ui_tests::typing_moves_breakpoints_and_bookmarks ... ok
+test ui_tests::share_links_open_the_program ... ok
+test ui_tests::screen_window_resizes_with_the_mouse ... ok
+test ui_tests::value_viewer_sets_registers_and_memory ... ok
+test ui_tests::short_emulator_panel_scrolls ... ok
+test ui_tests::reference_window_and_editor_lookup ... ok
+test ui_tests::stepping_and_debug_windows ... ok
+test ui_tests::ux_input_and_context_roundtrip_without_reset ... ok
+test ui_tests::panels_and_classic_windows ... ok
+test ui_tests::value_viewer_addresses_and_view_menu_snapshots ... ok
+test ui_tests::nasm_bios_boot_sector_step_button_advances_past_mov_si ... ok
+test ui_tests::mips_workspace ... ok
+test ui_tests::stepping_into_library_macros ... ok
+test ui_tests::graphics_and_devices ... ok
+test ui_tests::mips_devices ... ok
+
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 182.07s
+
+     Running unittests src/main.rs (target/debug/deps/RustEmu8086-31364200dfd79c33)
+
+running 2 tests
+test macos_open::tests::missing_file_list_is_ignored ... ok
+test macos_open::tests::finder_file_urls_preserve_order_spaces_and_unicode ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_mips-bf4e231f4df3521c)
+
+running 46 tests
+test dialog::tests::integers_as_java_parses_them ... ok
+test asm::lexer::tests::integers_like_java ... ok
+test console::tests::utf8_or_latin1 ... ok
+test asm::lexer::tests::mars_tokens ... ok
+test asm::table::tests::templates_like_mars ... ok
+test console::tests::keeps_the_end_and_steps_back ... ok
+test files::tests::memory_files ... ok
+test files::tests::memory_paths_cannot_conflict_with_directories ... ok
+test fpu::tests::rounding_as_mars ... ok
+test files::tests::write_preflight_checks_quota_without_a_buffer ... ok
+test files::tests::host_folder_is_a_sandbox ... ok
+test files::tests::quota_and_descriptors ... ok
+test files::tests::large_host_reads_are_bounded_and_preserve_position ... ok
+test disasm::tests::mars_and_named_notation ... ok
+test memory::tests::fetch_finds_loaded_code_only ... ok
+test memory::tests::journal_undoes_stores ... ok
+test memory::tests::little_endian_loads_and_stores ... ok
+test memory::tests::refused_accesses_have_mars_messages ... ok
+test memory::tests::segments_follow_mars ... ok
+test files::tests::memory_budget_checks_folders_and_bytes_before_mutation ... ok
+test memory::tests::self_modifying_text_is_words ... ok
+test mmio::tests::bell_makes_a_terminal ... ok
+test mmio::tests::characters_appear_after_the_delay ... ok
+test mmio::tests::random_delays_stay_in_range ... ok
+test mmio::tests::reading_the_key_clears_ready ... ok
+test random::tests::gaussians_as_java ... ok
+test random::tests::same_numbers_as_java ... ok
+test settings::tests::effective_segments_as_mars_computes_them ... ok
+test settings::tests::options_for_mars ... ok
+test settings::tests::segments_in_mars_order ... ok
+test syscall::tests::java_floats ... ok
+test syscall::tests::java_integers ... ok
+test asm::table::tests::first_fit_by_operand_class ... ok
+test machine::resource_tests::large_io_and_invalid_ranges_fail_without_large_buffers ... ok
+test target::tests::calls_returns_and_the_call_stack ... ok
+test asm::table::tests::table_has_mars_instructions ... ok
+test asm::table::tests::compact_and_delayed_forms ... ok
+test java_float::tests::input_matches_java_bits ... ok
+test target::tests::registers_by_name_and_number ... ok
+test syscall::tests::floating_output_matches_java ... ok
+test target::tests::snapshots ... ok
+test machine::resource_tests::random_history_is_a_delta_and_replays ... ok
+test machine::resource_tests::input_history_keeps_only_consumed_bytes ... ok
+test files::tests::host_creation_limit_preserves_existing_files_and_resets ... ok
+test files::tests::memory_creation_limit_counts_new_files_only ... ok
+test machine::resource_tests::consumed_input_counts_toward_the_history_budget ... ok
+
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.36s
+
+     Running tests/asm.rs (target/debug/deps/asm-b15b847211421c49)
+
+running 16 tests
+test every_basic_instruction_of_mars_is_known ... ok
+test data_directives_and_alignment ... ok
+test listing_of_branches_and_jumps ... ok
+test errors_like_mars ... ok
+test hi_lo_relocations ... ok
+test eqv_and_kernel_segments ... ok
+test immediates_pick_the_form_mars_picks ... ok
+test include_reads_files_relative_to_the_including_one ... ok
+test hello_world ... ok
+test forward_references_and_offsets ... ok
+test swr_with_an_address_stores_through_at ... ok
+test macro_errors_show_the_calls ... ok
+test loops_and_calls ... ok
+test pseudo_instructions_compute_like_mars ... ok
+test macros_expand_as_in_mars ... ok
+test macro_bombs_are_stopped ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+
+     Running tests/asm_limits.rs (target/debug/deps/asm_limits-0b6d0a6f8465c16a)
+
+running 10 tests
+test cancellation_stops_before_reading_or_retaining_an_include ... ok
+test oversized_source_paths_and_project_inventories_are_rejected ... ok
+test project_files_share_the_budget_with_the_exception_handler ... ok
+test host_source_reads_are_bounded_before_assembly ... ok
+test substitution_is_checked_before_it_grows ... ok
+test diagnostics_are_bounded_and_report_truncation ... ok
+test includes_share_line_and_byte_budgets_and_stop_loading ... ok
+test macro_lines_share_the_budget_with_ordinary_source ... ok
+test ordinary_source_has_byte_line_and_token_limits ... ok
+test aggregate_token_and_expanded_text_budgets_are_enforced ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+
+     Running tests/cpu.rs (target/debug/deps/cpu-365ab7cb31d0177c)
+
+running 19 tests
+test arithmetic ... ok
+test invalid_program_counter ... ok
+test exception_handler_takes_the_exception ... ok
+test add_overflows_like_mars ... ok
+test jumps_and_links ... ok
+test branches_without_delay_slots ... ok
+test logic_shifts_and_comparisons ... ok
+test loads_and_stores ... ok
+test multiply_and_divide ... ok
+test address_exceptions ... ok
+test reset_state_is_mars ... ok
+test moves_and_traps ... ok
+test special2_mul_madd_msub_clz_clo ... ok
+test step_back_with_the_journal ... ok
+test syscall_break_and_reserved ... ok
+test the_last_alu_operation_is_recorded ... ok
+test unaligned_words_with_lwl_lwr_swl_swr ... ok
+test zero_register_stays_zero ... ok
+test floating_point_as_mars ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/dialogs.rs (target/debug/deps/dialogs-5fb6aaf59150f436)
+
+running 10 tests
+test a_bad_message_address_is_an_exception ... ok
+test dialogs_in_the_console ... ok
+test confirmation ... ok
+test step_back_asks_again ... ok
+test float_and_double_input ... ok
+test popup_input_as_mars ... ok
+test string_input_fills_the_buffer_as_mars ... ok
+test integer_input_as_mars ... ok
+test messages_show_values_as_mars ... ok
+test hexadecimal_float_dialogs ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/disasm.rs (target/debug/deps/disasm-dac0de4b3317c010)
+
+running 2 tests
+test disassembly_is_the_basic_column ... ok
+test decoding_matches_gnu_objdump ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/ffcabbar_corpus.rs (target/debug/deps/ffcabbar_corpus-d4414c2e8665fdfe)
+
+running 2 tests
+test unmodified_sources ... ok
+test adapted_execution ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/gnu_compare.rs (target/debug/deps/gnu_compare-c9177f7e9b96f698)
+
+running 1 test
+test basic_instructions_match_gnu_as ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/machine.rs (target/debug/deps/machine-01a8fb254f98aeed)
+
+running 22 tests
+test loading_checks_the_segments ... ok
+test hello_world ... ok
+test heap_with_sbrk ... ok
+test printing_numbers_and_characters ... ok
+test exit_with_a_code ... ok
+test console_through_descriptors_0_and_1 ... ok
+test backspace_edits_the_line ... ok
+test files_in_the_sandbox ... ok
+test hexadecimal_float_input_services ... ok
+test reading_an_integer_waits_for_enter ... ok
+test random_numbers_as_java ... ok
+test step_back_over_system_calls ... ok
+test reading_strings_and_characters ... ok
+test the_exception_handler_takes_service_errors ... ok
+test waiting_is_not_recorded ... ok
+test unsupported_services ... ok
+test history_is_limited ... ok
+test step_back_over_the_digital_lab ... ok
+test step_back_over_the_mmio_display ... ok
+test keys_typed_on_the_mmio_keyboard ... ok
+test time_and_sleep ... ok
+test creation_limit_is_returned_by_syscall_13_without_creating_a_file ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s
+
+     Running tests/mars_compare.rs (target/debug/deps/mars_compare-d60924be9cd710ed)
+
+running 8 tests
+test delayed_branching_matches_mars ... ok
+test macros_match_mars ... ok
+test random_programs_match_mars ... ok
+test services_match_mars ... ok
+test assembler_matches_mars ... ok
+test float_programs_match_mars ... ok
+test input_services_match_mars ... ok
+test generated_programs_run_on_the_core ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/mmio_compare.rs (target/debug/deps/mmio_compare-88eb8f751e906260)
+
+running 4 tests
+test digital_lab_matches_mars ... ok
+test keyboard_and_display_match_mars ... ok
+test cases_run_on_the_core ... ok
+test lab_cases_run_on_the_core ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/projects.rs (target/debug/deps/projects-4a41093353063b7b)
+
+running 3 tests
+test projects_match_mars ... ok
+test the_exception_handler_file_comes_first ... ok
+test programs_of_several_files ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/settings.rs (target/debug/deps/settings-3d7c8725473588c6)
+
+running 8 tests
+test settings_match_mars ... ok
+test program_arguments_match_mars ... ok
+test defaults_are_mars_defaults ... ok
+test devices_follow_the_memory_configuration ... ok
+test pseudo_instructions_take_their_mars_forms ... ok
+test step_back_over_delay_slots_and_written_code ... ok
+test program_arguments_as_mars_stores_them ... ok
+test settings_change_assembly_and_execution ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/speed.rs (target/debug/deps/speed-80e6e0bbd74ca73b)
+
+running 1 test
+test instructions_per_second ... ignored, a measurement: run in release
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_session-f6d231b81ea607c5)
+
+running 8 tests
+test detect::tests::detects_the_processor ... ok
+test code::tests::data_rows ... ok
+test step::tests::sub_bl_changes_only_bl ... ok
+test step::tests::mov_ax_changes_both_bytes ... ok
+test step::tests::flags_and_their_reasons ... ok
+test step::tests::mov_ah_changes_only_ah_and_memory_writes_are_listed ... ok
+test expr::tests::evaluates ... ok
+test expr::tests::deep_expressions_are_errors ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/compatibility_semantics.rs (target/debug/deps/compatibility_semantics-6c1a56263dc92bea)
+
+running 3 tests
+test a86_constants_include_and_macro_have_the_expected_semantics ... ok
+test scasw_example_matches_word_and_returns_to_its_start ... ok
+test mips_pseudo_io_memory_and_delay_slots_are_distinct ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/emu8086_corpus.rs (target/debug/deps/emu8086_corpus-f5a1325912ef4226)
+
+running 3 tests
+test micro_os_boots_from_floppy ... ok
+test all_examples_assemble ... ok
+test all_examples_run ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.88s
+
+     Running tests/mips.rs (target/debug/deps/mips-8bf5bf4ce5778c7a)
+
+running 8 tests
+test lines_and_symbols ... ok
+test floating_point_registers_in_expressions ... ok
+test expressions ... ok
+test macro_bodies_in_included_files ... ok
+test breakpoints_reload_and_the_end ... ok
+test step_over_and_out ... ok
+test examples_run ... ok
+test device_examples_run ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/run.rs (target/debug/deps/run-1959098d57ed8b84)
+
+running 46 tests
+test devices_ports ... ok
+test command_line_parameters_in_psp ... ok
+test divide_error_stops ... ok
+test bios_tick_counter_advances ... ok
+test a86_local_structure_fields_remain_available_to_watches ... ok
+test a86_word_memory_moves_and_swaps_preserve_ax_and_stack ... ok
+test a86_source_runs_and_steps_with_correct_hex_constants_and_local_labels ... ok
+test current_line_while_waiting_for_key_is_the_int ... ok
+test breakpoints_and_line_mapping ... ok
+test bin_file_written_to_floppy_sectors ... ok
+test call_stack_and_expressions ... ok
+test disassembly_shows_data_as_data ... ok
+test int3_is_breakpoint_and_user_vectors_work ... ok
+test fpu_step_back ... ok
+test failed_load_keeps_the_previous_session_intact ... ok
+test int13_rejects_invalid_floppy_geometry ... ok
+test graphics_mode_13h ... ok
+test hello_com_and_exe ... ok
+test macro_code_maps_to_library_lines ... ok
+test dos_files_on_the_memory_drive ... ok
+test nasm_program_runs_and_debugs ... ok
+test memory_drive_full_is_a_short_write ... ok
+test screen_and_bios_video ... ok
+test nasm_examples ... ok
+test several_floppy_drives ... ok
+test host_file_io_is_a_step_back_boundary ... ok
+test dos_files_in_sandbox ... ok
+test fpu_8087_program ... ok
+test keyboard_input_examples ... ok
+test source_stepping::step_over_recursive_call ... ok
+test step_back_restores_registers_and_memory ... ok
+test source_stepping::step_out_of_library_procedure_and_user_procedure ... ok
+test source_stepping::step_over_runs_macros_and_calls ... ok
+test source_stepping::single_step_enters_macro_and_step_out_leaves_it ... ok
+test saved_state_restores_the_whole_machine ... ok
+test teletype_scrolls ... ok
+test timer_irq_calls_int_1ch ... ok
+test step_back_through_mixed_light_and_device_steps ... ok
+test waiting_for_input_does_not_flood_history ... ok
+test step_back_restores_input_devices_and_floppy ... ok
+test large_rep_preview_is_bounded_cached_and_invalidated ... ok
+test the_log_stays_small ... ok
+test history_is_limited_in_bytes ... ok
+test host_drive_limits ... ok
+test robot_example_lights_lamps ... ok
+test output_and_paper_stay_bounded ... ok
+
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.24s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_tablet-34658d86031029f0)
+
+running 21 tests
+test cpu::tests::bytes_are_views_of_the_word ... ok
+test keypad::tests::rows_are_equally_wide ... ok
+test keypad::tests::keys_reach_the_bios_buffer ... ok
+test tests::a_key_completes_a_step_that_waits ... ok
+test tests::registers_are_edited_in_the_inspector ... ok
+test tests::tablet_run_step_and_tabs ... ok
+test tests::source_comes_back_from_a_macro_to_the_next_line ... ok
+test tests::source_follows_into_and_out_of_the_library ... ok
+test tests::long_instructions_keep_their_bytes_apart ... ok
+test tests::debug_log_is_a_debugger_tool ... ok
+test tests::learning_card_is_available_on_tablet_and_keeps_mips_source ... ok
+test tests::virtual_drive_is_in_the_menu ... ok
+test tests::share_button_and_byte_registers ... ok
+test tests::visual_step_shows_what_changed ... ok
+test tests::project_menu_opens_examples_and_exports ... ok
+test tests::waiting_for_a_key_is_explained ... ok
+test tests::tablet_keyboard_types_into_the_program ... ok
+test tests::ux_int16_and_mips_input_resume_in_narrow_layouts ... ok
+test tests::tablet_mips_workspace ... ok
+test tests::pilot_catalog_cards_fit_narrow_view_and_return_to_editor ... ok
+test tests::tablet_layout_snapshots ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.03s
+
+     Running unittests src/main.rs (target/debug/deps/rustemu_tablet-238baa4f530d6982)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_target-271c995162b21b8a)
+
+running 2 tests
+test tests::output_keeps_the_end_and_steps_back ... ok
+test resources::tests::preview_reads_each_unique_address_once_and_keeps_initial_values ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running unittests src/lib.rs (target/debug/deps/rustemu_ui-792f6c6a1749862a)
+
+running 50 tests
+test app::build::budget_tests::mips_diagnostic_display_is_bounded_independently ... ok
+test app::background::tests::loading_a_binary_does_not_schedule_source_assembly ... ok
+test app::arch::tests::every_start_is_in_the_8086 ... ok
+test app::state::tests::browser_viewport_allows_user_zoom ... ok
+test app::exec::tests::a_panic_becomes_a_notice ... ok
+test app::state::tests::states_follow_machine_events_and_undo_clears_the_stop_reason ... ok
+test console::tests::debug_commands ... ok
+test app::background::tests::failed_background_build_cannot_run_old_program ... ok
+test editcmd::tests::bookmarks_cycle ... ok
+test app::background::tests::revision_edit_stop_and_arch_switch_discard_results ... ok
+test examples::tests::links_find_examples_by_any_case_and_former_names ... ok
+test find::tests::comments_toggle ... ok
+test editcmd::tests::line_operations ... ok
+test inspect::tests::lexical_flag_analysis_like_emu8086 ... ok
+test mars_settings::tests::saved_settings_are_mars_settings ... ok
+test highlight::tests::cached_highlighting_matches_and_follows_edits ... ok
+test mips_devices::tests::display_text_is_latin1 ... ok
+test mips_devices::tests::words_are_rgb_pixels ... ok
+test mips_ui::tests::values ... ok
+test find::tests::find_and_replace ... ok
+test reference::tests::data_is_consistent ... ok
+test examples::tests::every_example_says_what_it_does ... ok
+test reference::tests::covers_all_assembler_mnemonics ... ok
+test app::arch::tests::workspaces_keep_their_documents ... ok
+test app::background::tests::background_builds_both_architectures_and_reports_usage ... ok
+test reference::tests::mips_articles_cover_the_assembler ... ok
+test app::background::tests::portable_link_builds_in_a_worker_and_runs_with_its_internal_entry_path ... ok
+test app::background::tests::step_and_run_continue_after_successful_build ... ok
+test reference::tests::mips_topics_in_source ... ok
+test reference::tests::nasm_guide_examples_are_nasm ... ok
+test app::background::tests::a_new_document_with_identical_text_requires_a_new_machine_load ... ok
+test reference::tests::topics_in_source ... ok
+test reference::tests::mips_russian_text_is_complete ... ok
+test app::exec::tests::mips_files_are_on_drive_c_in_the_browser ... ok
+test share::project_tests::invalid_package_does_not_replace_or_cancel_current_work ... ok
+test share::tests::bad_links_are_ignored ... ok
+test share::tests::links_carry_the_program ... ok
+test tools::tests::every_tool_is_listed_once_with_a_distinct_key ... ok
+test reference::tests::russian_text_is_complete ... ok
+test tools::tests::windows_are_saved_by_name_and_read_from_the_former_struct ... ok
+test share::project_tests::saving_and_reassembling_a_browser_project_preserves_the_personal_drive ... ok
+test share::project_tests::browser_storage_keeps_project_dependencies_settings_and_edited_source ... ok
+test app::exec::tests::mips_browser_file_limits_match_drive_c_and_sync_as_a_batch ... ok
+test mips_ui::step_tests::mips_preview_cache_and_history_off_are_independent_of_x86_view ... ok
+test workspace::tests::tools_go_to_their_groups ... ok
+test share::project_tests::portable_link_and_file_run_in_a_clean_app_with_the_same_settings_and_input ... ok
+test reference::tests::mips_examples_assemble ... ok
+test share::project_tests::oversized_inflated_project_link_is_rejected ... ok
+test reference::tests::examples_assemble ... ok
+test fonts::tests::web_fonts_cover_the_ui ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/course.rs (target/debug/deps/course-c9c207e31e3a0a5e)
+
+running 3 tests
+test lesson_links_open_the_current_programs ... ok
+test lesson_19_boots_from_the_floppy ... ok
+test course_programs_run_as_described ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+     Running tests/learning.rs (target/debug/deps/learning-bc6c71e13780c321)
+
+running 8 tests
+test imported_budgets_and_memory_addresses_are_validated_before_execution ... ok
+test legacy_v1_and_exercise_projects_roundtrip_with_settings ... ok
+test output_and_memory_failures_are_distinct_from_termination ... ok
+test case_timeout_and_input_exhaustion_never_pass ... ok
+test limits_and_unsupported_services_are_explicit_failures ... ok
+test grading_does_not_mutate_open_session_editor_or_personal_drive ... ok
+test catalog_reference_solutions_pass_and_wrong_solutions_fail_the_right_conditions ... ok
+test pilot_catalog_inventory_determinism_and_negative_cases ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running unittests src/main.rs (target/debug/deps/rustemu_web-6edd523039478f2c)
+
+running 1 test
+test layout::tests::switching_layouts_keeps_the_program_and_the_theme ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.66s
+
+   Doc-tests rustemu_asm
+
+running 1 test
+test crates/rustemu-asm/src/lib.rs - (line 3) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 19.00s; merged doctests compilation took 18.44s
+   Doc-tests rustemu_build
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustemu_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustemu_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustemu_mips
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustemu_session
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustemu_tablet
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustemu_target
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustemu_ui
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
