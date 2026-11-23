@@ -42,7 +42,9 @@ pub struct CheckRun {
     session: Session,
     input: VecDeque<u8>,
     steps: u64,
-    started: web_time::Instant,
+    /// Execution time charged to the current case: only time spent inside [`CheckRun::advance`],
+    /// so gaps between UI frames (a slow device, a hidden browser tab) never count.
+    spent: std::time::Duration,
     /// Completed cases in their original order.
     pub results: Vec<CaseResult>,
 }
@@ -67,7 +69,7 @@ impl CheckRun {
             session: Session::new(),
             input: VecDeque::new(),
             steps: 0,
-            started: web_time::Instant::now(),
+            spent: std::time::Duration::ZERO,
             results: Vec::new(),
         };
         r.load_case()?;
@@ -118,7 +120,7 @@ impl CheckRun {
             .map(|b| if b == b'\n' && self.session.target.arch() == Arch::I8086 { b'\r' } else { b })
             .collect();
         self.steps = 0;
-        self.started = web_time::Instant::now();
+        self.spent = std::time::Duration::ZERO;
         Ok(())
     }
 
@@ -140,7 +142,8 @@ impl CheckRun {
             if matches!(op, 0x20..=0x3f) {
                 let base = m.cpu.regs[((word >> 21) & 31) as usize];
                 let addr = base.wrapping_add(word as i16 as i32 as u32);
-                if addr >= 0xffff0000 {
+                // By the loaded layout: compact configurations put MMIO at 0x7f00, not 0xffff0000.
+                if m.mem.layout.segment(addr) == Some(rustemu_mips::Segment::Mmio) {
                     return Some("Unsupported in exercises: MMIO".into());
                 }
             }
@@ -178,7 +181,7 @@ impl CheckRun {
             let e = self.project.exercise.as_ref().unwrap();
             let failure = if self.steps >= e.step_limit {
                 Some("Step limit exceeded".into())
-            } else if self.started.elapsed().as_millis() >= u128::from(e.time_limit_ms) {
+            } else if (self.spent + frame.elapsed()).as_millis() >= u128::from(e.time_limit_ms) {
                 Some("Timed out".into())
             } else if self.session.target.output().len() > 16384 {
                 Some("Output limit exceeded".into())
@@ -232,6 +235,8 @@ impl CheckRun {
                 break;
             }
         }
+        // Reached only while the same case is still running; `finish` resets the budget for the next.
+        self.spent += frame.elapsed();
     }
 
     fn finish(&mut self, termination: Option<Termination>, failure: Option<String>) {

@@ -15,11 +15,17 @@ Resource usage** in either layout. Counters describe charged payload/capacity, n
 | MIPS random streams, machine | 4,096 stream IDs | Controlled syscall error; existing streams remain usable |
 | Assembler, one build | 4 MiB source, 1,024 sources, 250,000 source/expansion lines, 64 KiB per line, 4 KiB per path | Diagnostic and stop; project/includes/handler share budgets |
 | Generated text, one build | 16 MiB | Diagnostic and stop |
+| A86 macro loops `#R`/`#Q` | Each bound at most 65,536; iterations are counted by the expansion work budget, nothing is allocated up front | Diagnostic and stop |
 | MIPS tokenizer, one build | 4,096 tokens per line, 1,000,000 processed tokens | Diagnostic and stop |
 | Assembler diagnostics | 100, including omission marker | Stop accumulating diagnostics |
 | Step preview, either CPU | 256 changed bytes, with full changed-byte count | Show sorted prefix; deduplicate in expected linear time and cache until state changes |
 | Browser result transfer | 64 MiB JSON | Worker error, no result applied |
 | Build task | 120 seconds without completion | Cancel and report timeout |
+| Exercise check, each case | 1–200,000 instructions and 1–5,000 ms of execution time; 16 KiB output | Case fails with *Step limit exceeded*, *Timed out* or *Output limit exceeded* |
+
+The exercise time limit counts only time spent executing the case (slices of up to 1,024 instructions
+or 4 ms per UI frame). Time between frames — a slow device, a hidden browser tab — is not charged,
+so a correct solution does not fail because the page was in the background.
 
 History off disables snapshots, not file/source/output/RNG limits. Fixed device registers/maps do
 not grow with guest execution; textual device buffers have their own bounds. Input supplied by the

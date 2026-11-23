@@ -51,7 +51,8 @@ message db 'Hello from A86!', 0d, 0a, '$'
   empty data declarations and `DUP` without parentheses.
 - Repeated local labels such as `L1`, forward references `>L1`, and local-label scopes in macro calls.
 - Positional macros ending in `#EM`, parameters `#1`…`#9`, `#L`, `#N`, `#S`, `#V`, numeric `#R`/`#Q` loops,
-  and `##IF`/`##ELSE`/`##ENDIF`; includes inherit the dialect. Expansion is bounded and cancellable.
+  and `##IF`/`##ELSE`/`##ENDIF`; includes inherit the dialect. Expansion is bounded and cancellable:
+  each loop bound (the start of a `#Q` countdown too) is at most 65536.
 - `STRUC` typed overlays, optionally at an explicit base: fields describe memory without allocating it.
   The debugger resolves absolute typed fields through the current DS and accepts original local-label names.
 - A86 instruction shorthand: `ENTER`, unary `TEST`, three-operand `MOV`, repeated `PUSH/POP/INC/DEC`,

@@ -710,7 +710,8 @@ pub(crate) fn expand_macro(
                 if 3 + used + used_end != u.len() {
                     return Err("unsupported trailing text in A86 macro loop".into());
                 }
-                if end > 65536 {
+                // Both bounds: `#Q` counts down from `start`, so either one can be the large one.
+                if start.max(end) > 65536 {
                     return Err("A86 macro loop count exceeds resource budget".into());
                 }
                 let mut nested = 0;
@@ -731,8 +732,9 @@ pub(crate) fn expand_macro(
                 let end_body = i;
                 i += usize::from(i < body.len()); // #EM implicitly closes the final loop.
                 let previous = vars.get(&variable).copied();
-                let values: Vec<usize> =
-                    if bytes[1] == b'Q' { (end..=start).rev().collect() } else { (start..=end).collect() };
+                // Lazy: the work budget, not an up-front allocation, bounds the iteration count.
+                let values: Box<dyn Iterator<Item = usize>> =
+                    if bytes[1] == b'Q' { Box::new((end..=start).rev()) } else { Box::new(start..=end) };
                 for n in values {
                     out.tick()?;
                     vars.insert(variable, n);

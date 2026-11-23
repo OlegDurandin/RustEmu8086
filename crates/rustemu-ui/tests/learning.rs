@@ -68,6 +68,14 @@ fn limits_and_unsupported_services_are_explicit_failures() {
     let mut p = solved(0);
     p.files.insert(p.entry.clone(), "org 100h\nint 1ah\nhlt\n".into());
     assert!(check(p).iter().all(|r| !r.passed && r.details.contains("Unsupported")));
+    // MMIO is refused where the project's memory configuration puts it.
+    for (memory, address) in [("Default", "0xffff0000"), ("CompactDataAtZero", "0x7f00")] {
+        let mut p = solved(2);
+        p.mars.memory = memory.into();
+        p.files.insert(p.entry.clone(), format!(".text\nmain: li $t0,{address}\nlw $t1,0($t0)\nli $v0,10\nsyscall\n"));
+        let r = check(p);
+        assert!(r.iter().all(|r| !r.passed && r.details.contains("MMIO")), "{memory}: {r:?}");
+    }
 }
 
 #[test]
@@ -92,17 +100,35 @@ fn imported_budgets_and_memory_addresses_are_validated_before_execution() {
 
 #[test]
 fn case_timeout_and_input_exhaustion_never_pass() {
+    // The time limit is charged by execution itself: an endless loop under a large step budget.
     let mut p = solved(0);
-    p.exercise.as_mut().unwrap().time_limit_ms = 1;
-    let response = rustemu_build::execute(p.request(0), Arc::new(AtomicBool::new(false)));
-    let mut run = CheckRun::new(p, response.outcome).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(5));
-    run.advance();
-    assert!(!run.results[0].passed && run.results[0].details.contains("Timed out"));
+    let e = p.exercise.as_mut().unwrap();
+    e.time_limit_ms = 1;
+    e.step_limit = 200000;
+    p.files.insert(p.entry.clone(), "org 100h\nagain: jmp again\n".into());
+    let r = check(p);
+    assert!(r.iter().all(|r| !r.passed && r.details.contains("Timed out")), "{r:?}");
     let mut p = solved(2);
     p.exercise.as_mut().unwrap().cases[0].input.clear();
     let r = check(p);
     assert!(!r[0].passed && r[0].details.contains("Input exhausted"));
+}
+
+#[test]
+fn time_between_frames_is_not_charged_to_a_case() {
+    // A slow device or a hidden browser tab delays frames; a correct solution must still pass.
+    let mut p = solved(0);
+    p.exercise.as_mut().unwrap().time_limit_ms = 20;
+    let response = rustemu_build::execute(p.request(0), Arc::new(AtomicBool::new(false)));
+    let mut run = CheckRun::new(p, response.outcome).unwrap();
+    for _ in 0..10000 {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        run.advance();
+        if run.done() {
+            break;
+        }
+    }
+    assert!(run.done() && run.results.iter().all(|r| r.passed), "{:?}", run.results);
 }
 
 #[test]

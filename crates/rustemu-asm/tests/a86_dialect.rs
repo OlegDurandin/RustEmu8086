@@ -114,6 +114,11 @@ fn macro_loops_are_bounded_and_cancellable() {
     let e =
         rustemu_asm::assemble_cancellable("test.a86", src, &mut NoIncludes, Some(Dialect::A86), cancel).unwrap_err();
     assert!(e.to_string().contains("cancelled"), "{e}");
+    // A countdown loop is bounded by its first (start) value too, before anything is allocated.
+    let src = "bomb macro\n#qx(4000000000)1\nnop\n#er\n#em\nbomb\n";
+    let e = assemble_dialect("test.a86", src, &mut NoIncludes, Some(Dialect::A86)).unwrap_err();
+    assert!(e.to_string().contains("loop count exceeds resource budget"), "{e}");
+    assert_eq!(a86("down macro\n#qx31\nnop\n#er\n#em\ndown\n").image, [0x90; 3]);
 }
 
 #[test]

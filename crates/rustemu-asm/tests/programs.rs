@@ -365,5 +365,8 @@ fn deeply_nested_if_is_fast() {
     let src = format!("org 100h\n{}nop\n{}if 0\nret\nelse\nint 20h\nendif\n", "if 1\n".repeat(n), "endif\n".repeat(n));
     let t = std::time::Instant::now();
     assert_eq!(bytes(&src), [0x90, 0xCD, 0x20]);
-    assert!(t.elapsed().as_secs_f32() < 3.0, "{:?}", t.elapsed());
+    // ~0.2 s in release and ~1 s in debug; a quadratic check is far slower. The debug bound leaves
+    // room for a loaded machine running the whole workspace in parallel.
+    let limit = if cfg!(debug_assertions) { 10.0 } else { 3.0 };
+    assert!(t.elapsed().as_secs_f32() < limit, "{:?}", t.elapsed());
 }
