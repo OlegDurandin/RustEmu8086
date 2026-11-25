@@ -73,10 +73,14 @@ pub enum BinOp {
     Sub,
     /// `*`
     Mul,
-    /// `/`
+    /// `/` (NASM `//`): signed division
     Div,
-    /// `MOD` (NASM `%`)
+    /// `MOD` (NASM `%%`): signed remainder
     Mod,
+    /// NASM `/`: unsigned division (of the 64-bit values)
+    UDiv,
+    /// NASM `%`: unsigned remainder
+    UMod,
     /// `SHL`, `<<`
     Shl,
     /// `SHR`, `>>`
@@ -480,11 +484,18 @@ impl<'a> Parser<'a> {
     fn mul_expr(&mut self) -> PResult<Expr> {
         let mut l = self.unary()?;
         loop {
+            // NASM: `/` and `%` are unsigned, `//` and `%%` signed.
             let op = if self.eat_p('*') {
                 BinOp::Mul
-            } else if self.eat_p('/') {
+            } else if self.nasm && self.eat_pair('/') {
                 BinOp::Div
-            } else if self.eat_p('%') || self.eat_kw("MOD") {
+            } else if self.nasm && self.eat_pair('%') {
+                BinOp::Mod
+            } else if self.eat_p('/') {
+                if self.nasm { BinOp::UDiv } else { BinOp::Div }
+            } else if self.eat_p('%') {
+                if self.nasm { BinOp::UMod } else { BinOp::Mod }
+            } else if self.eat_kw("MOD") {
                 BinOp::Mod
             } else {
                 return Ok(l);
@@ -1024,7 +1035,7 @@ fn bin(op: BinOp, x: Val, y: Val) -> Result<Val, String> {
             let t = |c: bool| if c { -1 } else { 0 };
             let n = match op {
                 BinOp::Mul => a.wrapping_mul(b),
-                BinOp::Div | BinOp::Mod if b == 0 => {
+                BinOp::Div | BinOp::Mod | BinOp::UDiv | BinOp::UMod if b == 0 => {
                     if unknown {
                         0
                     } else {
@@ -1034,6 +1045,8 @@ fn bin(op: BinOp, x: Val, y: Val) -> Result<Val, String> {
                 // i64::MIN / -1 overflows; wrap like the other operators instead of panicking.
                 BinOp::Div => a.wrapping_div(b),
                 BinOp::Mod => a.wrapping_rem(b),
+                BinOp::UDiv => ((a as u64) / (b as u64)) as i64,
+                BinOp::UMod => ((a as u64) % (b as u64)) as i64,
                 BinOp::Shl => a.wrapping_shl(b as u32),
                 BinOp::Shr => a.wrapping_shr(b as u32),
                 BinOp::And => a & b,

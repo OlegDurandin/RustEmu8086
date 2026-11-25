@@ -71,7 +71,13 @@ struct Assembler {
     cur_seg: SegId,
     seg_stack: Vec<SegId>,
     procs: Vec<(String, bool)>,
+    /// Size of each statement's (first) instruction in the last pass, for grow-only padding.
     sizes: Vec<usize>,
+    /// Sizes of the further instructions one statement encodes (A86 `MOV mem, mem`, `TIMES n`):
+    /// (statement, instruction number from 1).
+    part_sizes: HashMap<(usize, u32), usize>,
+    /// Instructions encoded so far for the current statement.
+    part: u32,
     pass: usize,
     errors: Vec<AsmError>,
     relocs: Vec<(SegId, i64)>,
@@ -215,6 +221,8 @@ pub(crate) fn assemble_controlled(
         seg_stack: Vec::new(),
         procs: Vec::new(),
         sizes: Vec::new(),
+        part_sizes: HashMap::new(),
+        part: 0,
         pass: 0,
         errors: Vec::new(),
         relocs: Vec::new(),
@@ -663,6 +671,7 @@ impl Assembler {
     }
 
     fn statement(&mut self, idx: usize) {
+        self.part = 0;
         let st = self.stmts[idx].stmt.clone();
         let start_loc = self.loc();
         let start_seg = self.cur_seg;
@@ -850,12 +859,21 @@ impl Assembler {
             flat: self.flat,
             in_far_proc: self.procs.last().is_some_and(|p| p.1),
         };
+        // Each instruction of the statement keeps its own size from the last pass.
+        let part = self.part;
+        self.part += 1;
+        let last_size =
+            if part == 0 { self.sizes[idx] } else { self.part_sizes.get(&(idx, part)).copied().unwrap_or(0) };
         match encode(prefixes, mnem, ops, self, &ctx) {
             Ok(mut enc) => {
-                if self.pass >= GROW_ONLY_PASS && enc.bytes.len() < self.sizes[idx] {
-                    enc.bytes.resize(self.sizes[idx], 0x90);
+                if self.pass >= GROW_ONLY_PASS && enc.bytes.len() < last_size {
+                    enc.bytes.resize(last_size, 0x90);
                 }
-                self.sizes[idx] = enc.bytes.len();
+                if part == 0 {
+                    self.sizes[idx] = enc.bytes.len();
+                } else {
+                    self.part_sizes.insert((idx, part), enc.bytes.len());
+                }
                 for r in enc.relocs {
                     self.relocs.push((self.cur_seg, start_loc + r as i64));
                 }
@@ -864,8 +882,7 @@ impl Assembler {
             Err(m) => {
                 self.err(idx, m);
                 // Keep layout stable: reserve the previous size.
-                let n = self.sizes[idx];
-                self.emit(&vec![0x90; n]);
+                self.emit(&vec![0x90; last_size]);
             }
         }
     }
@@ -1275,7 +1292,9 @@ fn rename_local_labels(stmts: &mut [StmtInfo]) {
         if let Some(l) = &mut s.stmt.label {
             if l.starts_with('.') && !l.starts_with("..") {
                 *l = format!("{base}{l}");
-            } else {
+            } else if !l.starts_with("__L_") && !l.starts_with("..@") {
+                // A macro's `%%label` (`__L_…` here, `..@n.label` in NASM) and other `..@`
+                // labels do not start a new scope for `.local` labels, as in NASM.
                 base = l.clone();
             }
         }

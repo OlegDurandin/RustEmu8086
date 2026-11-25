@@ -1367,6 +1367,39 @@ fname db 'aaa', 0
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// INT 21h/3Fh on standard input reads a whole line and hands it out in pieces of CX bytes:
+/// reading one byte at a time gets every character of the line, then CR LF (TODO 61).
+#[test]
+fn reading_stdin_byte_by_byte_keeps_the_rest_of_the_line() {
+    let src = "org 100h
+    mov si, 6
+next:
+    mov ah, 3Fh
+    xor bx, bx
+    mov cx, 1
+    mov dx, offset buf
+    int 21h
+    mov al, buf
+    mov di, 6
+    sub di, si
+    mov got[di], al
+    dec si
+    jnz next
+    mov ax, 4C00h
+    int 21h
+buf db 0
+got db 6 dup (0)
+";
+    let (s, ev) = run_src(src, "abc\nxyz\n");
+    assert_eq!(ev, Event::Terminated(0));
+    let m = s.x86().unwrap();
+    let at = |i: u16| {
+        let off = s.compile(&format!("offset got + {i}")).unwrap().eval(&*s.target) as u16;
+        m.sys.mem.read8(rustemu_core::linear(m.cpu.sregs[3], off))
+    };
+    assert_eq!((0..6).map(at).collect::<Vec<u8>>(), b"abc\r\nx");
+}
+
 /// INT 21h/48h with BX = 0 takes a paragraph each time; when memory runs out it fails (CF = 1)
 /// instead of handing out video memory and, after the counter wraps, blocks already given out
 /// (and panicking on the overflow in debug builds).

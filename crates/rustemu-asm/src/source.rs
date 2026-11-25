@@ -82,6 +82,8 @@ pub struct Preprocessor<'a> {
     pub(crate) expanded_bytes: usize,
     /// The expansion went over [`MAX_EXPANDED_LINES`]: everything stops.
     over: bool,
+    /// The last expansion processed ended at an EXITM (a REPT then stops repeating).
+    exited: bool,
 }
 
 /// Deepest INCLUDE nesting (a cycle through differently spelled names stops here).
@@ -257,8 +259,9 @@ fn substitute_in(
     while i < chars.len() {
         let c = chars[i];
         if let Some(qc) = q {
-            // Inside strings only `&name&` style substitution is done.
-            if c == '&' && !nasm {
+            // Inside strings only `&name&` style substitution is done, and only of macro
+            // parameters (one pass): a text equate does not reach into `'AT&T'`.
+            if c == '&' && !nasm && rec.is_none() {
                 let mut j = i + 1;
                 while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
                     j += 1;
@@ -358,6 +361,7 @@ impl<'a> Preprocessor<'a> {
             expanded: 0,
             expanded_bytes: 0,
             over: false,
+            exited: false,
         }
     }
 
@@ -710,6 +714,9 @@ impl<'a> Preprocessor<'a> {
         // Conditional assembly stack: (active, any_branch_taken, enclosing_active). An inner
         // level is active only if the enclosing one is, so the top decides alone.
         let mut cond: Vec<(bool, bool, bool)> = Vec::new();
+        // EXITM reached in an active region: the rest of this expansion (with its ENDIFs) is
+        // not assembled.
+        let mut exited = false;
         let mut i = 0;
         while i < lines.len() {
             if self.over {
@@ -904,8 +911,12 @@ impl<'a> Preprocessor<'a> {
                     let c = strip_comment(&b.text).trim().to_string();
                     let (bw1, _) = first_words(&c);
                     if bw1 == "LOCAL" {
-                        locals
-                            .extend(c[5..].split(',').map(|s| s.trim().to_ascii_uppercase()).filter(|s| !s.is_empty()));
+                        locals.extend(
+                            after_first_word(&c)
+                                .split(',')
+                                .map(|s| s.trim().to_ascii_uppercase())
+                                .filter(|s| !s.is_empty()),
+                        );
                     } else {
                         real_body.push(b);
                     }
@@ -915,6 +926,12 @@ impl<'a> Preprocessor<'a> {
             }
 
             match w1.as_str() {
+                // MASM: leaves the macro or repeat block being expanded — where execution gets
+                // to it, so an EXITM under a false IF does nothing.
+                "EXITM" if depth > 0 => {
+                    exited = true;
+                    break;
+                }
                 "%UNDEF" if self.nasm => {
                     let name = w2.clone();
                     self.text_equs.remove(&name);
@@ -1000,8 +1017,9 @@ impl<'a> Preprocessor<'a> {
                     });
                     let (body, next) = self.collect_block(&lines, i, &l);
                     i = next;
+                    self.exited = false;
                     for _ in 0..n.clamp(0, 65536) {
-                        if self.over {
+                        if self.over || std::mem::take(&mut self.exited) {
                             break;
                         }
                         let copy = body
@@ -1016,6 +1034,7 @@ impl<'a> Preprocessor<'a> {
                             .collect();
                         self.process(copy, depth + 1);
                     }
+                    self.exited = false;
                     continue;
                 }
                 "PURGE" => {
@@ -1101,18 +1120,15 @@ impl<'a> Preprocessor<'a> {
                         chain: l.expand_chain(b),
                     })
                     .collect();
-                // EXITM support: cut the expansion at the first EXITM.
-                let cut = expanded
-                    .iter()
-                    .position(|e| first_words(strip_comment(&e.text)).0 == "EXITM")
-                    .unwrap_or(expanded.len());
-                self.process(expanded[..cut].to_vec(), depth + 1);
+                self.process(expanded, depth + 1);
                 continue;
             }
 
             self.out.push(l);
         }
-        if !cond.is_empty()
+        self.exited = exited;
+        if !exited
+            && !cond.is_empty()
             && let Some(l) = lines.last()
         {
             let l = l.clone();
