@@ -29,7 +29,7 @@ impl App {
     /// A panic of the assembler (a bug of its own): an error message instead of closing the
     /// application.
     fn assembler_panicked<T>(&mut self, payload: &(dyn std::any::Any + Send)) -> Option<T> {
-        self.build.failed = true;
+        self.build.fail();
         self.build.messages.push(Message {
             text: format!(
                 "internal error of the assembler: {} — please report it with this program",
@@ -77,7 +77,7 @@ impl App {
                 Some(p)
             }
             Err(e) => {
-                self.build.failed = true;
+                self.build.fail();
                 for err in e.errors.iter().take(rustemu_mips::asm::MAX_DIAGNOSTICS) {
                     let file = e.files.get(err.file).cloned().unwrap_or_default();
                     let short =
@@ -184,7 +184,7 @@ impl App {
                 return Some(source);
             }
         }
-        if let Some(d) = self.x86_session().and_then(|s| s.dos_memory_drive())
+        if let Some(d) = self.document_drive()
             && let Some((_, b)) = d.files().find(|(k, _)| k.eq_ignore_ascii_case(path) || k.eq_ignore_ascii_case(&base))
         {
             return Some(text(b));
@@ -260,7 +260,7 @@ impl App {
             let (handler, others) = match self.mips_project_files() {
                 Ok(f) => f,
                 Err(e) => {
-                    self.build.failed = true;
+                    self.build.fail();
                     self.build.messages.push(Message { text: e.clone(), loc: None, span: None, error: true });
                     self.status = e;
                     return None;
@@ -294,7 +294,7 @@ impl App {
                 Some(p)
             }
             Err(e) => {
-                self.build.failed = true;
+                self.build.fail();
                 self.mips_messages(&e.errors, &e.files, true);
                 self.build.messages.push(Message {
                     text: format!("{} error(s)", e.errors.len()),
@@ -318,27 +318,23 @@ impl App {
         let same_image = self.session.mips_program.as_ref().is_some_and(|old| old.image == p.image);
         // The browser: the files of drive C: (DOS's memory drive), copied back as the program
         // writes them (`sync_mips_files`).
-        let memory_dirs: Vec<String> = self
-            .x86_session()
-            .and_then(|s| s.dos_memory_drive())
-            .map(|d| d.dirs().map(str::to_string).collect())
-            .unwrap_or_default();
-        let storage = if self.doc.project.is_some() {
+        // A project or a program from a link gets an empty drive and writes nothing back.
+        let isolated = self.doc.project.is_some() || self.from_link();
+        let drive = self.document_drive();
+        let memory_dirs: Vec<String> = drive.map(|d| d.dirs().map(str::to_string).collect()).unwrap_or_default();
+        let storage = if isolated {
             rustemu_mips::files::Storage::Memory(Default::default())
         } else {
             match self.vdrive(self.doc.path.as_deref()) {
                 Some(root) => rustemu_mips::files::Storage::Host(root),
                 None => rustemu_mips::files::Storage::Memory(
-                    self.x86_session()
-                        .and_then(|s| s.dos_memory_drive())
-                        .map(|d| d.files().map(|(k, v)| (k.to_string(), v.to_vec())).collect())
-                        .unwrap_or_default(),
+                    drive.map(|d| d.files().map(|(k, v)| (k.to_string(), v.to_vec())).collect()).unwrap_or_default(),
                 ),
             }
         };
         if let Some(m) = self.session.mips_mut() {
             m.files.storage = storage;
-            m.files.set_memory_directories(if self.doc.project.is_some() { Vec::new() } else { memory_dirs });
+            m.files.set_memory_directories(memory_dirs);
             self.web.mips_files_synced = m.files.generation;
         }
         let name = self.file_name();
@@ -360,7 +356,7 @@ impl App {
             m.program_arguments = self.settings.mars.arguments();
         }
         if let Err(e) = self.session.load_mips(p, &name) {
-            self.build.failed = true;
+            self.build.fail();
             self.notice("Load", &e);
             return;
         }
@@ -368,6 +364,7 @@ impl App {
         self.program.files = files;
         self.program.text = Some(self.doc.text.clone());
         self.program.portable = self.doc.project.is_some();
+        self.program.on_user_drive = !isolated;
         if !same_image {
             self.clear_address_breakpoints();
         }
@@ -491,7 +488,7 @@ impl App {
         };
         let same_image = self.session.program.as_ref().is_some_and(|old| old.file_bytes() == p.file_bytes());
         if let Err(e) = self.session.load_program(p) {
-            self.build.failed = true;
+            self.build.fail();
             self.notice("Load", &e);
             return;
         }
@@ -600,7 +597,7 @@ impl App {
             };
         }
         self.feed_prepared_input();
-        self.build.failed = false;
+        self.build.succeed();
         if let Some(m) = self.session.x86_mut() {
             m.timer_irq = self.settings.timer_irq;
         }

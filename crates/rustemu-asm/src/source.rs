@@ -82,6 +82,8 @@ pub struct Preprocessor<'a> {
     pub(crate) expanded_bytes: usize,
     /// The expansion went over [`MAX_EXPANDED_LINES`]: everything stops.
     over: bool,
+    /// The last expansion processed ended at an EXITM (a REPT then stops repeating).
+    exited: bool,
 }
 
 /// Deepest INCLUDE nesting (a cycle through differently spelled names stops here).
@@ -101,6 +103,15 @@ fn first_words(text: &str) -> (String, String) {
     let a = it.next().unwrap_or("").to_ascii_uppercase();
     let b = it.next().unwrap_or("").to_ascii_uppercase();
     (a, b)
+}
+
+/// The text after the first word as [`first_words`] splits it (separators before the word
+/// are skipped, so the word need not start at byte 0).
+fn after_first_word(text: &str) -> &str {
+    let sep = |c: char| c.is_whitespace() || c == ',' || c == ';';
+    let start = text.trim_start_matches(sep);
+    let end = start.find(sep).unwrap_or(start.len());
+    &start[end..]
 }
 
 fn strip_comment(text: &str) -> &str {
@@ -248,8 +259,9 @@ fn substitute_in(
     while i < chars.len() {
         let c = chars[i];
         if let Some(qc) = q {
-            // Inside strings only `&name&` style substitution is done.
-            if c == '&' && !nasm {
+            // Inside strings only `&name&` style substitution is done, and only of macro
+            // parameters (one pass): a text equate does not reach into `'AT&T'`.
+            if c == '&' && !nasm && rec.is_none() {
                 let mut j = i + 1;
                 while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
                     j += 1;
@@ -349,6 +361,7 @@ impl<'a> Preprocessor<'a> {
             expanded: 0,
             expanded_bytes: 0,
             over: false,
+            exited: false,
         }
     }
 
@@ -701,6 +714,9 @@ impl<'a> Preprocessor<'a> {
         // Conditional assembly stack: (active, any_branch_taken, enclosing_active). An inner
         // level is active only if the enclosing one is, so the top decides alone.
         let mut cond: Vec<(bool, bool, bool)> = Vec::new();
+        // EXITM reached in an active region: the rest of this expansion (with its ENDIFs) is
+        // not assembled.
+        let mut exited = false;
         let mut i = 0;
         while i < lines.len() {
             if self.over {
@@ -811,7 +827,7 @@ impl<'a> Preprocessor<'a> {
             // Conditionals are evaluated even in inactive regions to keep nesting right.
             match w1.as_str() {
                 "IF" | "IFE" | "IFDEF" | "IFNDEF" => {
-                    let rest = code[w1.len()..].trim();
+                    let rest = after_first_word(&code).trim();
                     let v = if !active {
                         false
                     } else {
@@ -836,7 +852,7 @@ impl<'a> Preprocessor<'a> {
                         continue;
                     };
                     let v = parent && !taken && {
-                        let rest = code[w1.len()..].trim();
+                        let rest = after_first_word(&code).trim();
                         match w1.as_str() {
                             "ELSEIFDEF" => self.is_defined(rest),
                             "ELSEIFNDEF" => !self.is_defined(rest),
@@ -895,8 +911,12 @@ impl<'a> Preprocessor<'a> {
                     let c = strip_comment(&b.text).trim().to_string();
                     let (bw1, _) = first_words(&c);
                     if bw1 == "LOCAL" {
-                        locals
-                            .extend(c[5..].split(',').map(|s| s.trim().to_ascii_uppercase()).filter(|s| !s.is_empty()));
+                        locals.extend(
+                            after_first_word(&c)
+                                .split(',')
+                                .map(|s| s.trim().to_ascii_uppercase())
+                                .filter(|s| !s.is_empty()),
+                        );
                     } else {
                         real_body.push(b);
                     }
@@ -906,6 +926,12 @@ impl<'a> Preprocessor<'a> {
             }
 
             match w1.as_str() {
+                // MASM: leaves the macro or repeat block being expanded — where execution gets
+                // to it, so an EXITM under a false IF does nothing.
+                "EXITM" if depth > 0 => {
+                    exited = true;
+                    break;
+                }
                 "%UNDEF" if self.nasm => {
                     let name = w2.clone();
                     self.text_equs.remove(&name);
@@ -926,7 +952,7 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 "%ERROR" if self.nasm => {
-                    let msg = code[6..].trim().trim_matches(['\'', '"']).to_string();
+                    let msg = after_first_word(&code).trim().trim_matches(['\'', '"']).to_string();
                     self.error(&l, if msg.is_empty() { "%error".to_string() } else { msg });
                     continue;
                 }
@@ -938,7 +964,7 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 ".EXIT" => {
-                    let code_arg = code[5..].trim();
+                    let code_arg = after_first_word(&code).trim();
                     let first = if code_arg.is_empty() {
                         "mov ax, 4C00h".to_string()
                     } else {
@@ -950,7 +976,7 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 "INCLUDE" => {
-                    let name = code[7..].trim().trim_matches(['\'', '"', '<', '>']).trim().to_string();
+                    let name = after_first_word(&code).trim().trim_matches(['\'', '"', '<', '>']).trim().to_string();
                     let from = self.files.get(l.file).cloned().unwrap_or_default();
                     match self.loader.load(&name, &from) {
                         Some((resolved, _)) if self.open_files.contains(&resolved) => {
@@ -985,14 +1011,15 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 "REPT" => {
-                    let n = self.eval_const(code[4..].trim()).unwrap_or_else(|| {
+                    let n = self.eval_const(after_first_word(&code).trim()).unwrap_or_else(|| {
                         self.error(&l, "REPT requires a constant count");
                         0
                     });
                     let (body, next) = self.collect_block(&lines, i, &l);
                     i = next;
+                    self.exited = false;
                     for _ in 0..n.clamp(0, 65536) {
-                        if self.over {
+                        if self.over || std::mem::take(&mut self.exited) {
                             break;
                         }
                         let copy = body
@@ -1007,10 +1034,11 @@ impl<'a> Preprocessor<'a> {
                             .collect();
                         self.process(copy, depth + 1);
                     }
+                    self.exited = false;
                     continue;
                 }
                 "PURGE" => {
-                    for m in code[5..].split(',') {
+                    for m in after_first_word(&code).split(',') {
                         self.macros.remove(&m.trim().to_ascii_uppercase());
                     }
                     continue;
@@ -1092,18 +1120,15 @@ impl<'a> Preprocessor<'a> {
                         chain: l.expand_chain(b),
                     })
                     .collect();
-                // EXITM support: cut the expansion at the first EXITM.
-                let cut = expanded
-                    .iter()
-                    .position(|e| first_words(strip_comment(&e.text)).0 == "EXITM")
-                    .unwrap_or(expanded.len());
-                self.process(expanded[..cut].to_vec(), depth + 1);
+                self.process(expanded, depth + 1);
                 continue;
             }
 
             self.out.push(l);
         }
-        if !cond.is_empty()
+        self.exited = exited;
+        if !exited
+            && !cond.is_empty()
             && let Some(l) = lines.last()
         {
             let l = l.clone();

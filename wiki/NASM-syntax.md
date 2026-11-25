@@ -71,7 +71,10 @@ takes the addresses after it but is not written to the file.
   `\n \t \r \0 \xHH`.
 - Operands `byte` / `word` / `dword` without `ptr`, `[es:di]`, `short` / `near` / `far`, `seg:off`.
 - Operators as in NASM, with its precedence: `?:`, logical `|| ^^ &&`, comparisons (true is 1), then `| ^ &`,
-  shifts, `+ -`, `* / %`.
+  shifts, `+ -`, `* / % // %%`. As in NASM, `/` and `%` are unsigned and `//` and `%%` signed (`-7 // 2` is −3);
+  a result that does not fit (`db -7 / 2`) is an error here, where NASM only warns and truncates.
+- A macro's `%%label` does not start a new scope for `.local` labels: `.top` after a macro call still belongs to the
+  label before it.
 - Preprocessor: `%define` (including with parameters: `%define SQ(x) ((x)*(x))`), `%xdefine`, `%undef`,
   `%assign`, `%macro … %endmacro` with `%1…%9` and `%%label`, `%rep`, `%if / %elif / %else / %endif`, `%ifdef`,
   `%ifndef`, `%include`, `%error`. A `%define` may use others (`%define B (A+A)`): as in NASM, its text is expanded

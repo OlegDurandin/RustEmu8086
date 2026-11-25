@@ -408,6 +408,29 @@ pub struct Build {
     /// A build/load has failed since the last successful emulator load. The previous machine
     /// remains available for inspection, but Run must not start it by mistake.
     pub(crate) failed: bool,
+    /// `failed` only keeps the old image from running: a build of the current text is pending
+    /// or was cancelled, nothing failed (the interface says *Assembling* / *Outdated*, not *Fault*).
+    pub(crate) outdated: bool,
+}
+
+impl Build {
+    /// Assembly or loading failed.
+    pub(crate) fn fail(&mut self) {
+        self.failed = true;
+        self.outdated = false;
+    }
+
+    /// The loaded image is not the current text's and must not run until it is built.
+    pub(crate) fn outdate(&mut self) {
+        self.failed = true;
+        self.outdated = true;
+    }
+
+    /// The current text is loaded.
+    pub(crate) fn succeed(&mut self) {
+        self.failed = false;
+        self.outdated = false;
+    }
 }
 
 /// The program loaded in the emulator: its sources.
@@ -415,6 +438,9 @@ pub struct Build {
 pub struct Program {
     /// The loaded image belongs to a portable project.
     pub(crate) portable: bool,
+    /// The loaded MIPS program works on the user's drive C: (in memory): what it writes is
+    /// copied back there ([`App::sync_mips_files`]). Not for a project or a program from a link.
+    pub(crate) on_user_drive: bool,
     /// Prepared keystrokes not yet delivered to the bounded machine keyboard.
     pub(crate) prepared_input: std::collections::VecDeque<u8>,
     /// Source files (lines); the first is the main one.
@@ -683,6 +709,8 @@ pub struct App {
     pub front: FrontEnd,
     /// Writes to the storage.
     pub store: Store,
+    /// The user's own syntax and MARS settings while an open project overrides them.
+    pub(crate) user_config: crate::share::UserConfig,
     // ---- state of the tools
     /// The emulator screen (focus, keyboard).
     pub screen: crate::screen::ScreenState,
@@ -773,6 +801,7 @@ impl App {
             web: Default::default(),
             front: Default::default(),
             store: Default::default(),
+            user_config: Default::default(),
             screen: crate::screen::ScreenState::new(),
             console: Default::default(),
             library: Default::default(),
@@ -826,11 +855,27 @@ impl App {
     }
 
     /// Runs `action` now, or asks to discard unsaved changes first.
+    ///
+    /// An action that opens its document in the other processor's workspace leaves this one's
+    /// document parked as it is, so nothing is asked here; the workspace it goes to asks about
+    /// its own document (`App::enter_workspace_for`).
     pub fn guarded(&mut self, action: PendingAction) {
-        if self.dirty() {
+        if self.dirty() && self.action_arch(&action).is_none_or(|a| a == self.arch()) {
             self.dialogs.confirm_discard = Some(action);
         } else {
             self.perform(action);
+        }
+    }
+
+    /// The processor whose workspace `action` opens its document in, when known before it runs
+    /// (a file or an upload is detected after reading it).
+    fn action_arch(&self, action: &PendingAction) -> Option<Arch> {
+        match action {
+            PendingAction::Example(_) => Some(Arch::I8086),
+            PendingAction::MipsExample(_) => Some(Arch::Mips32),
+            PendingAction::Shared(s) => Some(s.arch),
+            PendingAction::Program(name) => self.web.programs.get(name).map(|p| p.arch()),
+            _ => None,
         }
     }
 

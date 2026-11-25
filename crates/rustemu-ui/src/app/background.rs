@@ -14,6 +14,8 @@ pub(super) enum BuildStep {
     Into,
     Over,
     Out,
+    /// Run to line `.1` of source file `.0` (F4, *Run to line*).
+    ToLine(usize, u32),
 }
 
 /// The snapshot against which a worker result is validated.
@@ -37,7 +39,7 @@ impl App {
     /// Cancels without waiting for a task; a late result can no longer be applied.
     pub fn cancel_build(&mut self) {
         if self.build.pending.take().is_some() {
-            self.build.failed = true;
+            self.build.outdate();
             self.status = "Assembly cancelled".into();
         }
     }
@@ -70,12 +72,11 @@ impl App {
     pub(crate) fn build_request(&self, version: u64) -> rustemu_build::Request {
         if let Some(mut project) = self.doc.project.clone() {
             project.files.insert(project.entry.clone(), self.doc.text.clone());
-            project.mars = self.settings.mars.clone();
-            project.dialect = self.settings.syntax.dialect();
+            self.update_project_settings(&mut project);
             return project.request(version);
         }
         let mut files = std::collections::BTreeMap::new();
-        if let Some(drive) = self.x86_session().and_then(|s| s.dos_memory_drive()) {
+        if let Some(drive) = self.document_drive() {
             for (name, bytes) in drive.files() {
                 files.insert(name.into(), String::from_utf8_lossy(bytes).into_owned());
             }
@@ -114,7 +115,7 @@ impl App {
                 );
                 self.build.sources = r.sources;
                 if let rustemu_build::Outcome::Failed(e) = r.outcome {
-                    self.build.failed = true;
+                    self.build.fail();
                     self.notice("Project assembly", &e);
                     return true;
                 }
@@ -124,7 +125,7 @@ impl App {
         }
         self.cancel_build();
         self.run = RunMode::Paused;
-        self.build.failed = true;
+        self.build.outdate();
         self.build.messages.clear();
         self.clear_errors();
         if self.doc.text.len() > rustemu_mips::asm::MAX_SOURCE_BYTES {
@@ -149,6 +150,7 @@ impl App {
                 self.status = "Assembling…".into();
             }
             Err(e) => {
+                self.build.fail();
                 self.status = "Assembly failed".into();
                 self.build.messages.push(Message { text: e, loc: None, span: None, error: true });
             }
@@ -205,6 +207,7 @@ impl App {
             Ok(r) if r.version == p.request.version => r,
             Ok(_) => return,
             Err(e) => {
+                self.build.fail();
                 self.status = "Assembly failed".into();
                 self.build.messages.push(Message { text: e, loc: None, span: None, error: true });
                 return;
@@ -237,6 +240,7 @@ impl App {
             _ => {}
         }
         if let rustemu_build::Outcome::Failed(e) = result.outcome {
+            self.build.fail();
             self.status = "Assembly failed".into();
             self.build.messages.push(Message { text: e, loc: None, span: None, error: true });
             return;
@@ -258,6 +262,7 @@ impl App {
                 BuildStep::Into => self.single_step(),
                 BuildStep::Over => self.step_over(),
                 BuildStep::Out => self.step_out(),
+                BuildStep::ToLine(file, line) => self.run_to_line(file, line),
             }
         }
         if p.run_after && !self.build.failed {
@@ -322,6 +327,44 @@ mod tests {
         complete(&mut a);
         assert!(!a.build.failed);
     }
+    /// TODO 57: a build in progress or a cancelled one is not shown as a fault; a failed one is.
+    #[test]
+    fn building_and_cancelled_builds_are_not_faults() {
+        use crate::app::ExecutionState;
+        let mut a = app(Arch::I8086);
+        a.emulate();
+        assert_eq!(a.execution_state(), ExecutionState::Assembling);
+        complete(&mut a);
+        assert_eq!(a.execution_state(), ExecutionState::Ready);
+        a.doc.text.push_str("; edited\n");
+        a.emulate();
+        a.cancel_build();
+        assert_eq!(a.execution_state(), ExecutionState::Outdated);
+        a.doc.text = "not_an_instruction\n".into();
+        a.emulate();
+        complete(&mut a);
+        assert_eq!(a.execution_state(), ExecutionState::Fault);
+    }
+
+    /// TODO 56: Run to cursor / Run to line waits for the background build it needs and then
+    /// runs, before the first load as well as after an edit.
+    #[test]
+    fn run_to_line_continues_after_the_build() {
+        let mut a = app(Arch::I8086);
+        a.doc.text = "org 100h\nmov ax, 1\nmov bx, 2\nmov ax, 4c00h\nint 21h\n".into();
+        for edit in [false, true] {
+            if edit {
+                a.stop();
+                a.doc.text.push_str("; edited\n");
+            }
+            a.run_to_line(0, 3);
+            assert!(a.is_building(), "edit: {edit}");
+            complete(&mut a);
+            assert!(!a.build.failed);
+            assert!(matches!(a.run, RunMode::RunTo(_)), "edit: {edit}: runs to the line after the build");
+        }
+    }
+
     #[test]
     fn step_and_run_continue_after_successful_build() {
         for arch in [Arch::I8086, Arch::Mips32] {

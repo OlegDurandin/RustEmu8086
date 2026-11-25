@@ -9,14 +9,14 @@ use rustemu_ui::testing::{app_with_example, save};
 use rustemu_ui::tools::Tool;
 
 #[test]
-fn pilot_first_success_and_cancel_check_keep_source() {
+fn pilot_examples_and_cancel_check_keep_source() {
     let mut h = harness(app_with_example(0));
     h.run();
     h.get_by_label("📚 examples").click();
     h.run_steps(2);
-    h.get_by_label("First success").hover();
+    h.get_by_label("MIPS32 examples").hover();
     h.run_steps(3);
-    h.get_by_label("Start with MIPS Hello").click();
+    h.get_by_label(rustemu_ui::examples::MIPS_EXAMPLES[0].0).click();
     h.run_steps(2);
     assert_eq!(h.state().arch(), rustemu_session::Arch::Mips32);
     h.state_mut().doc.saved_text = h.state().doc.text.clone();
@@ -1941,4 +1941,38 @@ fn mips_dialogs() {
     let m = h.state().session.mips().unwrap();
     assert!(m.dialog().is_none());
     assert_eq!(m.finished, Some(rustemu_mips::Finish::Exit(0)));
+}
+
+/// TODO 53: an example of the other processor parks this document as it is, without asking,
+/// and it is still unsaved when shown again; *Discard* really drops the edits instead of
+/// marking them saved (which lost them on quitting without a question).
+#[test]
+fn discard_drops_edits_and_other_workspace_keeps_them() {
+    let mut app = app_with_example(0);
+    app.doc.text.push_str("; edited\n");
+    app.guarded(PendingAction::MipsExample(0));
+    assert!(app.dialogs.confirm_discard.is_none(), "the 8086 document is only parked");
+    assert_eq!(app.arch(), rustemu_session::Arch::Mips32);
+    assert_eq!(app.parked_dirty(), Some(rustemu_session::Arch::I8086));
+    app.guarded(PendingAction::Example(0));
+    assert!(app.dialogs.confirm_discard.is_some(), "loading over the edited 8086 document asks");
+
+    let mut h = harness(app);
+    h.run_steps(2);
+    h.get_by_label("Discard").click();
+    h.run_steps(2);
+    assert_eq!(h.state().arch(), rustemu_session::Arch::I8086);
+    assert_eq!(h.state().doc.text, rustemu_ui::examples::EXAMPLES[0].1.replace("\r\n", "\n"), "example 0 opened");
+    assert!(!h.state().dirty() && h.state().parked_dirty().is_none());
+
+    // Discard before an action that keeps the document (here: quitting is not carried out).
+    let mut app = app_with_example(0);
+    let saved = app.doc.saved_text.clone();
+    app.doc.text.push_str("; edited\n");
+    app.guarded(PendingAction::Quit);
+    let mut h = harness(app);
+    h.run_steps(2);
+    h.get_by_label("Discard").click();
+    h.run_steps(2);
+    assert_eq!(h.state().doc.text, saved, "the edits are gone, not marked saved");
 }

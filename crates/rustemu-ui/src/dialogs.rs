@@ -293,7 +293,10 @@ fn small_dialogs(app: &mut App, ctx: &egui::Context) {
                     }
                     if ui.button("Discard").clicked() {
                         app.dialogs.confirm_discard = None;
-                        app.doc.saved_text = app.doc.text.clone();
+                        // Really drop the edits: if the action leaves this document parked (the
+                        // other workspace), marking them saved would lose them later without asking.
+                        app.doc.text = app.doc.saved_text.clone();
+                        app.source_changed();
                         finish(app, ctx, action.clone());
                     }
                     if ui.button("Cancel").clicked() {

@@ -57,7 +57,7 @@ impl App {
     pub fn persist(&mut self, storage: &mut dyn eframe::Storage) {
         use base64::Engine;
         self.store_settings();
-        let settings = ron::ser::to_string(&self.settings).unwrap_or_default();
+        let settings = ron::ser::to_string(&*self.user_settings()).unwrap_or_default();
         self.put(storage, eframe::APP_KEY, settings);
         if let Some(drive) = self.web.own_drive.as_ref().or(self.x86_session().and_then(|s| s.dos_memory_drive())) {
             let drive = base64::engine::general_purpose::STANDARD.encode(drive.to_bytes());

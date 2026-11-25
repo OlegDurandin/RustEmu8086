@@ -58,7 +58,8 @@ opened* checkbox starts it right away.
 - The Mac app can make a link too — it leads to the site.
 
 **Someone else's program does not see your files.** Until a program from a link is saved, it works with an empty
-temporary drive C:, and whatever it writes there is not kept. A window says so on the first run, and so does a
+temporary drive C:, and whatever it writes there is not kept. MIPS programs you run meanwhile still use your
+own drive C: (a MIPS program from a link gets an empty one). A window says so on the first run, and so does a
 note in the **drive C:** window. To run the program with your drive, save it and run it again.
 
 ## Links to examples

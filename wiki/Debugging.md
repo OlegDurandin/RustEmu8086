@@ -19,7 +19,12 @@ step by step and watch what happens to the registers, memory and screen.
 
 **Step back** restores registers, memory, the screen, and the state of devices, keyboard, DOS and floppies — up
 to 2000 instructions back. File operations on the disk (create, write, delete) cannot be undone, so the history
-stops at them.
+stops at them. Memory or registers you change on a pause are kept: stepping back undoes only what instructions did.
+
+**Step over** and **Step out** follow the stack, not a count of `CALL` and `RET`: a procedure is left when its
+return address is reached with the stack back where it was before the call. So they also work when an interrupt
+handler passes control to the old vector with a far `JMP`, when a timer interrupt comes in the middle of a
+procedure, with `ENTER` / `LEAVE`, and in MIPS with delayed branching (the delay slot belongs to the jump).
 
 `INT` is a single step: the BIOS or DOS service runs as a whole. If the program waits for a key, the emulator
 pauses until you press one.
@@ -119,6 +124,12 @@ Conditions, watches and stop on condition accept:
 
 In NASM programs a name is an address and the value is in brackets: `count` is the address, `[count]` the value
 (see [NASM syntax](NASM-syntax)).
+
+Registers and memory are read as unsigned numbers. Compared with a number they take its sign: `ax == -1` and
+`ax == 0FFFFh` are both true for FFFFh, `ax < 0` and `$t0 >= 0` test the sign, and a comparison with a positive
+number stays unsigned (`cx > 8000h`). A word at offset FFFFh continues at offset 0 of the same segment, as on the
+8086. Names are looked up as written first: in MIPS and NASM `Value` and `value` are different labels; a name in
+another case still finds the label when nothing is spelled the same.
 
 ## DEBUG.EXE console
 

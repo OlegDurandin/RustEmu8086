@@ -325,6 +325,8 @@ pub struct Machine {
     /// Deliver IRQ0 (INT 08h -> INT 1Ch) on timer ticks. When off, the BIOS tick count at
     /// 0040:006C is still advanced.
     pub timer_irq: bool,
+    /// The last step entered a hardware interrupt handler ([`rustemu_target::Target::interrupted`]).
+    pub(crate) interrupted: bool,
     /// Timer source: `None` = host clock (18.2 Hz), `Some(n)` = one tick every `n` instructions.
     pub instructions_per_tick: Option<u64>,
     tick_instr: u64,
@@ -374,6 +376,7 @@ impl Machine {
             mouse_visible: false,
             floppies: vec![Vec::new()],
             timer_irq: false,
+            interrupted: false,
             instructions_per_tick: None,
             tick_instr: 0,
             tick_time: None,
@@ -448,6 +451,11 @@ impl Machine {
         self.tick_instr = 0;
         self.tick_time = None;
         self.tick_frac = 0.0;
+        // A delay (INT 15h/86h) of the previous program must not shorten or stretch the next
+        // one's; the cursor is hidden again (the mouse position is the host's).
+        self.wait_until = None;
+        self.mouse_visible = false;
+        self.interrupted = false;
         self.install_bios();
     }
 
@@ -749,6 +757,9 @@ impl Machine {
         self.history_barrier = false;
         self.sys.touched = false;
         self.sys.mem.set_journaling(true);
+        // The journal stays on between steps; what was written since the last step is not part
+        // of this instruction's undo (or of the step-back would revert the debugger's edits).
+        self.sys.mem.discard_journal();
         let snap_system = if self.may_touch_system() {
             Some(self.begin_system_snapshot())
         } else {
@@ -814,7 +825,11 @@ impl Machine {
         let count = self.cpu.instr_count;
         let mut ev = self.step_inner();
         // Hardware interrupt entry executes no opcode (unlike INT n or a CPU trap).
-        let bios_irq = ev == Event::Continue && self.cpu.instr_count == count && Self::in_stubs(self.cpu.pc());
+        let irq = ev == Event::Continue && self.cpu.instr_count == count && self.cpu.pc() != pc;
+        let bios_irq = irq && Self::in_stubs(self.cpu.pc());
+        // Still in a handler when the step ends, unless the BIOS alone served it and the
+        // interrupted instruction then ran.
+        self.interrupted = irq;
         for pass in 0..2 {
             let mut guard = 0;
             while ev == Event::Continue && Self::in_stubs(self.cpu.pc()) && guard < 256 {
@@ -822,6 +837,7 @@ impl Machine {
                 guard += 1;
             }
             if pass == 0 && bios_irq && ev == Event::Continue && self.cpu.pc() == pc {
+                self.interrupted = false;
                 ev = self.step_inner();
             } else {
                 break;

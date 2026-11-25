@@ -60,7 +60,7 @@ Video memory is in the address space: text at `B800:0000` (2 bytes per character
 |---|---|
 | 3Ch / 5Bh | create a file / create only if it does not exist |
 | 3Dh / 3Eh | open / close a file |
-| 3Fh / 40h | read / write (handles 0–2 are the keyboard and screen, 4 is the printer) |
+| 3Fh / 40h | read / write (handles 0–2 are the keyboard and screen, 4 is the printer); from the keyboard a whole line is typed (to Enter) and handed out CX bytes at a time |
 | 41h | delete a file |
 | 42h | move the file pointer |
 | 43h | file attributes |

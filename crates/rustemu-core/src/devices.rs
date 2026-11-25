@@ -72,8 +72,6 @@ pub struct Devices {
     retrace: u8,
     /// Last keyboard scan code for port 60h.
     pub last_scan: u8,
-    /// Ports written (port, value) since the last [`Devices::take_events`].
-    events: Vec<(u16, u16)>,
     /// The robot on its 9 x 6 map (ports 9, 10, 11).
     pub robot: crate::robot::Robot,
     latch_journal: Option<Vec<(u16, Option<u16>)>>,
@@ -103,7 +101,6 @@ pub(crate) struct DevicesSnapshot {
     dac_component: u8,
     retrace: u8,
     last_scan: u8,
-    events_len: usize,
     robot: crate::robot::RobotSnapshot,
 }
 
@@ -135,7 +132,6 @@ impl DevicesSnapshot {
             && self.dac_component == devices.dac_component
             && self.retrace == devices.retrace
             && self.last_scan == devices.last_scan
-            && self.events_len == devices.events.len()
             && self.robot.is_unchanged(&devices.robot)
     }
 }
@@ -170,7 +166,6 @@ impl Devices {
             dac_component: 0,
             retrace: 0,
             last_scan: 0,
-            events: Vec::new(),
             robot: crate::robot::Robot::new(),
             latch_journal: None,
             palette_journal: None,
@@ -206,7 +201,6 @@ impl Devices {
             dac_component: self.dac_component,
             retrace: self.retrace,
             last_scan: self.last_scan,
-            events_len: self.events.len(),
             robot: self.robot.begin_snapshot(),
         }
     }
@@ -252,7 +246,6 @@ impl Devices {
         self.dac_component = snapshot.dac_component;
         self.retrace = snapshot.retrace;
         self.last_scan = snapshot.last_scan;
-        self.events.truncate(snapshot.events_len);
         self.robot.restore(snapshot.robot);
         self.latch_journal = None;
         self.palette_journal = None;
@@ -319,11 +312,6 @@ impl Devices {
         }
     }
 
-    /// Takes the port writes since the last call: (port, value).
-    pub fn take_events(&mut self) -> Vec<(u16, u16)> {
-        std::mem::take(&mut self.events)
-    }
-
     /// IN of a byte: the device behind `port`, or the last value written to it.
     pub fn input8(&mut self, port: u16) -> u8 {
         match port {
@@ -376,7 +364,6 @@ impl Devices {
     /// OUT of a byte to the device behind `port` (also remembered in [`Devices::latch`]).
     pub fn output8(&mut self, port: u16, v: u8) {
         self.set_latch(port, v as u16);
-        self.events.push((port, v as u16));
         match port {
             0x3C7 => {
                 self.dac_read_index = v;
@@ -409,12 +396,10 @@ impl Devices {
             ports::TRAFFIC_LIGHTS => {
                 self.traffic_lights = v;
                 self.set_latch(port, v);
-                self.events.push((port, v));
             }
             ports::LED_DISPLAY => {
                 self.led = v;
                 self.set_latch(port, v);
-                self.events.push((port, v));
             }
             _ => {
                 self.output8(port, v as u8);
@@ -486,6 +471,5 @@ mod tests {
         assert_eq!(d.traffic_lights, 0);
         assert_eq!(d.palette[0], old_palette);
         assert_eq!(d.robot.get(1, 1), Cell::Empty);
-        assert!(d.events.is_empty());
     }
 }

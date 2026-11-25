@@ -86,6 +86,9 @@ pub(crate) struct DosState {
     pub waiting: bool,
     /// Pending AH=0Ah line input.
     pub line: Option<Vec<u8>>,
+    /// The rest of a line typed for AH=3Fh on standard input that the program has not read yet:
+    /// DOS reads a whole line (to Enter) and hands it out in pieces of CX bytes.
+    pub stdin_rest: Vec<u8>,
     pub last_exit: u8,
     /// Memory allocation: next free paragraph for AH=48h.
     pub next_free: u16,
@@ -106,6 +109,7 @@ pub(crate) struct DosSnapshot {
     dta: (u16, u16),
     waiting: bool,
     line: Option<Vec<u8>>,
+    stdin_rest: Vec<u8>,
     last_exit: u8,
     next_free: u16,
     find: FindState,
@@ -115,6 +119,7 @@ impl DosSnapshot {
     pub(crate) fn allocated_bytes(&self) -> usize {
         self.cwd.capacity()
             + self.line.as_ref().map_or(0, Vec::capacity)
+            + self.stdin_rest.capacity()
             + self.find.as_ref().map_or(0, |(f, _)| {
                 f.capacity() * std::mem::size_of::<(String, u64)>() + f.iter().map(|(n, _)| n.capacity()).sum::<usize>()
             })
@@ -133,6 +138,7 @@ impl PartialEq for DosSnapshot {
             && self.dta == other.dta
             && self.waiting == other.waiting
             && self.line == other.line
+            && self.stdin_rest == other.stdin_rest
             && self.last_exit == other.last_exit
             && self.next_free == other.next_free
             && same_find
@@ -149,6 +155,7 @@ impl DosState {
             dta: self.dta,
             waiting: self.waiting,
             line: self.line.clone(),
+            stdin_rest: self.stdin_rest.clone(),
             last_exit: self.last_exit,
             next_free: self.next_free,
             find: self.find.clone(),
@@ -161,6 +168,7 @@ impl DosState {
         self.dta = snapshot.dta;
         self.waiting = snapshot.waiting;
         self.line = snapshot.line;
+        self.stdin_rest = snapshot.stdin_rest;
         self.last_exit = snapshot.last_exit;
         self.next_free = snapshot.next_free;
         self.find = snapshot.find;
@@ -358,7 +366,8 @@ impl Machine {
                 self.ok();
             }
             0x48 => {
-                let want = self.cpu.regs[BX];
+                // A zero-paragraph request still takes one paragraph, so it needs one free.
+                let want = self.cpu.regs[BX].max(1);
                 if self.dos.next_free == 0 {
                     self.dos.next_free = 0x2000;
                 }
@@ -368,7 +377,7 @@ impl Machine {
                     self.fail(E_NO_MEM);
                 } else {
                     self.cpu.regs[AX] = self.dos.next_free;
-                    self.dos.next_free += want.max(1);
+                    self.dos.next_free += want;
                     self.ok();
                 }
             }
@@ -670,11 +679,30 @@ impl Machine {
         }
     }
 
+    /// Copies up to `n` bytes of a typed `line` to DS:DX for AH=3Fh, keeping the rest for the
+    /// next read; AX = bytes copied.
+    fn stdin_give(&mut self, mut line: Vec<u8>, n: usize, ds: u16, dx: u16) {
+        let cnt = line.len().min(n);
+        for (i, &b) in line[..cnt].iter().enumerate() {
+            self.sys.mem.write8(linear(ds, dx.wrapping_add(i as u16)), b);
+        }
+        line.drain(..cnt);
+        self.dos.stdin_rest = line;
+        self.cpu.regs[AX] = cnt as u16;
+        self.ok();
+    }
+
     fn dos_read(&mut self) -> Svc {
         let (h, n) = (self.cpu.regs[BX], self.cpu.regs[CX] as usize);
         let (ds, dx) = (self.cpu.sregs[DS], self.cpu.regs[DX]);
         if h == 0 {
-            // Standard input: line-buffered keyboard input, terminated with CR LF.
+            // Standard input: line-buffered keyboard input, terminated with CR LF. A line longer
+            // than CX is handed out over several reads, as DOS does.
+            if !self.dos.stdin_rest.is_empty() {
+                let rest = std::mem::take(&mut self.dos.stdin_rest);
+                self.stdin_give(rest, n, ds, dx);
+                return Svc::Ret;
+            }
             let mut line = self.dos.line.take().unwrap_or_default();
             while let Some(k) = self.read_key() {
                 let c = k as u8;
@@ -683,12 +711,7 @@ impl Machine {
                         self.console_out(b'\r');
                         self.console_out(b'\n');
                         line.extend_from_slice(b"\r\n");
-                        let cnt = line.len().min(n);
-                        for (i, &b) in line[..cnt].iter().enumerate() {
-                            self.sys.mem.write8(linear(ds, dx.wrapping_add(i as u16)), b);
-                        }
-                        self.cpu.regs[AX] = cnt as u16;
-                        self.ok();
+                        self.stdin_give(line, n, ds, dx);
                         return Svc::Ret;
                     }
                     8 => {

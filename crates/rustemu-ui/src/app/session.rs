@@ -96,7 +96,9 @@ impl App {
         if s.cursor_line > 1 {
             self.editor.goto_line = Some(s.cursor_line);
         }
-        self.resolve_pending_breakpoints();
+        // Breakpoints of included files wait for this document's program: the loaded one is
+        // still the previous document's, whose included files are not these
+        // ([`App::after_load`] resolves them).
         self.sync_breakpoints();
     }
 
@@ -125,5 +127,41 @@ impl App {
         }
         *panels = self.panels.as_ref().and_then(|t| ron::to_string(t).ok());
         self.settings.reference_lang = self.reference.lang;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::{App, Breakpoint, Settings};
+
+    /// TODO 55: a breakpoint in an included file waits for its own program. Reopening a file
+    /// while another program is loaded must not match the saved file name against that
+    /// program's includes (it moved the breakpoint into another file).
+    #[test]
+    fn included_file_breakpoints_resolve_against_their_own_program() {
+        let dir = std::env::temp_dir().join(format!("rustemu-bp-include-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("my.inc"), "nop\nnop\nnop\nnop\nnop\nnop\n").unwrap();
+        let b = dir.join("b.asm");
+        let a = dir.join("a.asm");
+        std::fs::write(&b, "include 'my.inc'\ninclude 'emu8086.inc'\norg 100h\nret\n").unwrap();
+        std::fs::write(&a, "include 'emu8086.inc'\norg 100h\nret\n").unwrap();
+        let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+        let index = |app: &App, name: &str| app.program.files.iter().position(|(n, _)| n.eq_ignore_ascii_case(name));
+
+        app.open_path(&b);
+        app.emulate();
+        let lib = index(&app, "emu8086.inc").expect("b includes emu8086.inc");
+        assert_eq!(index(&app, "my.inc"), Some(1));
+        let bp = Breakpoint { condition: String::new(), enabled: true, hits: 0, compiled: None };
+        app.debugger.bp_lines.insert((lib, 5), bp);
+
+        app.open_path(&a);
+        app.emulate();
+        app.open_path(&b);
+        assert!(!app.debugger.bp_lines.contains_key(&(1, 5)), "not moved into a's includes");
+        app.emulate();
+        assert_eq!(app.debugger.bp_lines.keys().copied().collect::<Vec<_>>(), vec![(lib, 5)]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

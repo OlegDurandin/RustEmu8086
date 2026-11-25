@@ -147,7 +147,9 @@ impl Machine {
         let flow = match op {
             0xE8 | 0x9A | 0xCC | 0xCD | 0xCE => Flow::Call,
             0xFF if matches!(modrm_reg, Some(2) | Some(3)) => Flow::Call,
-            0xC0..=0xC3 | 0xC8..=0xCB | 0xCF => Flow::Return,
+            0xC2 | 0xC3 | 0xCA | 0xCB | 0xCF => Flow::Return,
+            // Aliases of RET / RETF on the 8086; the 80186 has shifts by an immediate, ENTER and LEAVE there.
+            0xC0 | 0xC1 | 0xC8 | 0xC9 if self.cpu.model == cpu::CpuModel::I8086 => Flow::Return,
             _ => Flow::Other,
         };
         (flow, ins.len as u32)
@@ -269,6 +271,14 @@ impl Target for Machine {
 
     fn flow_at(&self, addr: u32) -> (Flow, u32) {
         Machine::flow_at(self, addr)
+    }
+
+    fn stack_pointer(&self) -> u32 {
+        linear(self.cpu.sregs[cpu::SS], self.cpu.regs[cpu::SP])
+    }
+
+    fn interrupted(&self) -> bool {
+        self.interrupted
     }
 
     fn step_over_stop(&self) -> Option<u32> {

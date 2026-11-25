@@ -370,3 +370,38 @@ fn deeply_nested_if_is_fast() {
     let limit = if cfg!(debug_assertions) { 10.0 } else { 3.0 };
     assert!(t.elapsed().as_secs_f32() < limit, "{:?}", t.elapsed());
 }
+
+/// TODO 58: EXITM ends the macro (or REPT block) where assembly gets to it; under a false IF
+/// it does nothing.
+#[test]
+fn exitm_inside_if() {
+    let src =
+        "org 100h\nm MACRO x\n IF x\n EXITM\n ENDIF\n mov ax, 1\nENDM\nm 0\nm 1\nrept 3\n nop\n exitm\nendm\nret\n";
+    let p = rustemu_asm::assemble_str(src).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(p.file_bytes(), [0xB8, 1, 0, 0x90, 0xC3]);
+}
+
+/// TODO 59: a text equate is not substituted inside a string (`'AT&T'`); a macro parameter is.
+#[test]
+fn text_equate_does_not_reach_into_strings() {
+    let src = "org 100h\nT equ <0Dh, 0Ah>\ndb 'AT&T'\nm macro p\n db '&p&!'\nendm\nm X\n";
+    let p = rustemu_asm::assemble_str(src).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(p.file_bytes(), b"AT&TX!");
+}
+
+/// TODO 60: in NASM a macro's `%%label` does not start a new scope for `.local` labels.
+#[test]
+fn nasm_macro_local_label_keeps_the_local_scope() {
+    let src = "bits 16\norg 100h\n%macro delay 1\n mov cx, %1\n%%w: loop %%w\n%endmacro\nfunc:\n.top:\n delay 10\n jmp .top\n";
+    let p = rustemu_asm::assemble_str(src).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(p.file_bytes(), [0xB9, 10, 0, 0xE2, 0xFE, 0xEB, 0xF9]);
+}
+
+/// TODO 62: in NASM `/` and `%` are unsigned and `//`, `%%` signed; MASM's `/` and MOD stay signed.
+#[test]
+fn nasm_signed_and_unsigned_division() {
+    let src = "bits 16\norg 100h\ndb 10 % 3, -7 % 3, -7 // 2, -7 %% 3, 7 // 2, 0FFh / 2\n";
+    assert_eq!(bytes(src), [1, 0, 0xFD, 0xFF, 3, 0x7F]);
+    assert!(err("bits 16\norg 100h\ndb -7 / 2\n").contains("does not fit in a byte"), "unsigned: a huge value");
+    assert_eq!(bytes("org 100h\ndb 7 / 2, -7 / 2, 7 mod 3\n"), [3, 0xFD, 1]);
+}

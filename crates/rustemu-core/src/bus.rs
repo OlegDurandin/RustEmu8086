@@ -147,6 +147,14 @@ impl Memory {
         }
     }
 
+    /// Forgets the recorded pairs, keeping the journal on: writes made between steps (the
+    /// debugger editing memory, the BIOS tick counter) belong to no instruction.
+    pub fn discard_journal(&mut self) {
+        if let Some(j) = &mut self.journal {
+            j.clear();
+        }
+    }
+
     /// Restores bytes recorded in a journal (in reverse order).
     pub fn undo(&mut self, entries: &[(u32, u8)]) {
         self.revision = self.revision.wrapping_add(1);

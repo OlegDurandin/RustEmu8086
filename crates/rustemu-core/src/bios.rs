@@ -31,7 +31,8 @@ impl Machine {
             0x05 => {
                 if al < 8 {
                     mem.write8(video::BDA_PAGE, al);
-                    let start = al as u16 * mem.read16(video::BDA_PAGE_SIZE);
+                    // The page size is in the BDA, which the program may overwrite.
+                    let start = (al as u16).wrapping_mul(mem.read16(video::BDA_PAGE_SIZE));
                     mem.write16(video::BDA_PAGE_START, start);
                 }
             }

@@ -249,6 +249,44 @@ fn step_back_restores_registers_and_memory() {
     assert!(!s.x86_mut().unwrap().step_back());
 }
 
+/// A delay (INT 15h/86h) of the previous program does not carry over to the program loaded
+/// next: its own delay waits from its own start.
+#[test]
+fn a_delay_does_not_survive_loading_another_program() {
+    let delay = |us: u32| {
+        format!(
+            "org 100h\nmov ah, 86h\nmov cx, {}\nmov dx, {}\nint 15h\nmov ax, 4C00h\nint 21h\n",
+            us >> 16,
+            us & 0xFFFF
+        )
+    };
+    let mut s = Session::new();
+    s.load_program(rustemu_asm::assemble_str(&delay(50_000)).unwrap()).unwrap();
+    assert_eq!(s.target.run(100), Event::Sleeping);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    s.load_program(rustemu_asm::assemble_str(&delay(3_000_000)).unwrap()).unwrap();
+    assert_eq!(s.target.run(100), Event::Sleeping, "the new program waits its own 3 s");
+}
+
+/// Memory edited on a pause (debugger console `e`, value viewer, hex editor) belongs to no
+/// instruction: stepping back over the next one keeps the edit, and *Last step* does not list it.
+#[test]
+fn memory_edited_between_steps_survives_step_back() {
+    let prog = rustemu_asm::assemble_str("org 100h\nnop\nnop\nnop\nhlt\n").unwrap();
+    let mut s = Session::new();
+    s.load_program(prog).unwrap();
+    assert_eq!(s.target.step(), Event::Continue);
+    let a = rustemu_core::linear(s.x86().unwrap().cpu.sregs[3], 0x200);
+    s.target.write8(a, 0x55);
+    assert_eq!(s.target.step(), Event::Continue);
+    let (_, undo) = s.x86().unwrap().last_step().unwrap();
+    assert!(undo.is_empty(), "a NOP writes nothing: {undo:?}");
+    assert!(s.target.step_back());
+    assert_eq!(s.target.read8(a), 0x55, "the edit was made before this NOP");
+    assert!(s.target.step_back());
+    assert_eq!(s.target.read8(a), 0x55, "and is not part of the first NOP either");
+}
+
 #[test]
 fn step_back_restores_input_devices_and_floppy() {
     let input =
@@ -789,6 +827,105 @@ end
         assert_eq!(view(&s).line, before + 1);
     }
 
+    /// Steps over the line `line` (1-based), first single-stepping to it.
+    fn over_line(s: &mut Session, line: u32) -> u32 {
+        for _ in 0..10_000 {
+            if view(s).line == line {
+                break;
+            }
+            s.x86_mut().unwrap().step();
+        }
+        assert_eq!(view(s).line, line, "reached the line to step over");
+        assert_eq!(step(s, StepKind::Over, ""), Event::Continue);
+        view(s).line
+    }
+
+    /// A program's INT 21h handler chains to the old vector with a far JMP: the IRET that comes
+    /// back runs in the BIOS stub, inside the JMP's step. Step Over still stops on the next line.
+    #[test]
+    fn step_over_int_whose_handler_chains_to_the_old_vector() {
+        let src = "org 100h
+        mov ax, 3521h
+        int 21h
+        mov word ptr old, bx
+        mov word ptr old+2, es
+        mov ax, 2521h
+        mov dx, offset handler
+        int 21h
+        mov ah, 2
+        mov dl, 'A'
+        int 21h
+        mov bx, 1
+        mov ax, 4C00h
+        int 21h
+handler:
+        jmp dword ptr cs:[old]
+old     dd 0
+";
+        let mut s = session(src);
+        assert_eq!(over_line(&mut s, 11), 12);
+        assert_eq!(String::from_utf8_lossy(s.x86().unwrap().output.bytes()), "A");
+    }
+
+    /// The machine is an 80186: C8/C9 are ENTER/LEAVE, C0/C1 shifts, not returns (they are
+    /// RET aliases only on the 8086). Step Over a call to a procedure using them.
+    #[test]
+    fn step_over_call_to_procedure_with_enter_and_leave() {
+        let src = "org 100h
+        call f
+        call g
+        mov ax, 4C00h
+        int 21h
+f       proc
+        push bp
+        mov bp, sp
+        shl ax, 3
+        leave
+        ret
+f       endp
+g       proc
+        db 0C8h, 4, 0, 0  ; enter 4, 0
+        leave
+        ret
+g       endp
+";
+        let mut s = session(src);
+        assert_eq!(over_line(&mut s, 2), 3, "over call f (LEAVE, SHL imm)");
+        assert_eq!(over_line(&mut s, 3), 4, "over call g (ENTER)");
+    }
+
+    /// A timer IRQ whose INT 1Ch handler belongs to the program interrupts the procedure being
+    /// stepped over: the handler's IRET does not count as the procedure's return.
+    #[test]
+    fn step_over_call_interrupted_by_a_hardware_irq() {
+        let src = "org 100h
+        mov ax, 251Ch
+        mov dx, offset tick
+        int 21h
+        sti
+        call f
+        mov ax, 4C00h
+        int 21h
+f       proc
+        mov cx, 2000
+again:  loop again
+        ret
+f       endp
+tick:   inc word ptr cs:[ticks]
+        iret
+ticks   dw 0
+";
+        let mut s = session(src);
+        {
+            let m = s.x86_mut().unwrap();
+            m.timer_irq = true;
+            m.instructions_per_tick = Some(100);
+        }
+        assert_eq!(over_line(&mut s, 6), 7);
+        let ticks = s.compile("ticks").unwrap().eval(&*s.target);
+        assert!(ticks > 0, "the handler ran during the step: {ticks}");
+    }
+
     trait LineText {
         fn session_line_text(&self) -> String;
     }
@@ -1228,6 +1365,85 @@ fname db 'aaa', 0
     assert_eq!(ev, Event::Terminated(0));
     assert_eq!((m.cpu.regs[6], m.cpu.regs[3]), (HOST_MAX_CREATED as u16, 5), "SI = files created, BX = the error");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// INT 21h/3Fh on standard input reads a whole line and hands it out in pieces of CX bytes:
+/// reading one byte at a time gets every character of the line, then CR LF (TODO 61).
+#[test]
+fn reading_stdin_byte_by_byte_keeps_the_rest_of_the_line() {
+    let src = "org 100h
+    mov si, 6
+next:
+    mov ah, 3Fh
+    xor bx, bx
+    mov cx, 1
+    mov dx, offset buf
+    int 21h
+    mov al, buf
+    mov di, 6
+    sub di, si
+    mov got[di], al
+    dec si
+    jnz next
+    mov ax, 4C00h
+    int 21h
+buf db 0
+got db 6 dup (0)
+";
+    let (s, ev) = run_src(src, "abc\nxyz\n");
+    assert_eq!(ev, Event::Terminated(0));
+    let m = s.x86().unwrap();
+    let at = |i: u16| {
+        let off = s.compile(&format!("offset got + {i}")).unwrap().eval(&*s.target) as u16;
+        m.sys.mem.read8(rustemu_core::linear(m.cpu.sregs[3], off))
+    };
+    assert_eq!((0..6).map(at).collect::<Vec<u8>>(), b"abc\r\nx");
+}
+
+/// INT 21h/48h with BX = 0 takes a paragraph each time; when memory runs out it fails (CF = 1)
+/// instead of handing out video memory and, after the counter wraps, blocks already given out
+/// (and panicking on the overflow in debug builds).
+#[test]
+fn allocating_zero_paragraphs_runs_out() {
+    let src = "org 100h
+    xor si, si          ; the highest segment returned
+    xor di, di          ; successful calls
+again:
+    mov ah, 48h
+    xor bx, bx
+    int 21h
+    jc done
+    inc di
+    cmp ax, si
+    jb again
+    mov si, ax
+    jmp again
+done:
+    mov ax, 4C00h
+    int 21h
+";
+    let (s, ev) = run_src(src, "");
+    assert_eq!(ev, Event::Terminated(0));
+    let m = s.x86().unwrap();
+    assert!(m.cpu.regs[6] < 0xA000, "below video memory: {:04X}", m.cpu.regs[6]);
+    assert_eq!(m.cpu.regs[7], 0x9FFF - 0x2000, "one paragraph per call until memory runs out");
+}
+
+/// INT 10h/05h multiplies the page number by the page size in the BDA, which the program may
+/// overwrite: the product wraps instead of panicking in debug builds.
+#[test]
+fn set_page_with_a_huge_page_size_is_not_a_panic() {
+    let src = "org 100h
+    mov ax, 40h
+    mov es, ax
+    mov word es:[4Ch], 0FFFFh
+    mov ax, 0507h
+    int 10h
+    mov ax, 4C00h
+    int 21h
+";
+    let (_, ev) = run_src(src, "");
+    assert_eq!(ev, Event::Terminated(0));
 }
 
 #[test]
