@@ -1230,6 +1230,52 @@ fname db 'aaa', 0
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// INT 21h/48h with BX = 0 takes a paragraph each time; when memory runs out it fails (CF = 1)
+/// instead of handing out video memory and, after the counter wraps, blocks already given out
+/// (and panicking on the overflow in debug builds).
+#[test]
+fn allocating_zero_paragraphs_runs_out() {
+    let src = "org 100h
+    xor si, si          ; the highest segment returned
+    xor di, di          ; successful calls
+again:
+    mov ah, 48h
+    xor bx, bx
+    int 21h
+    jc done
+    inc di
+    cmp ax, si
+    jb again
+    mov si, ax
+    jmp again
+done:
+    mov ax, 4C00h
+    int 21h
+";
+    let (s, ev) = run_src(src, "");
+    assert_eq!(ev, Event::Terminated(0));
+    let m = s.x86().unwrap();
+    assert!(m.cpu.regs[6] < 0xA000, "below video memory: {:04X}", m.cpu.regs[6]);
+    assert_eq!(m.cpu.regs[7], 0x9FFF - 0x2000, "one paragraph per call until memory runs out");
+}
+
+/// INT 10h/05h multiplies the page number by the page size in the BDA, which the program may
+/// overwrite: the product wraps instead of panicking in debug builds.
+#[test]
+fn set_page_with_a_huge_page_size_is_not_a_panic() {
+    let src = "org 100h
+    mov ax, 40h
+    mov es, ax
+    mov word es:[4Ch], 0FFFFh
+    mov ax, 0507h
+    int 10h
+    mov ax, 4C00h
+    int 21h
+";
+    let (_, ev) = run_src(src, "");
+    assert_eq!(ev, Event::Terminated(0));
+}
+
 #[test]
 fn the_log_stays_small() {
     // An unsupported DOS function in a loop: one message, counted.

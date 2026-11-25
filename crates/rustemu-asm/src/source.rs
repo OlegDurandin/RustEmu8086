@@ -103,6 +103,15 @@ fn first_words(text: &str) -> (String, String) {
     (a, b)
 }
 
+/// The text after the first word as [`first_words`] splits it (separators before the word
+/// are skipped, so the word need not start at byte 0).
+fn after_first_word(text: &str) -> &str {
+    let sep = |c: char| c.is_whitespace() || c == ',' || c == ';';
+    let start = text.trim_start_matches(sep);
+    let end = start.find(sep).unwrap_or(start.len());
+    &start[end..]
+}
+
 fn strip_comment(text: &str) -> &str {
     let mut q: Option<char> = None;
     for (i, c) in text.char_indices() {
@@ -811,7 +820,7 @@ impl<'a> Preprocessor<'a> {
             // Conditionals are evaluated even in inactive regions to keep nesting right.
             match w1.as_str() {
                 "IF" | "IFE" | "IFDEF" | "IFNDEF" => {
-                    let rest = code[w1.len()..].trim();
+                    let rest = after_first_word(&code).trim();
                     let v = if !active {
                         false
                     } else {
@@ -836,7 +845,7 @@ impl<'a> Preprocessor<'a> {
                         continue;
                     };
                     let v = parent && !taken && {
-                        let rest = code[w1.len()..].trim();
+                        let rest = after_first_word(&code).trim();
                         match w1.as_str() {
                             "ELSEIFDEF" => self.is_defined(rest),
                             "ELSEIFNDEF" => !self.is_defined(rest),
@@ -926,7 +935,7 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 "%ERROR" if self.nasm => {
-                    let msg = code[6..].trim().trim_matches(['\'', '"']).to_string();
+                    let msg = after_first_word(&code).trim().trim_matches(['\'', '"']).to_string();
                     self.error(&l, if msg.is_empty() { "%error".to_string() } else { msg });
                     continue;
                 }
@@ -938,7 +947,7 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 ".EXIT" => {
-                    let code_arg = code[5..].trim();
+                    let code_arg = after_first_word(&code).trim();
                     let first = if code_arg.is_empty() {
                         "mov ax, 4C00h".to_string()
                     } else {
@@ -950,7 +959,7 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 "INCLUDE" => {
-                    let name = code[7..].trim().trim_matches(['\'', '"', '<', '>']).trim().to_string();
+                    let name = after_first_word(&code).trim().trim_matches(['\'', '"', '<', '>']).trim().to_string();
                     let from = self.files.get(l.file).cloned().unwrap_or_default();
                     match self.loader.load(&name, &from) {
                         Some((resolved, _)) if self.open_files.contains(&resolved) => {
@@ -985,7 +994,7 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 "REPT" => {
-                    let n = self.eval_const(code[4..].trim()).unwrap_or_else(|| {
+                    let n = self.eval_const(after_first_word(&code).trim()).unwrap_or_else(|| {
                         self.error(&l, "REPT requires a constant count");
                         0
                     });
@@ -1010,7 +1019,7 @@ impl<'a> Preprocessor<'a> {
                     continue;
                 }
                 "PURGE" => {
-                    for m in code[5..].split(',') {
+                    for m in after_first_word(&code).split(',') {
                         self.macros.remove(&m.trim().to_ascii_uppercase());
                     }
                     continue;

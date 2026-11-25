@@ -88,3 +88,32 @@ fn nested_text_equates() {
     let p = assemble_str("org 100h\na equ <1>\nb equ <a+a>\nc equ <(b)*3>\nmov ax, c\nret\n").unwrap();
     assert_eq!(p.file_bytes(), [0xB8, 6, 0, 0xC3]);
 }
+
+/// `i64::MIN / -1` and `i64::MIN mod -1` overflow; they wrap like the other operators instead of
+/// panicking, in the assembler and in the calculator (`evaluate`).
+#[test]
+fn overflowing_division_is_not_a_panic() {
+    let (line, msg) = error_of("org 100h\nmov ax, (1 shl 63) / -1\n");
+    assert_eq!((line, msg.contains("out of word range")), (2, true), "{msg}");
+    let p = assemble_str("org 100h\nmov bx, (1 shl 63) mod -1\n").unwrap();
+    assert_eq!(p.file_bytes(), [0xBB, 0, 0]);
+    assert_eq!(rustemu_asm::evaluate("(1 shl 63) / -1"), Ok(i64::MIN));
+    assert_eq!(rustemu_asm::evaluate("(1 shl 63) mod -1"), Ok(0));
+}
+
+/// A directive after a separator that is not ASCII (`,` then a non-breaking space) is sliced at
+/// the word, not at a fixed byte offset that falls inside the character.
+#[test]
+fn directive_after_unicode_separator_is_not_a_panic() {
+    for src in [
+        "org 100h\n,\u{a0}IF 1\nnop\n,\u{a0}ENDIF\n",
+        "org 100h\n,\u{a0}REPT 2\nnop\nENDM\n",
+        "org 100h\n,\u{a0}INCLUDE 'missing.inc'\n",
+        "org 100h\n,\u{a0}.EXIT\n",
+        "org 100h\nm macro\nendm\n,\u{a0}PURGE m\n",
+    ] {
+        let _ = assemble_str(src);
+    }
+    assert_eq!(assemble_str("org 100h\n,\u{a0}IF 1\nnop\n,\u{a0}ENDIF\n").unwrap().file_bytes(), [0x90]);
+    assert_eq!(assemble_str("org 100h\n,\u{a0}REPT 2\nnop\nENDM\n").unwrap().file_bytes(), [0x90, 0x90]);
+}

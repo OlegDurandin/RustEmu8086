@@ -1031,8 +1031,9 @@ fn bin(op: BinOp, x: Val, y: Val) -> Result<Val, String> {
                         return Err("division by zero".into());
                     }
                 }
-                BinOp::Div => a / b,
-                BinOp::Mod => a % b,
+                // i64::MIN / -1 overflows; wrap like the other operators instead of panicking.
+                BinOp::Div => a.wrapping_div(b),
+                BinOp::Mod => a.wrapping_rem(b),
                 BinOp::Shl => a.wrapping_shl(b as u32),
                 BinOp::Shr => a.wrapping_shr(b as u32),
                 BinOp::And => a & b,

@@ -358,7 +358,8 @@ impl Machine {
                 self.ok();
             }
             0x48 => {
-                let want = self.cpu.regs[BX];
+                // A zero-paragraph request still takes one paragraph, so it needs one free.
+                let want = self.cpu.regs[BX].max(1);
                 if self.dos.next_free == 0 {
                     self.dos.next_free = 0x2000;
                 }
@@ -368,7 +369,7 @@ impl Machine {
                     self.fail(E_NO_MEM);
                 } else {
                     self.cpu.regs[AX] = self.dos.next_free;
-                    self.dos.next_free += want.max(1);
+                    self.dos.next_free += want;
                     self.ok();
                 }
             }
