@@ -9,14 +9,14 @@ use rustemu_ui::testing::{app_with_example, save};
 use rustemu_ui::tools::Tool;
 
 #[test]
-fn pilot_first_success_and_cancel_check_keep_source() {
+fn pilot_examples_and_cancel_check_keep_source() {
     let mut h = harness(app_with_example(0));
     h.run();
     h.get_by_label("📚 examples").click();
     h.run_steps(2);
-    h.get_by_label("First success").hover();
+    h.get_by_label("MIPS32 examples").hover();
     h.run_steps(3);
-    h.get_by_label("Start with MIPS Hello").click();
+    h.get_by_label(rustemu_ui::examples::MIPS_EXAMPLES[0].0).click();
     h.run_steps(2);
     assert_eq!(h.state().arch(), rustemu_session::Arch::Mips32);
     h.state_mut().doc.saved_text = h.state().doc.text.clone();

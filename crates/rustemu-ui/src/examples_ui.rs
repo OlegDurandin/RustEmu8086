@@ -10,19 +10,6 @@ use crate::app::{App, PendingAction};
 /// (opening one switches to its workspace). From the emulator (`emulate`) only the processor's
 /// own, assembled and loaded at once.
 pub fn examples_menu(app: &mut App, ui: &mut Ui, emulate: bool) {
-    ui.menu_button("First success", |ui| {
-        ui.label("1. Choose a Hello example below. 2. Run and inspect the output.");
-        ui.label("3. Step back once. 4. Open Examples / Learn and try a task.");
-        ui.weak("Optional guide: ordinary editing and debugging remain available.");
-        if ui.button("Start with 8086 Hello").clicked() {
-            app.guarded(PendingAction::Example(0));
-            ui.close();
-        }
-        if ui.button("Start with MIPS Hello").clicked() {
-            app.guarded(PendingAction::MipsExample(0));
-            ui.close();
-        }
-    });
     ui.menu_button("Learn", |ui| crate::learning::menu(app, ui));
     match app.arch() {
         Arch::I8086 => {
