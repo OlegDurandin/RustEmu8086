@@ -70,9 +70,15 @@ fn flow(word: u32, addr: u32) -> Flow {
 }
 
 impl Machine {
-    /// Whether the instruction before `ret` is a call (so `ret` is a return address).
+    /// Bytes a jump covers: 4, or 8 with delayed branching (the jump and its delay slot; a
+    /// call's return address is after the slot).
+    fn jump_span(&self) -> u32 {
+        if self.cpu.delayed_branching { 8 } else { 4 }
+    }
+
+    /// Whether the instruction that returns to `ret` is a call (so `ret` is a return address).
     fn called_from(&self, ret: u32) -> Option<Frame> {
-        let at = ret.checked_sub(4)?;
+        let at = ret.checked_sub(self.jump_span())?;
         if !self.mem.has_code(at) || flow(self.mem.peek32(at), at) != Flow::Call {
             return None;
         }
@@ -194,12 +200,19 @@ impl Target for Machine {
     }
 
     fn flow_at(&self, addr: u32) -> (Flow, u32) {
-        (flow(self.mem.peek32(addr), addr), 4)
+        match flow(self.mem.peek32(addr), addr) {
+            Flow::Other => (Flow::Other, 4),
+            f => (f, self.jump_span()),
+        }
+    }
+
+    fn stack_pointer(&self) -> u32 {
+        self.cpu.reg(SP)
     }
 
     fn step_over_stop(&self) -> Option<u32> {
         let pc = self.cpu.pc;
-        (flow(self.mem.peek32(pc), pc) == Flow::Call).then(|| pc.wrapping_add(4))
+        (flow(self.mem.peek32(pc), pc) == Flow::Call).then(|| pc.wrapping_add(self.jump_span()))
     }
 
     fn call_stack(&self) -> Vec<Frame> {

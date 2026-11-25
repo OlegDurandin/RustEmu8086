@@ -35,10 +35,10 @@ impl Session {
             let limit = if pc > addr { pc - addr } else { u32::MAX };
             match self.line_info_at(addr) {
                 Some(l) if !l.is_code => {
-                    let start = self.image_base().unwrap_or(0) + l.image_offset;
-                    let len = (start + l.len - addr).min(limit);
+                    let start = self.image_base().unwrap_or(0).wrapping_add(l.image_offset);
+                    let len = (start.wrapping_add(l.len).wrapping_sub(addr)).min(limit);
                     let unit = l.data_size.max(1) as u32;
-                    let unit = if (addr - start).is_multiple_of(unit) { unit } else { 1 };
+                    let unit = if addr.wrapping_sub(start).is_multiple_of(unit) { unit } else { 1 };
                     if l.data_float && matches!(unit, 4 | 8 | 10) && len >= unit {
                         let (len, text) = float_text(&t.read_bytes(addr, len as usize), unit as usize);
                         return CodeRow { len: len as u32, text, data: true };
@@ -67,9 +67,9 @@ impl Session {
     fn next_line_addr(&self, addr: u32) -> Option<u32> {
         let p = self.program.as_ref()?;
         let base = self.image_base()?;
-        let off = addr.checked_sub(base)?;
+        let off = addr.wrapping_sub(base);
         let i = self.lines_sorted.partition_point(|&i| p.lines[i].image_offset <= off);
-        self.lines_sorted.get(i).map(|&i| base + p.lines[i].image_offset)
+        self.lines_sorted.get(i).map(|&i| base.wrapping_add(p.lines[i].image_offset))
     }
 }
 

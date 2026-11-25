@@ -311,8 +311,18 @@ pub trait Target: Any + Send {
     /// While the emulator's own system code runs (8086: a BIOS/DOS service, e.g. waiting for a
     /// key), the address of the program instruction that called it.
     fn system_caller(&self) -> Option<u32>;
-    /// How the instruction at `addr` changes the flow of control, and its length.
+    /// How the instruction at `addr` changes the flow of control, and how many bytes from `addr`
+    /// execution continues after it once it is complete: its length, or with a delay slot (MIPS
+    /// with delayed branching) the length of the jump and its slot, 8.
     fn flow_at(&self, addr: u32) -> (Flow, u32);
+    /// Physical address of the top of the stack (8086: SS:SP, MIPS: `$sp`). The stack grows
+    /// down: a call made at a lower address is nested deeper.
+    fn stack_pointer(&self) -> u32;
+    /// The last [`Target::step`] entered an interrupt handler without executing the instruction
+    /// at the previous PC (a hardware IRQ): the handler returns to that PC.
+    fn interrupted(&self) -> bool {
+        false
+    }
     /// Where Step Over without debug information stops: the address after the current
     /// instruction when it should run to completion (8086: CALL, INT, LOOP, REP), else None.
     fn step_over_stop(&self) -> Option<u32>;

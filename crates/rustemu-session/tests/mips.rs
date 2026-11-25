@@ -45,6 +45,12 @@ fn expressions() {
     assert_eq!(ev(&s, "count"), Ok(0x1001_0000), "a label is its address");
     assert_eq!(ev(&s, "dword [count]"), Ok(3));
     assert_eq!(ev(&s, "$ra == main + 8 + 4"), Ok(1), "jal links past itself (no delay slot)");
+    // A register read unsigned still compares with negative numbers.
+    let t0 = s.target.register_index("$t0").unwrap();
+    s.target.set_register(t0, 0xFFFF_FFFF);
+    assert_eq!(ev(&s, "$t0 == -1"), Ok(1));
+    assert_eq!(ev(&s, "$t0 < 0"), Ok(1));
+    assert_eq!(ev(&s, "$t0 == 0xFFFFFFFF"), Ok(1));
 }
 
 #[test]
@@ -64,6 +70,80 @@ fn step_over_and_out() {
     let mut goal = s.step_goal(StepKind::Out, true);
     assert_eq!(s.run_step_goal(&mut goal, 100), Some(Event::Continue));
     assert_eq!(s.current_line(), Some((0, 6)), "out of twice");
+}
+
+/// With delayed branching `jal` links past its delay slot and the jump happens after the slot:
+/// Step Over does not stop in the slot or enter the callee, Step Out leaves through `jr $ra`
+/// and its slot, and the call stack sees the call 8 bytes before the return address.
+#[test]
+fn step_over_and_out_with_delayed_branching() {
+    let src = r#".data
+count:  .word 3
+        .text
+main:   lw $a0, count
+        jal twice
+        nop
+        move $s0, $v0
+        li $v0, 10
+        syscall
+twice:  add $v0, $a0, $a0
+        jr $ra
+        nop
+"#;
+    let settings = rustemu_mips::Settings { delayed_branching: true, ..Default::default() };
+    let load = || {
+        let mut s = Session::new_mips();
+        s.load_mips_source_with("twice.s", src, &settings).unwrap();
+        s
+    };
+    let mut s = load();
+    while s.current_line() != Some((0, 5)) {
+        s.target.step();
+    }
+    let mut goal = s.step_goal(StepKind::Over, true);
+    assert_eq!(s.run_step_goal(&mut goal, 100), Some(Event::Continue));
+    assert_eq!(s.current_line(), Some((0, 7)), "over the call and its slot");
+    assert_eq!(s.target.register(s.target.register_index("$v0").unwrap()), 6);
+
+    let mut s = load();
+    while s.current_line() != Some((0, 10)) {
+        s.target.step();
+    }
+    assert_eq!(s.call_stack().len(), 1, "the call of twice");
+    let mut goal = s.step_goal(StepKind::Out, true);
+    assert_eq!(s.run_step_goal(&mut goal, 100), Some(Event::Continue));
+    assert_eq!(s.current_line(), Some((0, 7)), "out of twice, past the slot of jr");
+}
+
+/// MIPS labels are case-sensitive: `Value` and `value` are two symbols; a name in another
+/// case still finds a symbol when none is spelled the same.
+#[test]
+fn symbols_are_case_sensitive() {
+    let mut s = Session::new_mips();
+    s.load_mips_source("case.s", ".data\nValue: .word 1\nvalue: .word 2\n.text\nmain: nop\n").unwrap();
+    let ev = |s: &Session, e: &str| s.compile(e).map(|x| x.eval(&*s.target));
+    assert_eq!(ev(&s, "Value"), Ok(0x1001_0000));
+    assert_eq!(ev(&s, "value"), Ok(0x1001_0004));
+    assert_eq!(ev(&s, "dword [value]"), Ok(2));
+    assert_eq!(ev(&s, "MAIN"), Ok(0x0040_0000));
+}
+
+/// In the compact configuration with data at address 0 the data lies below the text segment:
+/// its lines are still found, and the code list shows it as data.
+#[test]
+fn data_below_the_text_segment() {
+    let settings = rustemu_mips::Settings {
+        memory: rustemu_mips::settings::MemoryConfig::CompactDataAtZero,
+        ..Default::default()
+    };
+    let mut s = Session::new_mips();
+    s.load_mips_source_with("compact.s", ".data\nmsg: .asciiz \"Hello\"\n.text\nmain: la $a0, msg\n", &settings)
+        .unwrap();
+    let msg = s.compile("msg").unwrap().eval(&*s.target) as u32;
+    assert!(msg < s.image_base().unwrap(), "data at {msg:#x} below the text");
+    assert_eq!(s.line_at_addr(msg), Some((0, 2)));
+    let row = s.code_row(msg, msg, true);
+    assert!(row.data && row.text.contains("Hello"), "{row:?}");
 }
 
 #[test]

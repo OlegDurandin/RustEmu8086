@@ -9,6 +9,9 @@
 //! program symbols (a variable gives its value from memory, a label its offset, `OFFSET name` the
 //! offset of a variable), memory `[expr]`, `seg:[expr]`, `BYTE [..]` / `WORD [..]` / `b.[..]` / `w.[..]`,
 //! indexed variables `table[si]`.
+//! Registers and memory read unsigned; compared with a number, equality is taken in their width
+//! (`ax == -1` and `ax == 0FFFFh` both hold), an ordering with zero or a negative number is
+//! signed (`ax < 0`), with a positive number unsigned (`cx > 8000h`). An 8086 word at offset FFFFh wraps to offset 0 of its segment.
 //! Operators (C precedence): `! ~ -` (unary), `* / %`, `+ -`, `<< >>`, `< <= > >=`, `== !=` (`=` too),
 //! `&`, `^`, `|`, `&&`, `||`, and the assembler words `MOD SHL SHR AND OR XOR NOT`.
 
@@ -34,9 +37,10 @@ enum Node {
         seg: Option<Box<Node>>,
         off: Box<Node>,
     },
-    /// A variable at a fixed physical address.
+    /// A variable at a fixed segment:offset.
     Var {
-        addr: u32,
+        seg: u16,
+        off: u16,
         size: u8,
     },
     /// `var[index]`: the variable's segment, its offset + index.
@@ -84,11 +88,11 @@ pub enum SymbolRef {
 impl Expr {
     /// Parses `text`, resolving names with `lookup` and the registers of `target`.
     pub fn parse(text: &str, lookup: &dyn Fn(&str) -> Option<SymbolRef>, target: &dyn Target) -> Result<Expr, String> {
-        let tokens = lex(text)?;
+        let (tokens, spelling) = lex(text)?;
         if tokens.is_empty() {
             return Err("empty expression".into());
         }
-        let mut p = Parser { t: &tokens, pos: 0, lookup, target, depth: 0, operands: 0 };
+        let mut p = Parser { t: &tokens, spelling: &spelling, pos: 0, lookup, target, depth: 0, operands: 0 };
         let node = p.binary(0)?;
         if p.pos < tokens.len() {
             return Err(format!("unexpected '{}'", tokens[p.pos].text()));
@@ -114,7 +118,7 @@ impl Expr {
     pub fn address(&self, t: &dyn Target) -> Option<u32> {
         match &self.node {
             Node::Mem { seg, off, .. } => Some(mem_addr(t, seg.as_deref(), off)),
-            Node::Var { addr, .. } => Some(*addr),
+            Node::Var { seg, off, .. } => Some(t.data_address(Some(*seg as u64), *off as u64)),
             Node::Indexed { seg, off, index, .. } => Some(indexed_addr(t, *seg, *off, index)),
             _ => None,
         }
@@ -130,21 +134,62 @@ fn indexed_addr(t: &dyn Target, seg: u16, off: u16, index: &Node) -> u32 {
     t.data_address(Some(seg as u64), off.wrapping_add(eval(index, t) as u16) as u64)
 }
 
-fn read(t: &dyn Target, addr: u32, size: u8) -> i64 {
+/// `size` bytes (little-endian) at `seg:off`, each byte's address made by the target, so an
+/// 8086 word at offset FFFFh takes its high byte from offset 0 of the same segment, as the
+/// processor does.
+fn read(t: &dyn Target, seg: Option<u64>, off: u64, size: u8) -> i64 {
     let mut v: i64 = 0;
-    for i in (0..size as u32).rev() {
-        v = (v << 8) | t.read8(addr.wrapping_add(i)) as i64;
+    for i in (0..size as u64).rev() {
+        v = (v << 8) | t.read8(t.data_address(seg, off.wrapping_add(i))) as i64;
     }
     v
+}
+
+/// The width in bits of what a node reads (a register, memory, a variable); None for numbers,
+/// flags and computed values.
+fn width(n: &Node) -> Option<u32> {
+    match n {
+        Node::Reg { bits, .. } if *bits > 1 => Some(*bits as u32),
+        Node::Mem { size, .. } | Node::Var { size, .. } | Node::Indexed { size, .. } => Some(*size as u32 * 8),
+        _ => None,
+    }
+}
+
+/// Makes a register or memory value comparable with a number: registers and memory read as
+/// unsigned, so `ax == -1` would never hold. Against a number, equality is taken in the width of
+/// the register (`ax == -1` and `ax == 0FFFFh` both hold for FFFFh), and an ordering with zero
+/// or a negative number is signed (`ax < 0`, `$t0 >= 0`, `ax > -5`); with a positive number it
+/// stays unsigned (`cx > 8000h`).
+fn comparable(op: &str, (a, wa): (i64, Option<u32>), (b, wb): (i64, Option<u32>)) -> (i64, i64) {
+    let (sized, w, num, swapped) = match (wa, wb) {
+        (Some(w), None) => (a, w, b, false),
+        (None, Some(w)) => (b, w, a, true),
+        _ => return (a, b),
+    };
+    if w >= 64 {
+        return (a, b);
+    }
+    let (sized, num) = if matches!(op, "==" | "!=") {
+        let mask = (1i64 << w) - 1;
+        (sized & mask, num & mask)
+    } else if num <= 0 {
+        let shift = 64 - w;
+        ((sized << shift) >> shift, num)
+    } else {
+        (sized, num)
+    };
+    if swapped { (num, sized) } else { (sized, num) }
 }
 
 fn eval(n: &Node, t: &dyn Target) -> i64 {
     match n {
         Node::Num(v) => *v,
         Node::Reg { index, .. } => t.register(*index) as i64,
-        Node::Mem { size, seg, off } => read(t, mem_addr(t, seg.as_deref(), off), *size),
-        Node::Var { addr, size } => read(t, *addr, *size),
-        Node::Indexed { seg, off, size, index } => read(t, indexed_addr(t, *seg, *off, index), *size),
+        Node::Mem { size, seg, off } => read(t, seg.as_deref().map(|s| eval(s, t) as u64), eval(off, t) as u64, *size),
+        Node::Var { seg, off, size } => read(t, Some(*seg as u64), *off as u64, *size),
+        Node::Indexed { seg, off, size, index } => {
+            read(t, Some(*seg as u64), off.wrapping_add(eval(index, t) as u16) as u64, *size)
+        }
         Node::Addr { off, .. } => *off as i64,
         Node::Unary(op, a) => {
             let a = eval(a, t);
@@ -154,15 +199,20 @@ fn eval(n: &Node, t: &dyn Target) -> i64 {
                 _ => (a == 0) as i64,
             }
         }
-        Node::Binary(op, a, b) => {
-            let a = eval(a, t);
+        Node::Binary(op, na, nb) => {
+            let a = eval(na, t);
             if *op == "&&" {
-                return (a != 0 && eval(b, t) != 0) as i64;
+                return (a != 0 && eval(nb, t) != 0) as i64;
             }
             if *op == "||" {
-                return (a != 0 || eval(b, t) != 0) as i64;
+                return (a != 0 || eval(nb, t) != 0) as i64;
             }
-            let b = eval(b, t);
+            let b = eval(nb, t);
+            let (a, b) = if matches!(*op, "<" | "<=" | ">" | ">=" | "==" | "!=") {
+                comparable(op, (a, width(na)), (b, width(nb)))
+            } else {
+                (a, b)
+            };
             match *op {
                 "*" => a.wrapping_mul(b),
                 "/" => a.checked_div(b).unwrap_or(0),
@@ -227,9 +277,12 @@ fn number(word: &str) -> Option<i64> {
     i64::from_str_radix(digits, radix).ok()
 }
 
-fn lex(s: &str) -> Result<Vec<Tok>, String> {
+/// The tokens (names in upper case, for keywords) and each token's text as written (names of
+/// the program are looked up as written: MIPS and NASM labels are case-sensitive).
+fn lex(s: &str) -> Result<(Vec<Tok>, Vec<String>), String> {
     let chars: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
+    let mut spelling = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -254,6 +307,8 @@ fn lex(s: &str) -> Result<Vec<Tok>, String> {
                 out.push(Tok::Num(number(&word).ok_or_else(|| format!("bad number '{word}'"))?));
             } else {
                 out.push(Tok::Name(word.to_ascii_uppercase()));
+                spelling.resize(out.len() - 1, String::new());
+                spelling.push(word);
             }
         } else {
             let rest: String = chars[i..chars.len().min(i + 2)].iter().collect();
@@ -262,13 +317,16 @@ fn lex(s: &str) -> Result<Vec<Tok>, String> {
             i += op.chars().count();
         }
     }
-    Ok(out)
+    spelling.resize(out.len(), String::new());
+    Ok((out, spelling))
 }
 
 // ---- parser -------------------------------------------------------------------------------
 
 struct Parser<'a> {
     t: &'a [Tok],
+    /// Names as written, by token index (empty for other tokens).
+    spelling: &'a [String],
     pos: usize,
     lookup: &'a dyn Fn(&str) -> Option<SymbolRef>,
     target: &'a dyn Target,
@@ -438,7 +496,7 @@ impl Parser<'_> {
                 self.expect("]")?;
                 // [nasm_label] reads the label's data size.
                 if let (None, Node::Addr { seg: s, off: o, size }) = (&seg, &off) {
-                    return Ok(Node::Var { addr: self.target.data_address(Some(*s as u64), *o as u64), size: *size });
+                    return Ok(Node::Var { seg: *s, off: *o, size: *size });
                 }
                 Ok(Node::Mem { size: 1, seg, off: Box::new(off) })
             }
@@ -446,7 +504,7 @@ impl Parser<'_> {
             Tok::Name(n) if n == "OFFSET" => match self.peek().cloned() {
                 Some(Tok::Name(v)) => {
                     self.pos += 1;
-                    match (self.lookup)(&v) {
+                    match (self.lookup)(self.written(self.pos - 1, &v)) {
                         Some(SymbolRef::Variable { off, .. } | SymbolRef::Address { off, .. }) => {
                             Ok(Node::Num(off as i64))
                         }
@@ -460,6 +518,11 @@ impl Parser<'_> {
         }
     }
 
+    /// The name at token `i` as written (`upper` when unknown).
+    fn written<'s>(&'s self, i: usize, upper: &'s str) -> &'s str {
+        self.spelling.get(i).filter(|w| !w.is_empty()).map_or(upper, |w| w.as_str())
+    }
+
     /// A segment register named `n` (it can prefix a memory reference).
     fn segment_register(&self, n: &str) -> Option<Node> {
         let index = self.target.register_index(n)?;
@@ -471,14 +534,15 @@ impl Parser<'_> {
         if let Some(index) = self.target.register_index(n) {
             return Ok(Node::Reg { index, bits: self.target.registers()[index].bits });
         }
-        match (self.lookup)(n) {
+        // Called right after the name's token was taken.
+        match (self.lookup)(self.written(self.pos - 1, n)) {
             Some(SymbolRef::Variable { seg, off, size }) => {
                 if self.eat("[") {
                     let index = self.binary(0)?;
                     self.expect("]")?;
                     Ok(Node::Indexed { seg, off, size, index: Box::new(index) })
                 } else {
-                    Ok(Node::Var { addr: self.target.data_address(Some(seg as u64), off as u64), size })
+                    Ok(Node::Var { seg, off, size })
                 }
             }
             Some(SymbolRef::Value(v)) => Ok(Node::Num(v)),
@@ -509,13 +573,61 @@ mod tests {
     }
 
     fn ev(text: &str) -> Result<i64, String> {
-        let lookup = |n: &str| match n {
+        let lookup = |n: &str| match n.to_ascii_uppercase().as_str() {
             "TABLE" => Some(SymbolRef::Variable { seg: 0x0100, off: 0x40, size: 1 }),
             "COUNT" => Some(SymbolRef::Value(7)),
             _ => None,
         };
         let m = machine();
         Expr::parse(text, &lookup, &m).map(|e| e.eval(&m))
+    }
+
+    /// Registers and memory read unsigned; compared with a number they take its sign: equality
+    /// in the register's width, ordering with zero or a negative number signed.
+    #[test]
+    fn comparisons_with_negative_numbers() {
+        let lookup = |_: &str| None;
+        let mut m = machine();
+        m.cpu.regs[cpu::CX] = 0xFFFF;
+        m.sys.mem.write16(linear(0x0100, 0x20), 0xFFFE);
+        let ev = |text: &str| Expr::parse(text, &lookup, &m).map(|e| e.eval(&m));
+        for (text, want) in [
+            ("cx == -1", 1),
+            ("-1 == cx", 1),
+            ("cx == 0FFFFh", 1),
+            ("cx != -1", 0),
+            ("cl == -1", 1),
+            ("cx < 0", 1),
+            ("cx >= 0", 0),
+            ("0 > cx", 1),
+            ("cx > 8000h", 1),
+            ("ax < 0", 0),
+            ("cx > 0", 0),
+            ("cx > 1", 1),
+            ("ax > -1", 1),
+            ("word [20h] == -2", 1),
+            ("word [20h] < -1", 1),
+            ("cx", 0xFFFF),
+            ("cx + 1 == 10000h", 1),
+        ] {
+            assert_eq!(ev(text), Ok(want), "{text}");
+        }
+    }
+
+    /// An 8086 word at offset FFFFh takes its high byte from offset 0 of the same segment.
+    #[test]
+    fn memory_wraps_at_the_end_of_the_segment() {
+        let lookup = |n: &str| {
+            n.eq_ignore_ascii_case("LAST").then_some(SymbolRef::Variable { seg: 0x0100, off: 0xFFFF, size: 2 })
+        };
+        let mut m = machine();
+        m.sys.mem.write8(linear(0x0100, 0xFFFF), 0x11);
+        m.sys.mem.write8(linear(0x0100, 0), 0x22);
+        m.sys.mem.write8(0x1000 + 0x10000, 0x33);
+        let ev = |text: &str| Expr::parse(text, &lookup, &m).map(|e| e.eval(&m));
+        assert_eq!(ev("word [0FFFFh]"), Ok(0x2211));
+        assert_eq!(ev("last"), Ok(0x2211));
+        assert_eq!(ev("last[0]"), Ok(0x2211));
     }
 
     /// A deep or long watch expression is an error, not a stack overflow (TODO item 7).

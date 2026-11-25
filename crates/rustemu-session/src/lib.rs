@@ -214,7 +214,7 @@ impl Session {
         self.lines_sorted = (0..p.lines.len()).collect();
         self.lines_sorted.sort_by_key(|&i| p.lines[i].image_offset);
         for l in p.lines.iter().filter(|l| l.is_code) {
-            let addr = base + l.image_offset;
+            let addr = base.wrapping_add(l.image_offset);
             for k in 1..=l.chain.len() {
                 let key = (l.file, l.line, l.chain[..k - 1].to_vec());
                 let e = self.expansion_starts.entry(key).or_insert(addr);
@@ -224,12 +224,15 @@ impl Session {
     }
 
     /// Debug info of the instruction at `addr`.
+    ///
+    /// Offsets are from the image base modulo 2^32: data of a MIPS program in a compact memory
+    /// configuration lies below its text segment.
     pub fn line_info_at(&self, addr: u32) -> Option<&LineInfo> {
         let p = self.program.as_ref()?;
-        let off = addr.checked_sub(self.image_base()?)?;
+        let off = addr.wrapping_sub(self.image_base()?);
         let i = self.lines_sorted.partition_point(|&i| p.lines[i].image_offset <= off);
         let l = &p.lines[*self.lines_sorted.get(i.checked_sub(1)?)?];
-        (off < l.image_offset + l.len).then_some(l)
+        (off - l.image_offset < l.len).then_some(l)
     }
 
     /// The source line to show for the instruction at `addr`.
@@ -335,9 +338,9 @@ impl Session {
         let mut first_direct = None;
         for l in p.lines.iter().filter(|l| l.is_code) {
             if l.origin == Some((file, line)) {
-                out.push(base + l.image_offset);
+                out.push(base.wrapping_add(l.image_offset));
             } else if l.file == file && l.line == line && first_direct.is_none() {
-                first_direct = Some(base + l.image_offset);
+                first_direct = Some(base.wrapping_add(l.image_offset));
             }
         }
         if let Some(a) = first_direct {
@@ -346,10 +349,13 @@ impl Session {
         out
     }
 
-    /// Resolves a name of the loaded program for debugger expressions (case-insensitive).
+    /// Resolves a name of the loaded program for debugger expressions: the symbol spelled the
+    /// same, else one differing only in case (MASM names are case-insensitive; MIPS and NASM
+    /// labels `Value` and `value` are different symbols).
     pub fn lookup_symbol(&self, name: &str) -> Option<expr::SymbolRef> {
         let p = self.program.as_ref()?;
-        let s = p.symbols.iter().find(|s| s.name.eq_ignore_ascii_case(name)).or_else(|| {
+        let exact = p.symbols.iter().find(|s| s.name == name);
+        let s = exact.or_else(|| p.symbols.iter().find(|s| s.name.eq_ignore_ascii_case(name))).or_else(|| {
             if p.dialect != rustemu_asm::Dialect::A86 {
                 return None;
             }
@@ -433,6 +439,16 @@ pub enum StepKind {
     Out,
 }
 
+/// A call (or interrupt) the step entered and has not come back from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingReturn {
+    /// Physical address execution comes back to.
+    pub to: u32,
+    /// [`Target::stack_pointer`] before the call: the frame is left once the stack is back to it
+    /// at `to`, or above it anywhere (`RET n`, a handler that unwinds some other way).
+    pub stack: u32,
+}
+
 /// State of a source-level step in progress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepGoal {
@@ -442,15 +458,20 @@ pub struct StepGoal {
     pub into_macros: bool,
     /// The line being stepped (None when there is no debug information).
     pub start: Option<View>,
-    /// Call depth relative to the start: CALL/INT entering code +1, RET/RETF/IRET -1.
-    pub depth: i32,
+    /// Calls, software and hardware interrupts entered since the start, innermost last. A
+    /// return is recognised by the stack and the return address, not by counting CALL / RET:
+    /// a handler may chain to the old vector with a far JMP, an IRQ may interrupt the callee,
+    /// and LEAVE is no return.
+    pub frames: Vec<PendingReturn>,
+    /// A return at the starting level executed and its delay slot is next (MIPS with delayed
+    /// branching): the procedure is left after one more instruction.
+    pub leaving: bool,
 }
 
 impl Session {
-    /// Prepares a source-levelimpl Session {
     /// Prepares a source-level Step Over / Step Out from the current position.
     pub fn step_goal(&self, kind: StepKind, into_macros: bool) -> StepGoal {
-        StepGoal { kind, into_macros, start: self.current_view(into_macros), depth: 0 }
+        StepGoal { kind, into_macros, start: self.current_view(into_macros), frames: Vec::new(), leaving: false }
     }
 
     /// Executes up to `budget` instructions towards `goal`.
@@ -459,25 +480,45 @@ impl Session {
     pub fn run_step_goal(&mut self, goal: &mut StepGoal, budget: u64) -> Option<Event> {
         for _ in 0..budget {
             let pc = self.target.pc();
-            let (flow, len) = self.target.flow_at(pc);
+            let sp = self.target.stack_pointer();
+            let (flow, span) = self.target.flow_at(pc);
             let ev = self.target.step();
             if ev != Event::Continue {
                 return Some(ev);
             }
             let new_pc = self.target.pc();
-            match flow {
-                // Entered a subroutine / user interrupt handler (BIOS services complete within the step).
-                Flow::Call if new_pc != pc + len => goal.depth += 1,
-                Flow::Return => goal.depth -= 1,
-                _ => {}
-            }
-            if goal.depth < 0 {
-                return Some(Event::Continue);
+            let new_sp = self.target.stack_pointer();
+            // Where execution would continue if the instruction did not transfer control: after
+            // it, or into its delay slot, which still belongs to it.
+            let in_span = new_pc.wrapping_sub(pc) <= span && new_pc != pc;
+            if self.target.interrupted() {
+                goal.frames.push(PendingReturn { to: pc, stack: sp });
+            } else if flow == Flow::Call && new_pc != pc.wrapping_add(span) {
+                // Entered a subroutine / user interrupt handler, or its delay slot (BIOS services
+                // complete within the step).
+                goal.frames.push(PendingReturn { to: pc.wrapping_add(span), stack: sp });
+            } else if goal.frames.is_empty() {
+                if goal.leaving || flow == Flow::Return {
+                    // Left the procedure the step started in.
+                    if flow == Flow::Return && in_span && new_pc != pc.wrapping_add(span) {
+                        goal.leaving = true;
+                        continue;
+                    }
+                    return Some(Event::Continue);
+                }
+            } else {
+                while let Some(f) = goal.frames.last() {
+                    let back = (new_pc == f.to && new_sp >= f.stack) || new_sp > f.stack;
+                    if !back {
+                        break;
+                    }
+                    goal.frames.pop();
+                }
             }
             if self.target.breakpoints().contains(&new_pc) {
                 return Some(Event::Breakpoint);
             }
-            if goal.depth > 0 {
+            if !goal.frames.is_empty() {
                 continue;
             }
             let Some(start) = &goal.start else {
