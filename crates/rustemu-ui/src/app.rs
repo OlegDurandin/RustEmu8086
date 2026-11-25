@@ -695,7 +695,8 @@ pub struct App {
     pub program: Program,
     /// The run loop.
     pub exec: Exec,
-    /// Isolated offline exercise checks and their public feedback.
+    /// Isolated offline exercise checks and their public feedback (of this workspace's
+    /// document: parked with it).
     pub learning: crate::learning::LearningState,
     /// Breakpoints, watches, conditions.
     pub debugger: Debugger,

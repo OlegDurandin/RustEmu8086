@@ -18,6 +18,8 @@ const MAX_PASSES: usize = 40;
 const GROW_ONLY_PASS: usize = 12;
 /// Size of a segment: offsets are 16-bit.
 const SEG_LIMIT: i64 = 0x10000;
+/// Relocation entries an MZ header can count (its field is a word).
+const MAX_EXE_RELOCS: usize = 0xFFFF;
 
 struct Seg {
     name: String,
@@ -935,6 +937,7 @@ impl Assembler {
                     return;
                 }
                 let mut one = Vec::new();
+                let first_reloc = self.relocs.len();
                 for i in inner {
                     self.data_item(idx, size, i, &mut one);
                 }
@@ -942,6 +945,13 @@ impl Assembler {
                 if out.len() as u64 + one.len() as u64 * n as u64 > SEG_LIMIT as u64 {
                     self.err(idx, "DUP data is larger than 64 KB");
                     return;
+                }
+                // The items placed their fixups as if `one` started at `out[0]`: every copy
+                // gets its own, at its own place.
+                let fixups: Vec<_> = self.relocs.drain(first_reloc..).collect();
+                for k in 0..n as usize {
+                    let shift = (out.len() + k * one.len()) as i64;
+                    self.relocs.extend(fixups.iter().map(|&(s, o)| (s, o + shift)));
                 }
                 for _ in 0..n {
                     out.extend_from_slice(&one);
@@ -1110,6 +1120,19 @@ impl Assembler {
                 col: None,
                 len: 0,
                 msg: "boot sector exceeds 512 bytes".into(),
+            });
+        }
+        // The MZ header counts relocations in a word.
+        if self.format == Format::Exe && self.relocs.len() > MAX_EXE_RELOCS {
+            errors.push_diagnostic(AsmError {
+                file: 0,
+                line: 0,
+                col: None,
+                len: 0,
+                msg: format!(
+                    "too many segment fixups for an EXE header: {} (at most {MAX_EXE_RELOCS})",
+                    self.relocs.len()
+                ),
             });
         }
         errors.truncate(MAX_DIAGNOSTICS);

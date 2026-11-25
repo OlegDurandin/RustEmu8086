@@ -28,6 +28,7 @@ pub struct Workspace {
     exec: Exec,
     debugger: Debugger,
     view: Views,
+    learning: crate::learning::LearningState,
 }
 
 impl Workspace {
@@ -63,6 +64,7 @@ impl Workspace {
             exec: Default::default(),
             debugger: Default::default(),
             view: Default::default(),
+            learning: Default::default(),
         }
     }
 
@@ -131,6 +133,7 @@ impl App {
         swap(&mut self.exec, &mut w.exec);
         swap(&mut self.debugger, &mut w.debugger);
         swap(&mut self.view, &mut w.view);
+        swap(&mut self.learning, &mut w.learning);
     }
 
     /// Runs `f` with the workspace of `arch` shown (created when there is none yet), then shows

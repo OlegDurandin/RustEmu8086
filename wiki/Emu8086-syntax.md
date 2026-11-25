@@ -29,7 +29,8 @@ Without a `#make_…#` directive: `org 100h` means COM (even with `.data` / `.co
 segments, otherwise COM. **new** on the toolbar offers templates of all four formats.
 
 A segment (and a whole COM program) cannot be larger than 64 KB — the assembler points at the line that crosses
-the limit.
+the limit. An EXE can hold at most 65 535 segment fixups (`mov ax, seg x`, `dw seg x`, far pointers):
+the MZ header counts them in a word.
 
 ### COM
 

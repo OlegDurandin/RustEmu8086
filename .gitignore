@@ -13,3 +13,11 @@
 /examples/*.lst
 /examples/*.symbol
 /examples/*.binf
+
+# Pilot packages built by scripts/package_pilot.py (attach to a release, do not commit)
+/output/
+# Screenshots and archives: the ones tracked are kept, new ones go to releases
+/reports/**/*.png
+/reports/**/*.jpg
+/reports/**/*.pdf
+/reports/**/*.zip

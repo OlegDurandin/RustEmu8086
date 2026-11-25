@@ -25,7 +25,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
 ];
 
 /// Bounded public feedback for a completed case.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaseResult {
     /// Name from the exercise.
     pub name: String,
@@ -440,4 +440,38 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
             });
     }
     app.learning = state;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::Settings;
+
+    /// TODO 65: the exercise card belongs to its workspace. Switching to the other processor and
+    /// back keeps it as it was left (closed, with the results), instead of opening it afresh.
+    #[test]
+    fn exercise_state_survives_a_workspace_switch() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
+        let frame = |app: &mut App| {
+            let mut out = ctx.run_ui(Default::default(), |ui| window(app, ui.ctx()));
+            out.textures_delta.clear();
+        };
+        let i = EXAMPLES.iter().position(|(t, _)| t.starts_with("8086")).expect("an 8086 exercise");
+        open_example(&mut app, i);
+        assert_eq!(app.arch(), Arch::I8086);
+        frame(&mut app);
+        assert!(app.learning.open, "a new exercise shows its card");
+        app.learning.open = false;
+        let result = CaseResult { name: "case".into(), passed: true, details: String::new() };
+        app.learning.results.push(result.clone());
+
+        app.switch_arch(Arch::Mips32);
+        frame(&mut app);
+        app.switch_arch(Arch::I8086);
+        frame(&mut app);
+        assert!(app.doc.project.as_ref().is_some_and(|p| p.exercise.is_some()));
+        assert!(!app.learning.open, "the card stays closed");
+        assert_eq!(app.learning.results, vec![result]);
+    }
 }

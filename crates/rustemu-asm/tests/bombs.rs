@@ -117,3 +117,36 @@ fn directive_after_unicode_separator_is_not_a_panic() {
     assert_eq!(assemble_str("org 100h\n,\u{a0}IF 1\nnop\n,\u{a0}ENDIF\n").unwrap().file_bytes(), [0x90]);
     assert_eq!(assemble_str("org 100h\n,\u{a0}REPT 2\nnop\nENDM\n").unwrap().file_bytes(), [0x90, 0x90]);
 }
+
+/// TODO 64: the MZ header counts relocations in a word. More of them is an error, not a header
+/// with a truncated count.
+#[test]
+fn too_many_exe_relocations_are_an_error() {
+    let segs = |n: usize| {
+        let mut s = String::from("d segment\nx dw 0\nd ends\n");
+        for i in 0..n {
+            s += &format!("t{i} segment\ndw 32767 dup(seg x)\nt{i} ends\n");
+        }
+        s + "c segment\nstart: mov ax, seg x\nc ends\nend start\n"
+    };
+    // 2 × 32767 + 1 = 65535: still fits.
+    let p = assemble_str(&segs(2)).expect("65535 fixups assemble");
+    assert_eq!(p.relocs.len(), 65535);
+    let file = p.file_bytes();
+    assert_eq!(u16::from_le_bytes([file[6], file[7]]), 65535);
+    let (_, msg) = error_of(&segs(3));
+    assert!(msg.contains("too many segment fixups"), "{msg}");
+}
+
+/// Every copy of `DUP (SEG x)` is fixed up, at its own offset.
+#[test]
+fn dup_of_a_segment_gets_a_fixup_per_copy() {
+    let src = "d segment\nx dw 0\nd ends\nt segment\ndw 1\ndw 3 dup(seg x, 7)\nt ends\n\
+               c segment\nstart: ret\nc ends\nend start\n";
+    let p = assemble_str(src).expect("assembles");
+    let t = p.segments.iter().find(|s| s.name.eq_ignore_ascii_case("t")).expect("segment t");
+    let base = t.paragraph as u32 * 16;
+    let mut at: Vec<u32> = p.relocs.iter().map(|&r| r - base).collect();
+    at.sort();
+    assert_eq!(at, vec![2, 6, 10]);
+}
