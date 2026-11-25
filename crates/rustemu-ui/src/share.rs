@@ -29,6 +29,15 @@ pub struct Shared {
     pub arch: Arch,
 }
 
+/// The user's own settings that an open project overrides (None: not overridden).
+#[derive(Debug, Default)]
+pub(crate) struct UserConfig {
+    /// The 8086 syntax, while an 8086 project is open.
+    syntax: Option<crate::app::SyntaxChoice>,
+    /// MARS settings, while a MIPS project is open.
+    mars: Option<crate::mars_settings::MarsSettings>,
+}
+
 /// The "share link" dialog.
 pub struct ShareDialog {
     /// The link also runs the program.
@@ -189,6 +198,31 @@ impl App {
         self.doc.from_link && self.doc.path.is_none() && self.doc.program.is_none() && self.doc.example_key.is_none()
     }
 
+    /// The user's drive C: in memory (the browser): the 8086 session's, or the one put aside while
+    /// an 8086 program from a link runs on a temporary drive.
+    pub(crate) fn user_drive(&self) -> Option<&rustemu_core::memdrive::MemDrive> {
+        self.web.own_drive.as_ref().or_else(|| self.x86_session()?.dos_memory_drive())
+    }
+
+    /// The user's drive C: in memory, to change it.
+    pub(crate) fn user_drive_mut(&mut self) -> Option<&mut rustemu_core::memdrive::MemDrive> {
+        if self.web.own_drive.is_some() {
+            return self.web.own_drive.as_mut();
+        }
+        self.x86_session_mut()?.dos_memory_drive_mut()
+    }
+
+    /// Drive C: in memory that the shown document's program sees: the 8086 session's (a
+    /// temporary one for a program from a link); for MIPS the user's, none for a project or a
+    /// program from a link.
+    pub(crate) fn document_drive(&self) -> Option<&rustemu_core::memdrive::MemDrive> {
+        match self.arch() {
+            Arch::I8086 => self.session.dos_memory_drive(),
+            Arch::Mips32 if self.doc.project.is_some() || self.from_link() => None,
+            Arch::Mips32 => self.user_drive(),
+        }
+    }
+
     /// Puts an empty temporary drive C: (for a program from a link) or the user's own one back
     /// into the machine. Only the memory drive of the browser is swapped.
     pub(crate) fn use_temporary_drive(&mut self, temporary: bool) {
@@ -201,35 +235,88 @@ impl App {
         }
     }
 
-    /// Restores the package's assembly configuration after opening or restoring storage.
+    /// Puts the assembly configuration of the shown workspace's project in effect, or the
+    /// user's own back when its document is no longer a project. Call after `doc.project`
+    /// changes (opening, restoring storage, a new document).
+    ///
+    /// A project overrides only what its processor uses — the syntax for the 8086, MARS
+    /// settings for MIPS — and only while it is open: the user's own values are kept in
+    /// [`App::user_config`] and are what [`App::persist`] saves.
     pub(crate) fn apply_project_settings(&mut self) {
-        if let Some(p) = &self.doc.project {
-            self.settings.mars = p.mars.clone();
-            self.settings.syntax = match p.dialect {
-                None => crate::app::SyntaxChoice::Auto,
-                Some(rustemu_asm::Dialect::Masm) => crate::app::SyntaxChoice::Masm,
-                Some(rustemu_asm::Dialect::Nasm) => crate::app::SyntaxChoice::Nasm,
-                Some(rustemu_asm::Dialect::A86) => crate::app::SyntaxChoice::A86,
-            };
+        let project = self.doc.project.as_ref();
+        match self.arch() {
+            Arch::I8086 => match project {
+                Some(p) => {
+                    self.user_config.syntax.get_or_insert(self.settings.syntax);
+                    self.settings.syntax = match p.dialect {
+                        None => crate::app::SyntaxChoice::Auto,
+                        Some(rustemu_asm::Dialect::Masm) => crate::app::SyntaxChoice::Masm,
+                        Some(rustemu_asm::Dialect::Nasm) => crate::app::SyntaxChoice::Nasm,
+                        Some(rustemu_asm::Dialect::A86) => crate::app::SyntaxChoice::A86,
+                    };
+                }
+                None => {
+                    if let Some(own) = self.user_config.syntax.take() {
+                        self.settings.syntax = own;
+                    }
+                }
+            },
+            Arch::Mips32 => match project {
+                Some(p) => {
+                    let mars = p.mars.clone();
+                    self.user_config.mars.get_or_insert_with(|| self.settings.mars.clone());
+                    self.settings.mars = mars;
+                }
+                None => {
+                    if let Some(own) = self.user_config.mars.take() {
+                        self.settings.mars = own;
+                    }
+                }
+            },
         }
+    }
+
+    /// The settings as the user chose them: what an open project overrides is replaced by the
+    /// user's own value (for saving between runs).
+    pub(crate) fn user_settings(&self) -> std::borrow::Cow<'_, crate::app::Settings> {
+        let UserConfig { syntax, mars } = &self.user_config;
+        if syntax.is_none() && mars.is_none() {
+            return std::borrow::Cow::Borrowed(&self.settings);
+        }
+        let mut s = self.settings.clone();
+        if let Some(syntax) = syntax {
+            s.syntax = *syntax;
+        }
+        if let Some(mars) = mars {
+            s.mars = mars.clone();
+        }
+        std::borrow::Cow::Owned(s)
     }
 
     /// Storage keeps the last valid inventory plus current configuration; the editor text
     /// is stored separately, including oversized or temporarily broken edits.
     pub(crate) fn stored_project(&self) -> Option<rustemu_build::project::Project> {
         self.doc.project.clone().map(|mut p| {
-            p.mars = self.settings.mars.clone();
-            p.dialect = self.settings.syntax.dialect();
+            self.update_project_settings(&mut p);
             p
         })
+    }
+
+    /// Writes into `p` the setting its processor uses, as now in effect (the user may have
+    /// changed it while the project is open): the syntax of an 8086 project, MARS settings of
+    /// a MIPS one. The other stays as the project has it.
+    pub(crate) fn update_project_settings(&self, p: &mut rustemu_build::project::Project) {
+        match self.arch() {
+            Arch::I8086 => p.dialect = self.settings.syntax.dialect(),
+            Arch::Mips32 => p.mars = self.settings.mars.clone(),
+        }
     }
 
     /// Captures the project and all dependencies without executing the program.
     pub fn portable_project(&self) -> Result<rustemu_build::project::Project, String> {
         if let Some(mut p) = self.doc.project.clone() {
             p.files.insert(p.entry.clone(), self.doc.text.clone());
-            p.mars = self.settings.mars.clone();
-            p.dialect = self.settings.syntax.dialect();
+            self.update_project_settings(&mut p);
             p.validate()?;
             return Ok(p);
         }
@@ -478,6 +565,42 @@ mod project_tests {
         }
     }
 
+    /// TODO 52: a project's settings are in effect only while it is open, only for its
+    /// processor, and are not saved as the user's.
+    #[test]
+    fn a_project_does_not_change_the_users_settings() {
+        use crate::app::SyntaxChoice;
+        let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
+        app.settings.syntax = SyntaxChoice::Nasm;
+        app.settings.mars.self_modifying = true;
+        app.doc.saved_text = app.doc.text.clone();
+        let mut p = package(true);
+        p.dialect = Some(rustemu_asm::Dialect::Masm);
+        app.open_link(parse(&project_fragment(&p, false).unwrap()).unwrap());
+        assert_eq!(app.arch(), Arch::Mips32);
+        assert!(app.settings.mars.delayed_branching && !app.settings.mars.self_modifying, "the project's");
+        assert_eq!(app.settings.syntax, SyntaxChoice::Nasm, "a MIPS project leaves the 8086 syntax");
+        let saved = app.user_settings();
+        assert!(saved.mars.self_modifying && !saved.mars.delayed_branching, "the user's are saved");
+        // Another MIPS document: the user's MARS settings again.
+        app.load_example_text("plain.s", ".text\nmain: nop\n");
+        assert!(app.settings.mars.self_modifying && !app.settings.mars.delayed_branching);
+
+        // An 8086 project overrides the syntax until the 8086 document is not a project.
+        let mut p = package(false);
+        p.dialect = Some(rustemu_asm::Dialect::Masm);
+        app.open_link(parse(&project_fragment(&p, false).unwrap()).unwrap());
+        assert_eq!(app.arch(), Arch::I8086);
+        assert_eq!(app.settings.syntax, SyntaxChoice::Masm);
+        assert!(app.settings.mars.self_modifying, "an 8086 project leaves MARS settings");
+        assert_eq!(app.user_settings().syntax, SyntaxChoice::Nasm);
+        app.switch_arch(Arch::Mips32);
+        app.switch_arch(Arch::I8086);
+        assert_eq!(app.settings.syntax, SyntaxChoice::Masm, "still the open project's");
+        app.load_example_text("plain.asm", "org 100h\nret\n");
+        assert_eq!(app.settings.syntax, SyntaxChoice::Nasm);
+    }
+
     #[test]
     fn invalid_package_does_not_replace_or_cancel_current_work() {
         let mut app = App::with_settings(crate::app::Settings { last_file: None, ..Default::default() });
@@ -542,7 +665,8 @@ mod project_tests {
         restored.switch_arch(Arch::Mips32);
         assert_eq!(restored.doc.text, app.doc.text);
         assert!(restored.settings.mars.self_modifying);
-        assert_eq!(restored.settings.syntax, crate::app::SyntaxChoice::Nasm);
+        // A MIPS project's dialect is not the user's 8086 syntax (TODO 52).
+        assert_eq!(restored.settings.syntax, crate::app::SyntaxChoice::Auto);
         assert_eq!(restored.doc.project.as_ref().unwrap().files["lib.inc"], p.files["lib.inc"]);
         restored.web.programs = app.web.programs.clone();
         restored.open_program("lesson.s");

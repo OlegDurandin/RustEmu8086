@@ -149,7 +149,7 @@ impl App {
     }
 
     /// A parked workspace with unsaved changes, by its processor.
-    pub(crate) fn parked_dirty(&self) -> Option<Arch> {
+    pub fn parked_dirty(&self) -> Option<Arch> {
         self.parked.iter().find(|w| w.doc.text != w.doc.saved_text).map(Workspace::arch)
     }
 

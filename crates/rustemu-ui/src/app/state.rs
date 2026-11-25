@@ -19,6 +19,11 @@ pub enum ExecutionState {
     Finished,
     /// Assembly or execution failed.
     Fault,
+    /// The current source is being assembled in the background.
+    Assembling,
+    /// The source changed (or its build was cancelled): the loaded image is not run until the
+    /// source is assembled again.
+    Outdated,
 }
 
 impl ExecutionState {
@@ -32,6 +37,8 @@ impl ExecutionState {
             Self::Breakpoint => "Breakpoint",
             Self::Finished => "Finished",
             Self::Fault => "Fault",
+            Self::Assembling => "Assembling",
+            Self::Outdated => "Outdated",
         }
     }
 }
@@ -40,7 +47,11 @@ impl App {
     /// Derives state from the current machine and the most recent execution event.
     pub fn execution_state(&self) -> ExecutionState {
         use ExecutionState::*;
-        if self.build.failed || matches!(self.exec.last_event, Some(Event::Error(_))) {
+        if self.is_building() {
+            Assembling
+        } else if self.build.failed && self.build.outdated {
+            Outdated
+        } else if self.build.failed || matches!(self.exec.last_event, Some(Event::Error(_))) {
             Fault
         } else if !self.loaded() {
             Ready
@@ -98,6 +109,12 @@ impl App {
                 }
                 ExecutionState::Fault => {
                     ui.label("Read the error message; fix the source and assemble again.");
+                }
+                ExecutionState::Assembling => {
+                    ui.label("Assembling the current source…");
+                }
+                ExecutionState::Outdated => {
+                    ui.label("The source changed since it was loaded; Step or Run assembles it again.");
                 }
                 ExecutionState::Breakpoint | ExecutionState::Paused => {
                     ui.label("Step to inspect or Run to continue.");

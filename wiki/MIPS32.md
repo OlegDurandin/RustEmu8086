@@ -14,6 +14,8 @@ does not touch the 8086 program, and the other way round.
 Each processor keeps its own program, unsaved changes, breakpoints, watches, the loaded machine and the open
 windows. Switching pauses a running program; when you come back everything is as you left it. The application always
 starts in the 8086 workspace; MIPS opens when you switch to it or open a MIPS file, example or link.
+An example or link of the other processor does not ask about unsaved changes here — this document stays as it is;
+you are asked about the document it would replace in the other workspace. **Discard** drops the edits for good.
 
 A file remembers its processor. Opening a file, a program saved in the browser or a share link switches to its
 workspace. A file opened for the first time goes to the current workspace, unless its text clearly is the other

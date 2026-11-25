@@ -35,6 +35,7 @@ impl App {
     fn new_from(&mut self, template: &str) {
         self.store_session();
         self.doc.project = None;
+        self.apply_project_settings();
         self.doc.path = None;
         self.doc.name = None;
         self.doc.from_link = false;
@@ -98,6 +99,7 @@ impl App {
                 self.doc.text = text;
                 self.doc.saved_text = self.doc.text.clone();
                 self.doc.project = None;
+                self.apply_project_settings();
                 self.doc.path = Some(p.to_path_buf());
                 self.doc.name = None;
                 self.doc.from_link = false;
@@ -243,6 +245,7 @@ impl App {
                 self.doc.example_key = None;
                 self.doc.saved_text = self.doc.text.clone();
                 self.doc.project = None;
+                self.apply_project_settings();
                 self.doc.path = Some(p.to_path_buf());
                 self.add_recent(p);
                 *self.settings.last_file_mut(self.arch()) = Some(p.to_path_buf());
@@ -280,6 +283,7 @@ impl App {
     pub fn load_example_text(&mut self, name: &str, src: &str) {
         self.store_session();
         self.doc.project = None;
+        self.apply_project_settings();
         self.doc.path = None;
         self.doc.name = None;
         self.doc.from_link = false;

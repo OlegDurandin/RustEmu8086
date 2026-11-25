@@ -65,6 +65,11 @@ Breakpoints, watches and running machine state are also outside the package.
 The package reproduces source and MARS configuration; it does not guarantee deterministic
 behavior for programs using clocks, randomness or external device events.
 
+While a project is open, its settings are in effect only for its processor — the syntax of an
+8086 project, the MARS settings of a MIPS one. Changing them in Options changes the project.
+Your own settings are not overwritten: they come back when you open a document that is not a
+project, and they are what the application saves between runs.
+
 ## По-русски
 
 В **Share link…** можно подготовить ввод и передать проект ссылкой либо файлом `.remu`.
@@ -73,5 +78,8 @@ behavior for programs using clocks, randomness or external device events.
 успешно собираться; зависимости нужно держать внутри его папки с относительными include.
 
 Личный диск C: не входит в пакет: программа работает с отдельным временным диском.
+Пока проект открыт, действуют его настройки — и только для его процессора: синтаксис проекта 8086,
+настройки MARS проекта MIPS. Ваши собственные настройки не перезаписываются: они возвращаются, когда
+открыт документ не из проекта, и именно они сохраняются между запусками.
 Ввод ограничен 4 КиБ, исходники — 4 МиБ и 1 024 файлами. Часы, случайность, события устройств
 и состояние отладчика не переносятся.

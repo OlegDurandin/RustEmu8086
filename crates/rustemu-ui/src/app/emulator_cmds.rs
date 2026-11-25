@@ -144,7 +144,7 @@ impl App {
         self.program.files = s.source_files;
         self.program.index = s.source_index;
         self.program.text = s.loaded_text;
-        self.build.failed = false;
+        self.build.succeed();
         self.program.generation += 1;
         self.exec.last_event = None;
         for w in &mut self.debugger.watches {

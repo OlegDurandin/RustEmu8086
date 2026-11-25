@@ -160,11 +160,18 @@ impl App {
         // A binary without source is (re)built from the editor text first.
         let ok = if self.session.program.is_none() {
             self.emulate();
-            self.loaded() && !self.build.failed
+            self.loaded() && !self.build.failed && !self.is_building()
         } else {
             self.ensure_current_build()
         };
-        if !ok || self.session.program.is_none() {
+        if !ok {
+            // A background build: run to the line once it is loaded.
+            if self.is_building() {
+                self.step_after_build(super::background::BuildStep::ToLine(file, line));
+            }
+            return;
+        }
+        if self.session.program.is_none() {
             return;
         }
         if file == 0 && self.is_stale() {
@@ -351,7 +358,7 @@ impl App {
     /// The browser: copies the files a MIPS program wrote to drive C: (DOS's memory drive, kept
     /// in the browser and shown in the "drive C:" window), when they changed.
     pub(crate) fn sync_mips_files(&mut self) {
-        if self.program.portable {
+        if self.program.portable || !self.program.on_user_drive {
             return;
         }
         let Some(m) = self.session.mips() else { return };
@@ -361,7 +368,7 @@ impl App {
         }
         self.web.mips_files_synced = m.files.generation;
         let files: Vec<(String, Vec<u8>)> = files.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        let Some(drive) = self.x86_session_mut().and_then(|s| s.dos_memory_drive_mut()) else { return };
+        let Some(drive) = self.user_drive_mut() else { return };
         // Stage the complete update so a shrink can fund another file's growth regardless
         // of name order, and a failed sync cannot leave only part of the batch on drive C:.
         let mut updated = drive.clone();
@@ -597,11 +604,34 @@ mod tests {
     /// any case of their names, and what they write is kept there.
     #[test]
     fn mips_files_are_on_drive_c_in_the_browser() {
+        mips_copies_a_file_on_the_users_drive(false);
+    }
+
+    /// TODO 54: an 8086 program from a link runs on a temporary drive C:; a MIPS program run
+    /// afterwards still sees the user's drive and writes there.
+    #[test]
+    fn mips_uses_the_users_drive_after_an_8086_link() {
+        mips_copies_a_file_on_the_users_drive(true);
+    }
+
+    fn mips_copies_a_file_on_the_users_drive(after_link: bool) {
         let mut app = App::with_settings(Settings { last_file: None, ..Settings::default() });
         app.front.browser = true;
         let mut drive = rustemu_core::memdrive::MemDrive::new();
         drive.write("in.txt", b"abc".to_vec()).unwrap();
         app.session.set_dos_memory_drive(drive);
+        if after_link {
+            app.doc.saved_text = app.doc.text.clone();
+            app.open_link(crate::share::Shared {
+                project: None,
+                name: "link.asm".into(),
+                text: "org 100h\nret\n".into(),
+                run: false,
+                arch: rustemu_session::Arch::I8086,
+            });
+            app.emulate();
+            assert!(app.web.own_drive.is_some(), "the link program is on a temporary drive");
+        }
         app.switch_arch(rustemu_session::Arch::Mips32);
         app.doc.text = ".data
 inn: .asciiz \"in.txt\"
@@ -635,7 +665,7 @@ syscall
         while app.session.target.terminated().is_none() {
             app.single_step();
         }
-        let drive = app.x86_session().and_then(|s| s.dos_memory_drive()).unwrap();
+        let drive = app.user_drive().unwrap();
         assert_eq!(drive.read("OUT.TXT"), Some(&b"abc"[..]));
     }
 
