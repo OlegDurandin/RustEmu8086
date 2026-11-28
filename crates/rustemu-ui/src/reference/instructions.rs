@@ -1033,6 +1033,46 @@ pub const INSTRUCTIONS: &[Instr] = &[
         NONE,
         "my_proc proc\n    push bp\n    mov bp, sp\n    sub sp, 4   ; local variables\n    ; ...\n    leave\n    ret\nmy_proc endp"
     ),
+    instr!(
+        "ENTER",
+        [],
+        I186,
+        ["imm16, imm8"],
+        "Set up a stack frame: PUSH BP, MOV BP, SP, SUB SP, size.",
+        "80186. The first operand is the size of the local variables in bytes, the second the nesting level (0 for an ordinary procedure; higher levels also copy the frame pointers of the enclosing procedures). LEAVE undoes it.",
+        NONE,
+        "my_proc proc\n    enter 4, 0  ; 4 bytes of local variables\n    mov word ptr [bp-2], 1\n    leave\n    ret\nmy_proc endp"
+    ),
+    instr!(
+        "BOUND",
+        [],
+        I186,
+        ["reg16, memory"],
+        "Check an array index against bounds: INT 5 if it is out of range.",
+        "80186. The memory operand holds two signed words: the lower and the upper bound. If the register is below the first or above the second, the processor raises interrupt 5 with IP pointing at BOUND itself.",
+        NONE,
+        "limits dw 0, 9\n; ...\nbound si, limits  ; 0 <= SI <= 9, otherwise INT 5"
+    ),
+    instr!(
+        "INSB",
+        ["INSW", "INS"],
+        I186,
+        ["", "memory, DX (size from the operand)"],
+        "Read a byte/word from port DX into ES:[DI] and advance DI.",
+        "80186. DI is incremented (DF = 0) or decremented (DF = 1) by 1 or 2. With REP the instruction repeats CX times. The destination is always ES:DI.",
+        NONE,
+        "cld\nlea di, buffer\nmov dx, 3C9h\nmov cx, 3\nrep insb        ; read 3 bytes from port 3C9h"
+    ),
+    instr!(
+        "OUTSB",
+        ["OUTSW", "OUTS"],
+        I186,
+        ["", "DX, memory (size from the operand)"],
+        "Write a byte/word from DS:[SI] to port DX and advance SI.",
+        "80186. SI is incremented (DF = 0) or decremented (DF = 1) by 1 or 2. With REP the instruction repeats CX times. The source segment may be overridden.",
+        NONE,
+        "cld\nlea si, colors\nmov dx, 3C9h\nmov cx, 3\nrep outsb       ; red, green, blue of one DAC entry"
+    ),
     // ---- 8087 coprocessor ---------------------------------------------------------------
     instr!(
         "FINIT",

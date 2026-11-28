@@ -29,6 +29,8 @@ pub enum Tool {
     Watch,
     /// The last ALU operation.
     Alu,
+    /// The last executed instruction and what it changed.
+    LastStep,
     /// The 8087 registers.
     Fpu,
     /// The emulator screen.
@@ -99,7 +101,7 @@ struct Spec {
 
 impl Tool {
     /// Number of tools (the size of [`Windows`]).
-    pub const COUNT: usize = 33;
+    pub const COUNT: usize = 34;
 
     /// All tools; panels are placed in this order by the default layout, windows drawn in it.
     pub const ALL: [Tool; Tool::COUNT] = [
@@ -112,6 +114,7 @@ impl Tool {
         Tool::Emulator,
         Tool::Memory,
         Tool::Watch,
+        Tool::LastStep,
         Tool::Alu,
         Tool::Fpu,
         Tool::Screen,
@@ -154,6 +157,7 @@ impl Tool {
             Tool::Memory => (Some("memory"), "memory", None, true, true),
             Tool::Watch => (Some("watch"), "watch", Some(Inspect), false, true),
             Tool::Alu => (Some("alu"), "ALU", Some(Inspect), false, true),
+            Tool::LastStep => (Some("last_step"), "last step", Some(Inspect), false, true),
             Tool::Fpu => (Some("fpu"), "FPU", Some(Inspect), false, true),
             Tool::Screen => (Some("screen"), "screen", Some(Screen), true, true),
             Tool::RunIo => (Some("run_io"), "Run I/O", Some(Screen), false, true),
@@ -256,6 +260,7 @@ impl Tool {
             Tool::Watch => at("watch", 1060.0, 110.0).default_width(460.0),
             Tool::CallStack => at("call stack", 1060.0, 360.0).default_width(520.0),
             Tool::Alu => at("ALU", 240.0, 600.0).default_width(520.0),
+            Tool::LastStep => at("last step", 240.0, 440.0).default_width(520.0),
             Tool::Fpu => at("FPU", 760.0, 380.0).default_width(520.0),
             Tool::StopCondition => at("stop on condition", 700.0, 420.0).default_width(460.0),
             Tool::ValueViewer => at("extended value viewer", 420.0, 200.0).resizable(false),
@@ -318,6 +323,7 @@ pub fn tool_ui(app: &mut App, ui: &mut Ui, tool: Tool, host: &mut dyn Host) {
         Tool::CallStack => crate::debugger::call_stack_ui(app, ui),
         Tool::ValueViewer => crate::debugger::value_viewer_ui(app, ui),
         Tool::Alu => crate::units::alu_ui(app, ui),
+        Tool::LastStep => crate::debugger::last_step_ui(app, ui),
         Tool::Fpu => crate::units::fpu_ui(app, ui),
         Tool::Devices => crate::devices_ui::devices_ui(app, ui),
         Tool::Drive => crate::drive_ui::drive_ui(app, ui),
@@ -423,7 +429,7 @@ impl Windows {
     }
 }
 
-const KEYS: [&str; 29] = [
+const KEYS: [&str; 30] = [
     "emulator",
     "screen",
     "source",
@@ -453,6 +459,7 @@ const KEYS: [&str; 29] = [
     "mmio",
     "bitmap",
     "digital_lab",
+    "last_step",
 ];
 
 impl Serialize for Windows {

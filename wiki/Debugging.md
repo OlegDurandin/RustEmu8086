@@ -75,7 +75,7 @@ The buttons at the bottom of the emulator window are as in Emu8086:
 | **screen** | the emulator screen |
 | **source** | the source with the current line |
 | **reset** | load the program again |
-| **aux** | memory, ALU, FPU (8087 coprocessor), stop on condition, symbol table, listing, breakpoints, watch, call stack, devices, log |
+| **aux** | memory, ALU, last step, FPU (8087 coprocessor), stop on condition, symbol table, listing, breakpoints, watch, call stack, devices, log |
 | **vars** | variables and constants (hex / dec / signed / bin / ascii) |
 | **debug** | a state log after every stop and a DEBUG.EXE-style console |
 | **stack** | the stack from SS:FFFE, the current SP highlighted |
@@ -107,6 +107,9 @@ is *aux* → *stop on condition*, or the **debug** menu of the emulator window.
   [8087 coprocessor](8087-coprocessor)).
 - **ALU** — the last arithmetic or logic operation: operands and the result in hex, binary and decimal, flags
   before and after.
+- **last step** (emulator **aux** / **view** menu; MIPS — the **last step** button) — the last executed instruction
+  and its line, what it changed (`DX 0000h → 0108h`, `CF 0 → 1`, bytes of memory) and, with *why did this happen?*,
+  how the flags follow from the operands and the result. The same card as on the tablet.
 
 ## Expressions
 

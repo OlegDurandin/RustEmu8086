@@ -467,7 +467,7 @@ mod tests {
             "DEC", "PUSH", "POP", "LEA", "LDS", "LES", "JMP", "CALL", "RET", "LOOP", "LOOPE", "LOOPZ", "AAD", "ESC",
             "LOCK", "JA", "JAE", "JB", "JBE", "JC", "JE", "JG", "JGE", "JL", "JLE", "JNA", "JNAE", "JNB", "JNBE",
             "JNC", "JNE", "JNG", "JNGE", "JNL", "JNLE", "JNO", "JNP", "JNS", "JO", "JP", "JPE", "JPO", "JS", "JZ",
-            "POPA", "PUSHA", "LEAVE",
+            "POPA", "PUSHA", "LEAVE", "ENTER", "BOUND", "INSB", "INSW", "INS", "OUTSB", "OUTSW", "OUTS",
         ];
         for m in list.into_iter().chain(rustemu_asm::encode::FPU_MNEMONICS.iter().copied()) {
             assert!(rustemu_asm::encode::is_mnemonic(m), "{m}");

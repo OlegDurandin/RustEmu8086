@@ -537,3 +537,126 @@ pub fn set_viewed_value(app: &mut App, text: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// The *last step* tool: the last executed instruction, its source line and what it changed
+/// (registers, flags, memory), and on request why the flags came out so. The desktop's version of
+/// the tablet's card; the data are the session's [`rustemu_session::step::StepView`] (8086) and
+/// [`crate::mips_ui::last_step`] (MIPS).
+pub fn last_step_ui(app: &mut App, ui: &mut Ui) {
+    if !app.loaded() {
+        ui.weak("Load the program (emulate) and run an instruction: what it changed is shown here.");
+        return;
+    }
+    if app.session.mips().is_some() {
+        return mips_last_step(app, ui);
+    }
+    let Some(step) = app.session.last_step(app.settings.show_macro_code) else {
+        ui.weak("Nothing executed yet: single step (F8) runs one instruction.");
+        return;
+    };
+    let source = step.source.as_ref().map(|s| (s.file, s.line));
+    step_header(app, ui, &step.text, &format!("{:04X}:{:04X}", step.cs, step.ip), source);
+    let mut chips: Vec<(String, bool)> = Vec::new();
+    for r in &step.regs {
+        match r.byte() {
+            Some((name, b, a)) => {
+                chips.push((format!("{name} {b:02X}h → {a:02X}h"), true));
+                chips.push((format!("{} {:04X}h → {:04X}h", r.name, r.before, r.after), false));
+            }
+            None => chips.push((format!("{} {:04X}h → {:04X}h", r.name, r.before, r.after), true)),
+        }
+    }
+    for f in &step.flags {
+        chips.push((format!("{} {} → {}", f.name, f.before as u8, f.after as u8), true));
+    }
+    const MAX_WRITES: usize = 8;
+    for &(a, b, n) in step.writes.iter().take(MAX_WRITES) {
+        chips.push((format!("[{a:05X}h] {b:02X} → {n:02X}"), true));
+    }
+    if step.write_count > MAX_WRITES {
+        chips.push((format!("+{} bytes", step.write_count - MAX_WRITES), false));
+    }
+    step_chips(ui, chips, "No register, flag or memory changed (only IP moved on).");
+    let why_id = egui::Id::unique("last_step_why");
+    let mut why = ui.data(|d| d.get_temp::<bool>(why_id).unwrap_or(false));
+    ui.horizontal(|ui| {
+        if app.session.target.is_waiting_input() {
+            ui.colored_label(Color32::from_rgb(220, 140, 20), "waiting for a key");
+        }
+        ui.toggle_value(&mut why, "why did this happen?")
+            .on_hover_text("how the flags follow from the operands and the result");
+        if step.alu.is_some() && ui.button("ALU details").clicked() {
+            app.windows[Tool::Alu] = true;
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(why_id, why));
+    if why {
+        ui.separator();
+        for line in step.why() {
+            ui.label(RichText::new(line).monospace());
+        }
+    }
+}
+
+/// The last MIPS instruction: text, address, line, changed registers and bytes.
+fn mips_last_step(app: &mut App, ui: &mut Ui) {
+    let Some(step) = crate::mips_ui::last_step(app) else {
+        ui.weak("Nothing executed yet: single step (F8) runs one instruction.");
+        return;
+    };
+    let source = app.session.line_at_addr(step.addr);
+    step_header(app, ui, &step.text, &format!("{:08x}", step.addr), source);
+    let mut chips: Vec<(String, bool)> =
+        step.regs.iter().map(|(name, b, a)| (format!("{name} {b:#x} → {a:#x}"), true)).collect();
+    const MAX_WRITES: usize = 8;
+    for (a, b, n) in step.memory.iter().take(MAX_WRITES) {
+        chips.push((format!("[{a:08x}] {b:02x} → {n:02x}"), true));
+    }
+    if step.memory_count > MAX_WRITES {
+        chips.push((format!("+{} bytes", step.memory_count - MAX_WRITES), false));
+    }
+    step_chips(ui, chips, "No register or memory changed (only PC moved on).");
+    let alu = app.session.mips().and_then(|m| m.cpu.alu).is_some_and(|t| t.instr == app.session.target.instr_count());
+    ui.horizontal(|ui| {
+        if app.session.target.is_waiting_input() {
+            ui.colored_label(Color32::from_rgb(220, 140, 20), "waiting for input in Run I/O");
+        }
+        if alu && ui.button("ALU details").clicked() {
+            app.windows[Tool::Alu] = true;
+        }
+    });
+}
+
+/// The instruction, its address and its source line (a link to it).
+fn step_header(app: &mut App, ui: &mut Ui, text: &str, addr: &str, source: Option<(usize, u32)>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(text).monospace().size(15.0).strong());
+        ui.weak(RichText::new(addr).monospace());
+        if let Some((file, line)) = source
+            && ui.link(RichText::new(file_line(app, file, line)).monospace()).on_hover_text("show the line").clicked()
+        {
+            show_location(app, file, line);
+        }
+    });
+}
+
+/// Changes as chips: the main ones framed in green, derived ones (the whole register of a changed
+/// byte, omitted bytes) weak.
+fn step_chips(ui: &mut Ui, chips: Vec<(String, bool)>, nothing: &str) {
+    if chips.is_empty() {
+        ui.weak(nothing);
+        return;
+    }
+    let green = if ui.visuals().dark_mode { Color32::from_rgb(110, 210, 140) } else { Color32::from_rgb(20, 130, 60) };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+        for (text, main) in chips {
+            let color = if main { green } else { ui.visuals().weak_text_color() };
+            egui::Frame::new()
+                .stroke(egui::Stroke::new(1.0, color))
+                .corner_radius(3)
+                .inner_margin(egui::Margin::symmetric(6, 2))
+                .show(ui, |ui| ui.label(RichText::new(text).monospace().color(color)));
+        }
+    });
+}

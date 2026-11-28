@@ -218,6 +218,7 @@ fn view_menu(app: &mut App, ui: &mut Ui) {
     ui.separator();
     let w = &mut app.windows;
     ui.checkbox(&mut w[Tool::Alu], "arithmetic & logical unit");
+    ui.checkbox(&mut w[Tool::LastStep], "last step");
     ui.checkbox(&mut w[Tool::Fpu], "floating point unit (8087)");
     ui.separator();
     ui.checkbox(&mut w[Tool::Flags], "flags");
@@ -330,6 +331,8 @@ fn bottom_buttons(app: &mut App, ui: &mut Ui) {
             let w = &mut app.windows;
             ui.checkbox(&mut w[Tool::Memory], "memory");
             ui.checkbox(&mut w[Tool::Alu], "ALU");
+            ui.checkbox(&mut w[Tool::LastStep], "last step")
+                .on_hover_text("what the last instruction changed, and why the flags are so");
             ui.checkbox(&mut w[Tool::Fpu], "FPU")
                 .on_hover_text("8087 floating-point unit: ST(0)..ST(7), status and control words");
             ui.checkbox(&mut w[Tool::StopCondition], "stop on condition");

@@ -26,40 +26,11 @@ impl App {
         }
     }
 
-    /// A panic of the assembler (a bug of its own): an error message instead of closing the
-    /// application.
-    fn assembler_panicked<T>(&mut self, payload: &(dyn std::any::Any + Send)) -> Option<T> {
-        self.build.fail();
-        self.build.messages.push(Message {
-            text: format!(
-                "internal error of the assembler: {} — please report it with this program",
-                super::exec::panic_text(payload)
-            ),
-            loc: None,
-            span: None,
-            error: true,
-        });
-        self.status = "Assembler error".into();
-        None
-    }
-
+    /// The 8086 result of the build that [`App::submit_build`] has just completed.
     fn assemble(&mut self) -> Option<rustemu_asm::Program> {
-        let name = self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
-        let mut loader = rustemu_asm::FsLoader { include_dirs: Vec::new() };
         self.build.messages.clear();
         self.clear_errors();
-        let dialect = self.settings.syntax.dialect();
-        let result = if let Some(rustemu_build::Outcome::X86(result)) = self.build.completed.take() {
-            Ok(result)
-        } else {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                rustemu_asm::assemble_dialect(&name, &self.doc.text, &mut loader, dialect)
-            }))
-        };
-        let result = match result {
-            Ok(r) => r,
-            Err(payload) => return self.assembler_panicked(&*payload),
-        };
+        let Some(rustemu_build::Outcome::X86(result)) = self.build.completed.take() else { return None };
         match result {
             Ok(p) => {
                 self.build.messages.push(Message {
@@ -167,115 +138,12 @@ impl App {
         }
     }
 
-    /// The text of a file a MIPS program `.include`s (`path` as MARS resolves it, relative to the
-    /// including file): from disk, from drive C: (its folder, or memory in the browser), or one of
-    /// the built-in MIPS examples and their include files, by name.
-    fn mips_include(&self, path: &str) -> Option<String> {
-        let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-        let base = Path::new(path).file_name().map_or(path.to_string(), |n| n.to_string_lossy().into_owned());
-        if !self.front.browser {
-            if let Ok(source) = rustemu_mips::asm::read_source_file(path) {
-                return Some(source);
-            }
-            if let Some(dir) = self.vdrive(self.doc.path.as_deref())
-                && let Ok(source) = rustemu_mips::asm::read_source_file(dir.join(path))
-                    .or_else(|_| rustemu_mips::asm::read_source_file(dir.join(&base)))
-            {
-                return Some(source);
-            }
-        }
-        if let Some(d) = self.document_drive()
-            && let Some((_, b)) = d.files().find(|(k, _)| k.eq_ignore_ascii_case(path) || k.eq_ignore_ascii_case(&base))
-        {
-            return Some(text(b));
-        }
-        crate::examples::MIPS_EXAMPLES
-            .iter()
-            .map(|e| (e.1, e.2))
-            .chain(crate::examples::MIPS_INCLUDES.iter().copied())
-            .find(|(n, _)| n.eq_ignore_ascii_case(&base))
-            .map(|(_, t)| t.to_string())
-    }
-
-    /// The files MARS's settings assemble with the program: the exception handler file, the
-    /// other `.asm` / `.s` files of its folder (by name). None in the browser.
-    fn mips_project_files(
-        &self,
-    ) -> Result<(Option<rustemu_mips::asm::SourceFile>, Vec<rustemu_mips::asm::SourceFile>), String> {
-        use rustemu_mips::asm::SourceFile;
-        let s = &self.settings.mars;
-        if self.front.browser {
-            return Ok((None, Vec::new()));
-        }
-        let mut used = self.doc.text.len();
-        if used > rustemu_mips::asm::MAX_SOURCE_BYTES {
-            return Err("MIPS source byte budget exceeded".into());
-        }
-        let mut read = |p: &Path| {
-            let text = rustemu_mips::asm::read_source_file(p).map_err(|e| format!("{}: {e}", p.display()))?;
-            used = used.saturating_add(text.len());
-            if used > rustemu_mips::asm::MAX_SOURCE_BYTES {
-                return Err("MIPS source byte budget exceeded".to_string());
-            }
-            Ok(SourceFile { name: p.display().to_string(), text })
-        };
-        let handler = match s.exception_handler_enabled && !s.exception_handler.trim().is_empty() {
-            true => {
-                Some(read(Path::new(s.exception_handler.trim())).map_err(|e| format!("exception handler file {e}"))?)
-            }
-            false => None,
-        };
-        let mut others = Vec::new();
-        if s.assemble_all
-            && let Some(path) = &self.doc.path
-            && let Some(dir) = path.parent()
-            && let Ok(entries) = std::fs::read_dir(dir)
-        {
-            let mut paths: Vec<_> = entries
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p != path && p.is_file())
-                .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm") || e.eq_ignore_ascii_case("s")))
-                .take(rustemu_mips::asm::MAX_SOURCE_FILES)
-                .collect();
-            if paths.len() + 1 + usize::from(handler.is_some()) > rustemu_mips::asm::MAX_SOURCE_FILES {
-                return Err("MIPS source file budget exceeded".into());
-            }
-            // MARS's order: the .asm files, then the .s ones.
-            paths.sort_by_key(|p| (!p.extension().is_some_and(|e| e.eq_ignore_ascii_case("asm")), p.clone()));
-            for p in paths {
-                others.push(read(&p)?);
-            }
-        }
-        Ok((handler, others))
-    }
-
-    /// Assembles the editor text as a MIPS program (MARS's assembler), with the files it includes.
+    /// The MIPS result (MARS's assembler, with the files it includes) of the build that
+    /// [`App::submit_build`] has just completed.
     fn assemble_mips(&mut self) -> Option<rustemu_mips::asm::Program> {
         self.build.messages.clear();
         self.clear_errors();
-        let name = self.doc.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| self.file_name());
-        let result = if let Some(rustemu_build::Outcome::Mips(result)) = self.build.completed.take() {
-            Ok(result)
-        } else {
-            let (handler, others) = match self.mips_project_files() {
-                Ok(f) => f,
-                Err(e) => {
-                    self.build.fail();
-                    self.build.messages.push(Message { text: e.clone(), loc: None, span: None, error: true });
-                    self.status = e;
-                    return None;
-                }
-            };
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let settings = self.settings.mars.mips();
-                let program = rustemu_mips::asm::SourceFile { name: name.clone(), text: self.doc.text.clone() };
-                rustemu_mips::asm::assemble_files(program, handler, others, &mut |p| self.mips_include(p), &settings)
-            }))
-        };
-        let result = match result {
-            Ok(r) => r,
-            Err(payload) => return self.assembler_panicked(&*payload),
-        };
+        let Some(rustemu_build::Outcome::Mips(result)) = self.build.completed.take() else { return None };
         match result {
             Ok(p) => {
                 let words: usize = p.statements.iter().map(|s| s.words.len()).sum();
@@ -546,17 +414,20 @@ impl App {
     /// Virtual drive -> boot from virtual floppy. The boot program assembled last keeps its source
     /// when it is what the floppy holds (see `Session::boot_from_floppy`).
     pub fn boot_from_floppy(&mut self, drive: usize) {
-        match self.session.boot_from_floppy(drive) {
-            Ok(()) if self.session.program.is_some() => {
+        let signed = match self.session.boot_from_floppy(drive) {
+            Ok(signed) if self.session.program.is_some() => {
                 self.after_load();
-                self.status = format!("Booted from FLOPPY_{drive} - {}", self.status);
+                signed
             }
-            Ok(()) => {
+            Ok(signed) => {
                 self.after_binary_load();
-                self.status = format!("Booted from FLOPPY_{drive} - {}", self.status);
+                signed
             }
-            Err(e) => self.notice("Virtual drive", &e),
-        }
+            Err(e) => return self.notice("Virtual drive", &e),
+        };
+        let warning =
+            if signed { String::new() } else { " (no 55AAh boot signature: a real BIOS would not boot it)".into() };
+        self.status = format!("Booted from FLOPPY_{drive}{warning} - {}", self.status);
     }
 
     /// After loading code without debug information (binary file, boot from floppy).

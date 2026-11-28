@@ -1976,3 +1976,33 @@ fn discard_drops_edits_and_other_workspace_keeps_them() {
     h.run_steps(2);
     assert_eq!(h.state().doc.text, saved, "the edits are gone, not marked saved");
 }
+
+#[test]
+fn last_step_window_shows_changes_and_why() {
+    let mut h = harness(app_with_example(0));
+    h.run();
+    h.state_mut().windows[Tool::LastStep] = true;
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("Load the program").is_some(), "hint before emulate");
+    // Opened from the menu while the emulator is shown, as a user does: on top of it.
+    h.state_mut().windows[Tool::LastStep] = false;
+    h.state_mut().emulate();
+    h.run_steps(2);
+    // Step until an instruction changes a register (the first ones may only move IP).
+    for _ in 0..10 {
+        h.state_mut().single_step();
+        if h.state().session.last_step(false).is_some_and(|s| !s.regs.is_empty()) {
+            break;
+        }
+    }
+    h.state_mut().windows[Tool::LastStep] = true;
+    h.run_steps(2);
+    let step = h.state().session.last_step(false).unwrap();
+    assert!(h.query_all_by_label_contains(&step.text).next().is_some(), "instruction {}", step.text);
+    let r = &step.regs[0];
+    assert!(h.query_all_by_label_contains(&format!("{:04X}h → {:04X}h", r.before, r.after)).next().is_some());
+    h.get_by_label("why did this happen?").click();
+    h.run_steps(2);
+    assert!(h.query_all_by_label_contains(&step.why()[0]).next().is_some(), "explanation shown");
+    save(&mut h, "62_last_step_desktop");
+}

@@ -441,7 +441,9 @@ fn formats_from_org() {
 fn nasm_specific_errors() {
     let err = |s: &str| assemble_str(s).unwrap_err().to_string();
     assert!(err("bits 16\norg 100h\nmov [bx], 5\n").contains("operation size not specified"));
-    assert!(err("bits 16\ninc [si]\n").contains("size not specified"));
+    // The hint uses NASM's size syntax, not MASM's BYTE PTR.
+    assert!(err("bits 16\ninc [si]\n").contains("size not specified (use byte [..] or word [..])"));
+    assert!(err("org 100h\ninc [si]\n").contains("(use BYTE PTR or WORD PTR)"), "MASM keeps its hint");
     assert!(err("bits 32\n").contains("16-bit"));
     assert!(err("bits 16\nsection .weird\n").contains("only .text, .data and .bss"));
     assert!(err("%define f(x, y) x+y\nbits 16\nmov ax, f(1)\n").contains("takes 2 argument(s), not 1"));

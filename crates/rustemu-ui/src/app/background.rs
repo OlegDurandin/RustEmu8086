@@ -108,7 +108,11 @@ impl App {
 
     pub(super) fn submit_build(&mut self, action: BuildAction) -> bool {
         if !self.front.background_builds {
-            if self.doc.project.is_some() && self.build.completed.is_none() {
+            // Synchronous (headless clients, tests): the same request and loader as the task,
+            // so includes, drive C: files and budgets behave alike in both paths.
+            if self.build.completed.is_none() {
+                self.build.messages.clear();
+                self.clear_errors();
                 let r = rustemu_build::execute(
                     self.build_request(self.build.document_version),
                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -116,7 +120,12 @@ impl App {
                 self.build.sources = r.sources;
                 if let rustemu_build::Outcome::Failed(e) = r.outcome {
                     self.build.fail();
-                    self.notice("Project assembly", &e);
+                    if self.doc.project.is_some() {
+                        self.notice("Project assembly", &e);
+                    } else {
+                        self.status = "Assembly failed".into();
+                        self.build.messages.push(Message { text: e, loc: None, span: None, error: true });
+                    }
                     return true;
                 }
                 self.build.completed = Some(r.outcome);

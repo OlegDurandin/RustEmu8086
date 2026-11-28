@@ -30,6 +30,10 @@ private window they are not saved at all. Download important programs as files (
 `inc [bx]` does not say whether it is a byte or a word. Give the size: `inc byte ptr [bx]` or `inc w.[bx]`. See
 [Emu8086 syntax](Emu8086-syntax#operand-size).
 
+### `operand size not specified (use byte [..] or word [..])`
+
+The same in NASM syntax: write `inc byte [bx]` or `inc word [bx]`.
+
 ### `value 300 out of byte range`
 
 The number does not fit in an 8-bit register or a byte. Use a 16-bit register (`mov ax, 300`) or check the number.

@@ -150,7 +150,11 @@ impl Session {
     /// Boots from a virtual floppy: its sector 1 is loaded at 0000:7C00 (like the BIOS does) and
     /// DL holds the drive number. When the sector is the boot program assembled last, its source
     /// stays: the boot code is debugged line by line.
-    pub fn boot_from_floppy(&mut self, drive: usize) -> Result<(), String> {
+    ///
+    /// Returns whether the sector ends with the boot signature 55h AAh. A sector without it is
+    /// still booted, as Emu8086 does (its own `micro-os_loader.asm` has none), but a real BIOS or
+    /// QEMU would refuse it: the emulator log says so and the caller can warn.
+    pub fn boot_from_floppy(&mut self, drive: usize) -> Result<bool, String> {
         let m = self.x86().ok_or(NOT_8086)?;
         let fl = m.floppies.get(drive).ok_or(format!("there is no FLOPPY_{drive}"))?;
         if fl.len() < 512 {
@@ -161,9 +165,14 @@ impl Session {
             let image = p.file_bytes();
             p.format == Format::Boot && sector.get(..image.len()) == Some(&image[..])
         });
+        let signed = has_boot_signature(&sector);
         self.load_bytes_with_program(Loadable::Boot, sector, program)?;
-        self.machine_mut()?.cpu.regs[rustemu_core::cpu::DX] = drive as u16;
-        Ok(())
+        let m = self.machine_mut()?;
+        m.cpu.regs[rustemu_core::cpu::DX] = drive as u16;
+        if !signed {
+            m.log.push(format!("{BOOT_SIGNATURE_WARNING} (FLOPPY_{drive})"));
+        }
+        Ok(signed)
     }
 
     /// Copies the 512 bytes at 0000:7C00 to the boot sector of a virtual floppy.
@@ -246,4 +255,13 @@ impl Session {
     pub(crate) fn x86_load_segment(&self) -> u16 {
         self.x86().and_then(|m| m.loaded.as_ref()).map_or(0, |l| l.load_segment)
     }
+}
+
+/// Warning for a boot sector without the 55h AAh signature in bytes 510–511.
+pub const BOOT_SIGNATURE_WARNING: &str =
+    "boot sector has no 55AAh signature at offset 510: a real BIOS would not boot it";
+
+/// Whether a 512-byte boot sector ends with the signature 55h AAh (bytes 510 and 511).
+pub fn has_boot_signature(sector: &[u8]) -> bool {
+    sector.get(510..512) == Some(&[0x55, 0xAA][..])
 }

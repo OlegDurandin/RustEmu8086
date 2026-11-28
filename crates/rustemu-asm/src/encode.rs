@@ -227,6 +227,16 @@ fn strict_size() -> bool {
     STRICT_SIZE.with(|s| s.get())
 }
 
+/// Error for a memory operand without a size, with the size syntax of the dialect being
+/// assembled: `byte [..]` in NASM (strict size), `BYTE PTR` in MASM / Emu8086.
+fn size_hint() -> String {
+    if strict_size() {
+        "operand size not specified (use byte [..] or word [..])".into()
+    } else {
+        "operand size not specified (use BYTE PTR or WORD PTR)".into()
+    }
+}
+
 const NO_SIZE: &str = "operation size not specified (write BYTE or WORD: mov byte [bx], 0)";
 
 /// Resolves the operand width (true = 16-bit) of a two-operand instruction.
@@ -244,7 +254,7 @@ fn width(a: &Op, b: &Op) -> R<bool> {
         (Some(1), _) | (_, Some(1)) => Ok(false),
         (Some(2), _) | (_, Some(2)) => Ok(true),
         (Some(s), _) | (_, Some(s)) => Err(format!("invalid operand size {s}")),
-        (None, None) => Err("operand size not specified (use BYTE PTR or WORD PTR)".into()),
+        (None, None) => Err(size_hint()),
     }
 }
 
@@ -278,7 +288,7 @@ fn single_width(a: &Op) -> R<bool> {
         Some(1) => Ok(false),
         Some(2) => Ok(true),
         Some(s) => Err(format!("invalid operand size {s}")),
-        None => Err("operand size not specified (use BYTE PTR or WORD PTR)".into()),
+        None => Err(size_hint()),
     }
 }
 
@@ -358,6 +368,10 @@ fn simple(m: &str) -> Option<&'static [u8]> {
         "PUSHA" => &[0x60],
         "POPA" => &[0x61],
         "LEAVE" => &[0xC9],
+        "INSB" => &[0x6C],
+        "INSW" => &[0x6D],
+        "OUTSB" => &[0x6E],
+        "OUTSW" => &[0x6F],
         _ => return None,
     })
 }
@@ -374,6 +388,9 @@ pub fn is_mnemonic(m: &str) -> bool {
             m,
             "MOV"
                 | "BOUND"
+                | "ENTER"
+                | "INS"
+                | "OUTS"
                 | "TEST"
                 | "XCHG"
                 | "INC"
@@ -756,6 +773,37 @@ pub fn encode(prefixes: &[String], mnem: &str, ops: &[Operand], env: &dyn Env, c
                 return Err("BOUND: memory operand expected".into());
             }
             emit_rm(&mut e, &[0x62], r, &ops[1])?;
+        }
+        "ENTER" => {
+            // 80186 ENTER frame_size, nesting_level.
+            want(2)?;
+            let (Op::Imm(size), Op::Imm(level)) = (&ops[0], &ops[1]) else {
+                return Err("ENTER: two constants expected (frame size, nesting level)".into());
+            };
+            e.b(0xC8);
+            e.w(check16(size)?);
+            e.b(check8(level)?);
+        }
+        "INS" | "OUTS" => {
+            // 80186 INS ES:[DI], DX / OUTS DX, DS:[SI]: the size comes from the memory operand.
+            want(2)?;
+            let (mem, port_reg) = if mnem == "INS" { (&ops[0], &ops[1]) } else { (&ops[1], &ops[0]) };
+            if !matches!(port_reg, Op::R16(2)) {
+                return Err(format!("{mnem}: the port must be DX"));
+            }
+            let Op::Mem(m) = mem else { return Err(format!("{mnem}: memory operand expected")) };
+            let w = match mem.size() {
+                Some(1) => false,
+                Some(2) => true,
+                _ => return Err(format!("{mnem}: operand size not specified")),
+            };
+            // OUTS reads DS:SI, whose segment may be overridden; INS always writes ES:DI.
+            if mnem == "OUTS"
+                && let Some(s) = m.seg_ov.filter(|&s| s != 3)
+            {
+                e.b(SEG_PREFIX[s as usize]);
+            }
+            e.b(if mnem == "INS" { 0x6C } else { 0x6E } | w as u8);
         }
         "LEA" | "LDS" | "LES" => {
             want(2)?;

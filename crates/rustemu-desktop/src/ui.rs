@@ -323,6 +323,7 @@ fn emulator_menu(app: &mut App, ui: &mut Ui) {
             (Tool::Watch, "Watch"),
             (Tool::CallStack, "Call stack"),
             (Tool::Alu, "ALU"),
+            (Tool::LastStep, "Last step"),
             (Tool::Fpu, "FPU"),
         ] {
             if tool.available(app) {

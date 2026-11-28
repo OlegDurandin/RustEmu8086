@@ -102,6 +102,21 @@ fn emu8086_syntax_quirks() {
         [0x60, 0x61, 0x6A, 5, 0x68, 0x34, 0x12, 0x6B, 0xF3, 7, 0x69, 0xC0, 0x34, 0x12]
     );
     assert!(err("org 100h\nimul ax, 10000h\n").contains("out of word range"));
+    // 80186: ENTER / LEAVE / BOUND and the port string instructions (bytes as `nasm -f bin`).
+    assert_eq!(
+        bytes(
+            "org 100h\nenter 8, 0\nenter 1234h, 1\nleave\nbound ax, [bx]\ninsb\ninsw\noutsb\noutsw\n\
+             ins byte ptr es:[di], dx\nins word ptr [di], dx\nouts dx, byte ptr [si]\nouts dx, word ptr es:[si]\n\
+             rep outsb\n"
+        ),
+        [
+            0xC8, 8, 0, 0, 0xC8, 0x34, 0x12, 1, 0xC9, 0x62, 0x07, 0x6C, 0x6D, 0x6E, 0x6F, 0x6C, 0x6D, 0x6E, 0x26, 0x6F,
+            0xF3, 0x6E
+        ]
+    );
+    assert!(err("org 100h\nins [di], dx\n").contains("operand size not specified"));
+    assert!(err("org 100h\nouts ax, byte ptr [si]\n").contains("port must be DX"));
+    assert!(err("org 100h\nenter ax, 0\n").contains("two constants expected"));
     // Immediates use the same ranges as DB / DW data: -128..255 and -32768..65535.
     assert!(err("org 100h\nadd ax, -65535\n").contains("out of word range"));
     assert!(err("org 100h\nmov al, -200\n").contains("out of byte range"));

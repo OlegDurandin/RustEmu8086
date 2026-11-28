@@ -1126,8 +1126,18 @@ data db 512 dup(55h)
     assert_eq!(s.x86().unwrap().floppies[1][0], 0, "step back undoes the write on FLOPPY_1");
     // Booting from FLOPPY_1 passes its number in DL; at most four drives.
     s.write_floppy(1, 0, 0, 1, &[0xF4]).unwrap();
-    s.boot_from_floppy(1).unwrap();
+    // No 55AAh signature: booted anyway (as Emu8086), with a warning in the log.
+    assert!(!s.boot_from_floppy(1).unwrap());
     assert_eq!(s.x86().unwrap().cpu.regs[rustemu_core::cpu::DX], 1);
+    assert!(s.x86().unwrap().log.lines().any(|l| l.contains("no 55AAh signature")));
+    s.write_floppy(1, 0, 0, 1, &{
+        let mut sector = [0xF4; 512];
+        sector[510..].copy_from_slice(&[0x55, 0xAA]);
+        sector
+    })
+    .unwrap();
+    assert!(s.boot_from_floppy(1).unwrap());
+    assert!(!s.x86().unwrap().log.lines().any(|l| l.contains("no 55AAh signature")), "log starts anew");
     assert_eq!(
         (s.x86_mut().unwrap().add_floppy(), s.x86_mut().unwrap().add_floppy(), s.x86_mut().unwrap().add_floppy()),
         (Some(2), Some(3), None)

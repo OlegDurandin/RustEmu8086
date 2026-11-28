@@ -55,7 +55,7 @@ Then press **F8** (or **Step**) a few times. Went too far? **⇧F8** steps back.
   registers, memory, the screen and devices all return to where they were.
 - **See everything change.** Registers and flags that changed are highlighted; memory, the stack, variables and the
   emulator screen are one click away. Hover over a register or a variable in the editor to see its value.
-- **Understand each step.** The tablet layout's *Last step* card says what the last instruction changed
+- **Understand each step.** The *Last step* card (a window on the desktop, a card on the tablet) says what the last instruction changed
   (`BX 000Fh → 000Eh`, `CF 0 → 1`) and why the flags came out the way they did.
 - **Debug at the source level.** Breakpoints with conditions, watches, call stack, Run to cursor, Step over / out,
   stop on condition, stepping into `emu8086.inc` macros.
